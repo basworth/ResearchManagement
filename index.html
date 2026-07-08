@@ -1,0 +1,1826 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Research Tracker">
+<title>Research Tracker</title>
+<style>
+  :root {
+    --bg: #f2f2f7;
+    --card: #ffffff;
+    --text: #1c1c1e;
+    --text2: #8e8e93;
+    --line: #e5e5ea;
+    --blue: #007aff;
+    --green: #34c759;
+    --orange: #ff9500;
+    --red: #ff3b30;
+    --purple: #af52de;
+    --teal: #30b0c7;
+    --indigo: #5856d6;
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #000000;
+      --card: #1c1c1e;
+      --text: #ffffff;
+      --text2: #98989f;
+      --line: #2c2c2e;
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overscroll-behavior-y: none;
+  }
+  #app {
+    max-width: 640px;
+    margin: 0 auto;
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+  }
+  header.topbar {
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--bg) 85%, transparent);
+    -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+    padding: calc(env(safe-area-inset-top) + 12px) 18px 10px 18px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  header.topbar h1 { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }
+  .topbar-btn {
+    border: none; background: var(--card); color: var(--blue);
+    width: 36px; height: 36px; border-radius: 50%;
+    font-size: 22px; font-weight: 600; line-height: 1;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08); cursor: pointer;
+  }
+  main { flex: 1; padding: 4px 16px 110px 16px; }
+
+  /* Tab bar */
+  nav.tabbar {
+    position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
+    background: color-mix(in srgb, var(--card) 88%, transparent);
+    -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px);
+    border-top: 0.5px solid var(--line);
+    display: flex; justify-content: space-around;
+    padding: 6px 0 calc(env(safe-area-inset-bottom) + 6px) 0;
+  }
+  nav.tabbar button {
+    flex: 1; border: none; background: none; cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    color: var(--text2); font-size: 10px; font-weight: 600;
+    font-family: inherit;
+  }
+  nav.tabbar button.active { color: var(--blue); }
+  nav.tabbar .icon { font-size: 22px; line-height: 1.1; }
+
+  /* Working Study List — spreadsheet-style table */
+  .wl-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 0.5px solid var(--line); border-radius: var(--radius); background: var(--card); margin-bottom: 12px; }
+  table.wl { border-collapse: separate; border-spacing: 0; width: 100%; font-size: 12.5px; }
+  table.wl th, table.wl td { padding: 8px 10px; text-align: left; vertical-align: top; border-bottom: 0.5px solid var(--line); white-space: nowrap; }
+  table.wl th { position: sticky; top: 0; z-index: 2; background: var(--bg); font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; color: var(--text2); font-weight: 700; }
+  table.wl tbody tr:last-child td { border-bottom: none; }
+  table.wl tbody tr:active { background: color-mix(in srgb, var(--blue) 8%, transparent); }
+  table.wl .wl-name { font-weight: 700; white-space: normal; min-width: 130px; max-width: 180px; }
+  table.wl .wl-title { white-space: normal; min-width: 160px; max-width: 230px; color: var(--text2); }
+  table.wl .wl-steps { white-space: normal; min-width: 200px; max-width: 280px; }
+  table.wl .wl-steps ul { margin: 0; padding-left: 16px; }
+  table.wl .wl-steps li { margin: 1px 0; }
+  table.wl .wl-steps .none { color: var(--text2); }
+  .wl-pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 700; color: #fff; }
+  .wl-pill.outline { background: transparent; color: var(--text2); border: 1px solid var(--line); }
+
+  /* Cards & lists */
+  .card {
+    background: var(--card); border-radius: var(--radius);
+    padding: 14px 16px; margin-bottom: 12px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .section-title {
+    font-size: 13px; font-weight: 700; color: var(--text2);
+    text-transform: uppercase; letter-spacing: 0.6px;
+    margin: 18px 4px 8px 4px;
+  }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat {
+    background: var(--card); border-radius: var(--radius); padding: 14px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .stat .num { font-size: 30px; font-weight: 800; letter-spacing: -1px; }
+  .stat .lbl { font-size: 12px; color: var(--text2); font-weight: 600; margin-top: 2px; }
+
+  .study-row { cursor: pointer; display: flex; flex-direction: column; gap: 6px; }
+  .study-row .title-line { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .study-row h3 { font-size: 16px; font-weight: 700; line-height: 1.25; }
+  .study-row .meta { font-size: 13px; color: var(--text2); }
+  .badge {
+    display: inline-block; font-size: 11px; font-weight: 700;
+    padding: 3px 9px; border-radius: 100px; white-space: nowrap;
+    color: #fff;
+  }
+  .badge.outline { background: none !important; border: 1.5px solid var(--line); color: var(--text2); }
+  .chip-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+  .progressbar { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+  .progressbar > div { height: 100%; border-radius: 3px; background: var(--blue); transition: width .3s; }
+
+  /* Tasks */
+  .task-row { display: flex; align-items: flex-start; gap: 12px; padding: 4px 0; }
+  .task-check {
+    width: 24px; height: 24px; min-width: 24px; margin-top: 1px;
+    border-radius: 50%; border: 2px solid var(--text2);
+    background: none; cursor: pointer; position: relative;
+  }
+  .task-check.done { background: var(--green); border-color: var(--green); }
+  .task-check.done::after {
+    content: "✓"; color: #fff; font-size: 14px; font-weight: 800;
+    position: absolute; top: 49%; left: 50%; transform: translate(-50%, -50%);
+  }
+  .task-body { flex: 1; cursor: pointer; }
+  .task-body .t-title { font-size: 15px; font-weight: 600; line-height: 1.3; }
+  .task-body.done .t-title { text-decoration: line-through; color: var(--text2); }
+  .task-body .t-meta { font-size: 12.5px; color: var(--text2); margin-top: 2px; }
+  .due-overdue { color: var(--red) !important; font-weight: 700; }
+  .due-soon { color: var(--orange) !important; font-weight: 700; }
+
+  /* Forms */
+  .sheet-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 40;
+    opacity: 0; transition: opacity .25s;
+  }
+  .sheet-backdrop.show { opacity: 1; }
+  .sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 50;
+    max-width: 640px; margin: 0 auto;
+    background: var(--bg); border-radius: 18px 18px 0 0;
+    max-height: 92dvh; display: flex; flex-direction: column;
+    transform: translateY(100%); transition: transform .3s cubic-bezier(.32,.72,.35,1);
+  }
+  .sheet.show { transform: translateY(0); }
+  .sheet-head {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 16px 18px 8px 18px;
+  }
+  .sheet-head h2 { font-size: 19px; font-weight: 800; }
+  .sheet-head button { border: none; background: none; color: var(--blue); font-size: 16px; font-weight: 600; cursor: pointer; font-family: inherit; padding: 4px; }
+  .sheet-body { overflow-y: auto; padding: 6px 18px calc(env(safe-area-inset-bottom) + 24px) 18px; -webkit-overflow-scrolling: touch; }
+  .fgroup { background: var(--card); border-radius: var(--radius); margin-bottom: 14px; overflow: hidden; }
+  .frow { display: flex; align-items: center; padding: 12px 14px; border-bottom: 0.5px solid var(--line); gap: 10px; }
+  .frow:last-child { border-bottom: none; }
+  .frow label { font-size: 15px; font-weight: 600; min-width: 92px; color: var(--text); }
+  .frow input, .frow select, .frow textarea {
+    flex: 1; border: none; background: none; color: var(--text);
+    font-size: 16px; font-family: inherit; outline: none; min-width: 0;
+  }
+  .frow textarea { resize: none; min-height: 64px; padding-top: 2px; }
+  .frow select { -webkit-appearance: none; appearance: none; text-align: right; direction: rtl; }
+  .frow select option { direction: ltr; }
+  .btn {
+    display: block; width: 100%; border: none; cursor: pointer;
+    background: var(--blue); color: #fff; font-size: 17px; font-weight: 700;
+    padding: 14px; border-radius: var(--radius); font-family: inherit;
+    margin-bottom: 10px;
+  }
+  .btn.danger { background: none; color: var(--red); }
+  .btn.secondary { background: var(--card); color: var(--blue); }
+
+  /* Segmented filter */
+  .seg {
+    display: flex; background: color-mix(in srgb, var(--text2) 14%, transparent);
+    border-radius: 10px; padding: 2px; margin: 8px 0 14px 0;
+  }
+  .seg button {
+    flex: 1; border: none; background: none; padding: 7px 4px;
+    font-size: 13px; font-weight: 600; color: var(--text); border-radius: 8px;
+    cursor: pointer; font-family: inherit; white-space: nowrap;
+  }
+  .seg button.active { background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+
+  .empty { text-align: center; color: var(--text2); padding: 48px 24px; font-size: 15px; line-height: 1.5; }
+  .empty .big { font-size: 44px; margin-bottom: 10px; }
+
+  .detail-h .phase-stepper { display: flex; gap: 4px; margin: 10px 0 4px 0; }
+  .detail-h .phase-stepper span { flex: 1; height: 6px; border-radius: 3px; background: var(--line); }
+  .detail-h .phase-stepper span.on { background: var(--blue); }
+
+  .milestone-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 0.5px solid var(--line); }
+  .milestone-row:last-child { border-bottom: none; }
+  .milestone-row .dot { width: 10px; height: 10px; min-width: 10px; border-radius: 50%; }
+
+  .syncpill { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 100px; background: var(--card); color: var(--text2); box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .syncpill.on { color: var(--green); }
+
+  .toast {
+    position: fixed; bottom: calc(env(safe-area-inset-bottom) + 86px); left: 50%; transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: var(--bg); padding: 10px 20px; border-radius: 100px;
+    font-size: 14px; font-weight: 600; z-index: 100; opacity: 0; transition: all .3s; pointer-events: none;
+    white-space: nowrap;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  a { color: var(--blue); }
+
+  details.dl { border-bottom: 0.5px solid var(--line); }
+  details.dl:last-child { border-bottom: none; }
+  details.dl > summary {
+    list-style: none; cursor: pointer; display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px; -webkit-tap-highlight-color: transparent;
+  }
+  details.dl > summary::-webkit-details-marker { display: none; }
+  details.dl > summary .chev { color: var(--text2); font-size: 13px; transition: transform .2s; margin-left: 2px; }
+  details.dl[open] > summary .chev { transform: rotate(90deg); }
+  .dl-panel { padding: 2px 16px 14px 16px; font-size: 13.5px; line-height: 1.5; }
+  .dl-aim { font-style: italic; color: var(--text); margin-bottom: 10px; }
+  .dl-sub { font-size: 12px; font-weight: 700; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; margin: 10px 0 4px 0; }
+  .dl-crit { color: var(--text); white-space: pre-wrap; }
+  .dl-funded { margin: 4px 0 0 0; padding-left: 18px; }
+  .dl-funded li { margin-bottom: 3px; }
+  .link-chip {
+    display: inline-flex; align-items: center; gap: 6px; background: color-mix(in srgb, var(--blue) 14%, transparent);
+    color: var(--blue); font-size: 12.5px; font-weight: 600; padding: 5px 10px; border-radius: 100px; cursor: pointer; margin: 3px 4px 0 0;
+  }
+  .mini-btn { border: none; background: var(--card); color: var(--blue); font-family: inherit; font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 9px; cursor: pointer; margin-top: 8px; margin-right: 8px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <h1 id="page-title">Dashboard</h1>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="sync-pill" class="syncpill" style="display:none">Synced</span>
+      <button class="topbar-btn" id="add-btn" aria-label="Add">+</button>
+    </div>
+  </header>
+  <main id="main"></main>
+  <nav class="tabbar">
+    <button data-tab="dashboard" class="active"><span class="icon">▤</span>Dashboard</button>
+    <button data-tab="studies"><span class="icon">⚗</span>Studies</button>
+    <button data-tab="tasks"><span class="icon">☑</span>Tasks</button>
+    <button data-tab="worklist"><span class="icon">▦</span>Worklist</button>
+    <button data-tab="settings"><span class="icon">⚙</span>Settings</button>
+  </nav>
+</div>
+<div id="toast" class="toast"></div>
+
+<script>
+"use strict";
+
+/* ============ Constants ============ */
+const DESIGNS = ["Prospective (Consented)", "Retrospective (Non-Consented)", "Basic Science / Exempt"];
+const DESIGN_SHORT = { "Prospective (Consented)": "Prospective", "Retrospective (Non-Consented)": "Retrospective", "Basic Science / Exempt": "Basic Science" };
+const TRACK_PHASES = {
+  "Prospective (Consented)": ["Concept", "Initiation", "Enrolling", "Data Collection", "Analysis", "Manuscript", "Submitted", "Published", "On Hold"],
+  "Retrospective (Non-Consented)": ["Concept", "Initiation", "Data Extraction", "Analysis", "Manuscript", "Submitted", "Published", "On Hold"],
+  "Basic Science / Exempt": ["Concept", "Initiation", "Experiments", "Analysis", "Manuscript", "Submitted", "Published", "On Hold"]
+};
+// Master ordered list of all phases (for pipeline display & sorting)
+const PHASES = [
+  "Concept", "Initiation", "Enrolling", "Data Extraction", "Experiments", "Data Collection",
+  "Analysis", "Manuscript", "Submitted", "Published", "On Hold"
+];
+const PHASE_COLORS = {
+  "Concept": "var(--text2)", "Initiation": "var(--orange)",
+  "Enrolling": "var(--blue)", "Data Extraction": "var(--blue)", "Experiments": "var(--blue)",
+  "Data Collection": "var(--blue)",
+  "Analysis": "var(--purple)", "Manuscript": "var(--purple)",
+  "Submitted": "var(--orange)", "Published": "var(--green)", "On Hold": "var(--red)"
+};
+// Old (pre-Initiation) phases → new, for migrating existing/imported data
+const PHASE_MIGRATE = {
+  "Protocol Development": "Initiation", "IRB Submitted": "Initiation", "IRB Approved": "Initiation",
+  "IRB Approved (Waiver)": "Initiation", "Exempt Determination": "Initiation"
+};
+// Initiation checklist — must be worked through before a study can enter Enrolling/data collection
+const INIT_STEPS = [
+  { key: "sportsSubmission", label: "Sports study submission completed" },
+  { key: "irbApproved", label: "IRB approved" },
+  { key: "caApproved", label: "CA approved" },
+  { key: "piqBuilt", label: "PIQ project built" }
+];
+// IRB / regulatory status — tracked separately from the study's workflow phase.
+const IRB_STATUSES = ["Not Submitted", "Submitted - Pending", "Approved", "Exempt", "Continuing Review Due", "Closed", "N/A"];
+const IRB_STATUS_COLORS = {
+  "Not Submitted": "var(--text2)", "Submitted - Pending": "var(--orange)",
+  "Approved": "var(--green)", "Exempt": "var(--teal)",
+  "Continuing Review Due": "var(--red)", "Closed": "var(--text2)", "N/A": "var(--text2)"
+};
+const PRIORITIES = ["High", "Medium", "Low"];
+const PRIORITY_COLORS = { High: "var(--red)", Medium: "var(--orange)", Low: "var(--text2)" };
+function phasesFor(s) { return TRACK_PHASES[s.design] || TRACK_PHASES["Prospective (Consented)"]; }
+// Common PIs in the group (free text still allowed via the datalist input)
+const PIS = ["Yanke", "Cole", "Chahla", "Verma", "Forsythe", "Nicholson", "Garrigues"];
+// Sports-medicine / orthopaedic journals (abbreviated). "journal" becomes relevant once a study is Submitted.
+const JOURNALS = ["AJSM", "OJSM", "Arthroscopy", "ASMAR", "Cartilage", "JCJP", "JKS", "VJSM", "KSSTA", "Sports Health", "JBJS", "JSES", "JISAKOS", "AOSSM Other"];
+const SUBMITTED_PHASES = ["Submitted", "Published"];
+const ABS_STATUSES = ["Planned", "Submitted", "Accepted", "Rejected", "Presented"];
+const ABS_COLORS = { Planned: "var(--text2)", Submitted: "var(--orange)", Accepted: "var(--green)", Rejected: "var(--red)", Presented: "var(--indigo)" };
+const ROSTER_ID = "00000000-0000-0000-0000-000000000001";
+const me = () => localStorage.getItem("rt-me") || "";
+
+// Orthopedic societies for the abstract-deadline board (full names for reference)
+const SOCIETIES = {
+  AAOS: "American Academy of Orthopaedic Surgeons",
+  AANA: "Arthroscopy Association of North America",
+  AOSSM: "American Orthopaedic Society for Sports Medicine",
+  OREF: "Orthopaedic Research and Education Foundation",
+  IPSG: "International Patellofemoral Study Group",
+  ICRS: "International Cartilage Regeneration & Joint Preservation Society"
+};
+// Personal show/hide prefs (per device, not synced). Default: all shown.
+function subs() {
+  try { return Object.assign(Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true])), JSON.parse(localStorage.getItem("rt-subs") || "{}")); }
+  catch (e) { return Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true])); }
+}
+function setSub(soc, on) {
+  const s = subs(); s[soc] = on; localStorage.setItem("rt-subs", JSON.stringify(s));
+}
+function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
+
+/* ============ State ============ */
+let state = { studies: [], tasks: [], roster: [], meetings: [] };
+let tab = "dashboard";
+let studyFilter = "Active";
+let studyPhaseFilter = "All phases";
+let taskFilter = "Open";
+let detailStudyId = null;
+
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2));
+const todayStr = () => new Date().toISOString().slice(0, 10);
+
+/* ============ Persistence (local) ============ */
+function loadLocal() {
+  try {
+    const raw = localStorage.getItem("rt-data");
+    if (raw) state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [] }, JSON.parse(raw));
+    migrate();
+  } catch (e) { console.warn("load failed", e); }
+}
+function saveLocal() {
+  localStorage.setItem("rt-data", JSON.stringify(state));
+}
+// Migrate older records (v1 used a "type" field and a single phase list)
+function migrate() {
+  state.studies.forEach(s => {
+    if (!s.design) {
+      s.design = (s.type === "Basic Science") ? "Basic Science / Exempt" : "Prospective (Consented)";
+    }
+    if (PHASE_MIGRATE[s.phase]) s.phase = PHASE_MIGRATE[s.phase];
+    if (!phasesFor(s).includes(s.phase)) s.phase = phasesFor(s)[0];
+    s.docs = s.docs || [];
+    s.abstracts = s.abstracts || [];
+    if (s.journal == null) s.journal = "";
+    if (s.enrollTarget == null) s.enrollTarget = "";
+    if (s.enrollCurrent == null) s.enrollCurrent = "";
+    if (s.nickname == null) s.nickname = "";
+    // Infer an initial IRB status from existing data the first time only.
+    if (s.irbStatus === undefined) {
+      const irb = (s.irb || "").toLowerCase();
+      if (irb.includes("exempt")) s.irbStatus = "Exempt";
+      else if (!s.irb || s.phase === "Concept") s.irbStatus = "Not Submitted";
+      else if (s.phase === "Initiation") s.irbStatus = "Submitted - Pending";
+      else s.irbStatus = "Approved";
+    }
+    if (!s.initiation) s.initiation = { sportsSubmission: false, irbApproved: false, caApproved: false, piqBuilt: false, ready: false };
+  });
+  if (!Array.isArray(state.meetings)) state.meetings = [];
+  state.meetings.forEach(m => {
+    if (!m.type) m.type = "abstract";
+    if (!Array.isArray(m.studyIds)) m.studyIds = [];
+    if (!Array.isArray(m.funded)) m.funded = [];
+    if (m.aim == null) m.aim = "";
+    if (m.criteria == null) m.criteria = "";
+    if (m.loiDeadline == null) m.loiDeadline = "";
+  });
+  if (!Array.isArray(state.roster)) state.roster = [];
+  if (!state.roster.length) {
+    const names = new Set();
+    state.tasks.forEach(t => { if (t.assignee) names.add(t.assignee); });
+    state.roster = [...names].sort();
+  }
+}
+
+/* ============ Optional Supabase sync ============ */
+let sb = null;
+function syncConfig() {
+  try { return JSON.parse(localStorage.getItem("rt-sync") || "null"); } catch (e) { return null; }
+}
+function setSyncPill(on, label) {
+  const pill = document.getElementById("sync-pill");
+  if (!syncConfig()) { pill.style.display = "none"; return; }
+  pill.style.display = "";
+  pill.textContent = label;
+  pill.classList.toggle("on", on);
+}
+async function initSync() {
+  const cfg = syncConfig();
+  if (!cfg || !cfg.url || !cfg.key) { setSyncPill(false, ""); return; }
+  setSyncPill(false, "Connecting…");
+  try {
+    if (!window.supabase) {
+      await new Promise((res, rej) => {
+        const s = document.createElement("script");
+        s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";
+        s.onload = res; s.onerror = rej;
+        document.head.appendChild(s);
+      });
+    }
+    sb = window.supabase.createClient(cfg.url, cfg.key);
+    await pullAll();
+    setSyncPill(true, "Synced");
+  } catch (e) {
+    console.warn("sync init failed", e);
+    sb = null;
+    setSyncPill(false, "Offline");
+  }
+}
+async function pullAll() {
+  if (!sb) return;
+  const { data, error } = await sb.from("items").select("id, kind, data").neq("kind", "file");
+  if (error) throw error;
+  if (data) {
+    state.studies = data.filter(r => r.kind === "study").map(r => r.data);
+    state.tasks = data.filter(r => r.kind === "task").map(r => r.data);
+    state.meetings = data.filter(r => r.kind === "meeting").map(r => r.data);
+    const meta = data.find(r => r.kind === "meta");
+    if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
+    migrate();
+    saveLocal();
+    render();
+  }
+}
+function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster }); }
+async function pushItem(kind, obj) {
+  if (!sb) return;
+  try {
+    const { error } = await sb.from("items").upsert({ id: obj.id, kind, data: obj, updated_at: new Date().toISOString() });
+    if (error) throw error;
+    setSyncPill(true, "Synced");
+  } catch (e) { console.warn("push failed", e); setSyncPill(false, "Offline"); }
+}
+async function deleteRemote(id) {
+  if (!sb) return;
+  try { await sb.from("items").delete().eq("id", id); } catch (e) { console.warn(e); }
+}
+// Seed remote with all local data (used right after connecting)
+async function pushAllLocal() {
+  if (!sb) return;
+  const now = () => new Date().toISOString();
+  const rows = [
+    ...state.studies.map(s => ({ id: s.id, kind: "study", data: s, updated_at: now() })),
+    ...state.tasks.map(t => ({ id: t.id, kind: "task", data: t, updated_at: now() })),
+    ...state.meetings.map(m => ({ id: m.id, kind: "meeting", data: m, updated_at: now() })),
+    { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster }, updated_at: now() }
+  ];
+  await sb.from("items").upsert(rows);
+  // upload any locally stored files one at a time (they can be large)
+  for (const st of state.studies) {
+    for (const dc of (st.docs || [])) {
+      const c = localStorage.getItem("rt-file-" + dc.id);
+      if (c) await sb.from("items").upsert({ id: dc.id, kind: "file", data: { name: dc.name, content: c }, updated_at: now() });
+    }
+  }
+}
+// Refresh when app regains focus
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && sb) pullAll().catch(() => setSyncPill(false, "Offline"));
+});
+
+/* ============ Mutations ============ */
+function upsertStudy(s) {
+  const i = state.studies.findIndex(x => x.id === s.id);
+  if (i >= 0) state.studies[i] = s; else state.studies.push(s);
+  saveLocal(); pushItem("study", s); render();
+}
+function removeStudy(id) {
+  state.studies = state.studies.filter(s => s.id !== id);
+  const orphaned = state.tasks.filter(t => t.studyId === id).map(t => t.id);
+  state.tasks = state.tasks.filter(t => t.studyId !== id);
+  saveLocal(); deleteRemote(id); orphaned.forEach(deleteRemote); render();
+}
+function upsertTask(t) {
+  const i = state.tasks.findIndex(x => x.id === t.id);
+  if (i >= 0) state.tasks[i] = t; else state.tasks.push(t);
+  saveLocal(); pushItem("task", t); render();
+}
+function removeTask(id) {
+  state.tasks = state.tasks.filter(t => t.id !== id);
+  saveLocal(); deleteRemote(id); render();
+}
+function upsertMeeting(m) {
+  const i = state.meetings.findIndex(x => x.id === m.id);
+  if (i >= 0) state.meetings[i] = m; else state.meetings.push(m);
+  saveLocal(); pushItem("meeting", m); render();
+}
+function removeMeeting(id) {
+  state.meetings = state.meetings.filter(m => m.id !== id);
+  saveLocal(); deleteRemote(id); render();
+}
+function toggleStudyLink(meetingId, studyId) {
+  const m = state.meetings.find(x => x.id === meetingId);
+  if (!m) return;
+  m.studyIds = m.studyIds || [];
+  const i = m.studyIds.indexOf(studyId);
+  if (i >= 0) m.studyIds.splice(i, 1); else m.studyIds.push(studyId);
+  saveLocal(); pushItem("meeting", m); render();
+}
+function meetingsForStudy(studyId) {
+  return state.meetings.filter(m => (m.studyIds || []).includes(studyId));
+}
+
+/* ============ Helpers ============ */
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function fmtDate(d) {
+  if (!d) return "";
+  const dt = new Date(d + "T00:00:00");
+  return dt.toLocaleDateString(undefined, { month: "short", day: "numeric", year: dt.getFullYear() !== new Date().getFullYear() ? "numeric" : undefined });
+}
+function dueClass(d) {
+  if (!d) return "";
+  const today = todayStr();
+  if (d < today) return "due-overdue";
+  const soon = new Date(); soon.setDate(soon.getDate() + 7);
+  if (d <= soon.toISOString().slice(0, 10)) return "due-soon";
+  return "";
+}
+function dueLabel(d) {
+  if (!d) return "";
+  const today = todayStr();
+  if (d === today) return "Due today";
+  if (d < today) {
+    const days = Math.round((new Date(today) - new Date(d)) / 864e5);
+    return days === 1 ? "1 day overdue" : days + " days overdue";
+  }
+  return "Due " + fmtDate(d);
+}
+function studyById(id) { return state.studies.find(s => s.id === id); }
+function isActive(s) { return s.phase !== "Published" && s.phase !== "On Hold"; }
+
+// A simple line drawing of the joint being studied, chosen by the study's area.
+function studyArea(s) { const m = /Area:\s*(Cartilage|Knee|Shoulder)/i.exec(s.notes || ""); return m ? m[1].toLowerCase() : ""; }
+function jointArtPaths(area, tint, accent) {
+  if (area === "shoulder") {
+    // ball-and-socket: humeral head in glenoid, humerus shaft
+    return `<path d="M42 14 a17 17 0 1 0 0 36" fill="${tint}"/>
+      <circle cx="28" cy="32" r="11" fill="${tint}"/>
+      <path d="M24 41 L20 55"/>
+      <path d="M40 12 q6 2 7 8" stroke="${accent}"/>`;
+  }
+  if (area === "cartilage") {
+    // two bone ends with highlighted cartilage surfaces across the joint space
+    return `<path d="M14 11 h36 v9 q-18 6 -36 0 z" fill="${tint}"/>
+      <path d="M14 53 h36 v-9 q-18 -6 -36 0 z" fill="${tint}"/>
+      <path d="M15 25 q8.5 4 17 2.5 t17 -2.5" stroke="${accent}" stroke-width="3"/>
+      <path d="M15 39 q8.5 -4 17 -2.5 t17 2.5" stroke="${accent}" stroke-width="3"/>`;
+  }
+  // knee (default): femoral condyles, tibial plateau, patella
+  return `<path d="M22 13 v12 c0 6 4.5 8.5 10 8.5 s10 -2.5 10 -8.5 v-12" fill="${tint}"/>
+    <path d="M24 51 v-9 c0 -5 3.5 -6.5 8 -6.5 s8 1.5 8 6.5 v9" fill="${tint}"/>
+    <circle cx="45" cy="33" r="3.6" fill="${tint}"/>`;
+}
+function studyEmblem(s, size) {
+  size = size || 56;
+  const area = studyArea(s);
+  const hue = area === "cartilage" ? 168 : area === "shoulder" ? 284 : area === "knee" ? 212 : 215;
+  const sat = area ? 55 : 12;
+  const stroke = `hsl(${hue} ${sat}% 52%)`;
+  const tint = `hsl(${hue} ${sat}% 55% / 0.16)`;
+  const accent = `hsl(${hue} ${Math.min(70, sat + 15)}% 55%)`;
+  const bg = `hsl(${hue} ${sat}% 55% / 0.09)`;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${esc(area || "joint")} illustration">
+    <circle cx="32" cy="32" r="31" fill="${bg}" stroke="rgba(127,127,127,0.18)" stroke-width="1"/>
+    <g fill="none" stroke="${stroke}" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round">${jointArtPaths(area, tint, accent)}</g>
+  </svg>`;
+}
+function fmtSize(n) {
+  if (!n) return "";
+  return n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+}
+async function downloadDoc(dc) {
+  let content = localStorage.getItem("rt-file-" + dc.id);
+  if (!content && sb) {
+    toast("Downloading…");
+    const { data } = await sb.from("items").select("data").eq("id", dc.id).single();
+    if (data && data.data && data.data.content) {
+      content = data.data.content;
+      try { localStorage.setItem("rt-file-" + dc.id, content); } catch (e) {}
+    }
+  }
+  if (!content) { toast("File not available on this device"); return; }
+  const a = document.createElement("a");
+  a.href = content; a.download = dc.name; a.click();
+}
+function toast(msg) {
+  const t = document.getElementById("toast");
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2200);
+}
+
+/* ============ Rendering ============ */
+const $main = document.getElementById("main");
+const $title = document.getElementById("page-title");
+
+function render() {
+  document.querySelectorAll("nav.tabbar button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+  const addBtn = document.getElementById("add-btn");
+  addBtn.style.visibility = (tab === "settings") ? "hidden" : "visible";
+  if (tab === "dashboard") renderDashboard();
+  else if (tab === "studies") detailStudyId ? renderStudyDetail() : renderStudies();
+  else if (tab === "tasks") renderTasks();
+  else if (tab === "worklist") renderWorkingList();
+  else renderSettings();
+}
+
+// Expandable deadline row used on both boards (abstracts & grants)
+function deadlineItemHTML(m, dueWord, metaWord, stage) {
+  stage = stage || "main";
+  const isLoi = stage === "loi";
+  const hasLoi = !!m.loiDeadline;
+  const theDate = isLoi ? m.loiDeadline : m.deadline;
+  const dleft = daysUntil(theDate);
+  const urg = dleft <= 7 ? "var(--red)" : dleft <= 30 ? "var(--orange)" : "var(--green)";
+  const isGrant = (m.type || "abstract") === "grant";
+  // Stage badge + "due" wording, so LOI and application read as distinct stages of the same deadline.
+  const stageBadge = isLoi
+    ? `<span class="badge" style="background:var(--purple);font-size:9px;padding:1px 6px;letter-spacing:.3px">LOI</span>`
+    : (hasLoi ? `<span class="badge" style="background:var(--teal);font-size:9px;padding:1px 6px;letter-spacing:.3px">${isGrant ? "APPLICATION" : "FINAL"}</span>` : "");
+  const stageDue = isLoi ? "LOI due" : (hasLoi ? (isGrant ? "Full application due" : "Final deadline") : dueWord);
+  // Visible link to the counterpart stage (not nested — just a reference line).
+  let linkNote = "";
+  if (isLoi && m.deadline) linkNote = ` · ${isGrant ? "full application" : "final"} ${fmtDate(m.deadline)}`;
+  else if (!isLoi && hasLoi) linkNote = ` · LOI ${daysUntil(m.loiDeadline) < 0 ? "was due " : "due "}${fmtDate(m.loiDeadline)}`;
+  const linked = (m.studyIds || []).map(id => studyById(id)).filter(Boolean);
+  let panel = "";
+  if (isGrant && m.aim) panel += `<div class="dl-aim">${esc(m.aim)}</div>`;
+  if (isGrant && m.criteria) panel += `<div class="dl-sub">Eligibility &amp; Criteria</div><div class="dl-crit">${esc(m.criteria)}</div>`;
+  if (isGrant) {
+    panel += `<div class="dl-sub">Recently Funded</div>`;
+    if ((m.funded || []).length) panel += `<ul class="dl-funded">${m.funded.map(f => `<li>${esc(f)}</li>`).join("")}</ul>`;
+    else panel += `<div style="color:var(--text2)">Not yet recorded.${m.link ? ` <a href="${esc(m.link)}" target="_blank" rel="noopener">View recipients ↗</a>` : ""}</div>`;
+  }
+  panel += `<div class="dl-sub">Linked Projects</div>`;
+  panel += linked.length
+    ? `<div>${linked.map(s => `<span class="link-chip" data-open-study="${s.id}">${esc(s.title)}</span>`).join("")}</div>`
+    : `<div style="color:var(--text2)">None yet.</div>`;
+  panel += `<div><button class="mini-btn" data-link-meeting="${m.id}">＋ Link a project</button>`;
+  panel += m.link ? `<a class="mini-btn" href="${esc(m.link)}" target="_blank" rel="noopener" style="text-decoration:none">Open page ↗</a>` : "";
+  panel += `<button class="mini-btn" data-edit-meeting="${m.id}">Edit</button></div>`;
+  return `
+  <details class="dl">
+    <summary>
+      <div style="min-width:50px;text-align:center">
+        <div style="font-size:22px;font-weight:800;line-height:1;color:${urg}">${dleft}</div>
+        <div style="font-size:9.5px;color:var(--text2);font-weight:700;text-transform:uppercase">day${dleft === 1 ? "" : "s"}</div>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14.5px;font-weight:700;display:flex;align-items:center;gap:6px">
+          <span class="badge" style="background:var(--indigo);font-size:10px;padding:2px 7px">${esc(m.society)}</span>
+          ${stageBadge}
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.name)}</span>
+        </div>
+        <div style="font-size:12.5px;color:var(--text2);margin-top:2px">
+          ${stageDue} ${fmtDate(theDate)}${linkNote}${m.dates && !isLoi ? " · " + (metaWord ? metaWord + " " : "") + esc(m.dates) : ""}${linked.length ? ` · ${linked.length} project${linked.length > 1 ? "s" : ""}` : ""}${m.unconfirmed ? ` · <span style="color:var(--orange);font-weight:700">⚠︎ confirm</span>` : ""}
+        </div>
+      </div>
+      <span class="chev">▶</span>
+    </summary>
+    <div class="dl-panel">${panel}</div>
+  </details>`;
+}
+function bindDeadlineRows(root) {
+  root.querySelectorAll("[data-open-study]").forEach(el => el.onclick = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    detailStudyId = el.dataset.openStudy; tab = "studies"; render();
+  });
+  root.querySelectorAll("[data-edit-meeting]").forEach(el => el.onclick = (e) => {
+    e.preventDefault(); const m = state.meetings.find(x => x.id === el.dataset.editMeeting); if (m) openMeetingForm(m);
+  });
+  root.querySelectorAll("[data-link-meeting]").forEach(el => el.onclick = (e) => {
+    e.preventDefault(); openLinkSheet(el.dataset.linkMeeting);
+  });
+}
+
+function renderDashboard() {
+  $title.textContent = "Dashboard";
+  const active = state.studies.filter(isActive);
+  const openTasks = state.tasks.filter(t => !t.done);
+  const overdue = openTasks.filter(t => t.due && t.due < todayStr());
+  const soonEnd = new Date(); soonEnd.setDate(soonEnd.getDate() + 14);
+  const upcoming = openTasks
+    .filter(t => t.due && t.due >= todayStr() && t.due <= soonEnd.toISOString().slice(0, 10))
+    .sort((a, b) => a.due.localeCompare(b.due));
+
+  // phase distribution
+  const phaseCounts = {};
+  active.forEach(s => { phaseCounts[s.phase] = (phaseCounts[s.phase] || 0) + 1; });
+
+  let html = `
+    <div class="stat-grid">
+      <div class="stat"><div class="num">${active.length}</div><div class="lbl">Active Studies</div></div>
+      <div class="stat"><div class="num">${openTasks.length}</div><div class="lbl">Open Tasks</div></div>
+      <div class="stat"><div class="num" style="color:${overdue.length ? "var(--red)" : "var(--green)"}">${overdue.length}</div><div class="lbl">Overdue</div></div>
+      <div class="stat"><div class="num">${state.studies.filter(s => s.phase === "Published").length}</div><div class="lbl">Published</div></div>
+    </div>`;
+
+  // Deadline boards (abstracts + grants), filtered by personal society subscriptions
+  const sub = subs();
+  const boardRows = (type, dueWord, metaWord) => {
+    // Each meeting can contribute up to two separate rows: an LOI deadline and the
+    // main application/abstract deadline. They're listed individually but visibly linked.
+    const entries = [];
+    state.meetings
+      .filter(m => (m.type || "abstract") === type && sub[m.society] !== false)
+      .forEach(m => {
+        if (m.loiDeadline && daysUntil(m.loiDeadline) >= 0) entries.push({ m, stage: "loi", date: m.loiDeadline });
+        if (m.deadline && daysUntil(m.deadline) >= 0) entries.push({ m, stage: "main", date: m.deadline });
+      });
+    entries.sort((a, b) => a.date.localeCompare(b.date));
+    if (!entries.length) return "";
+    return `<div class="card" style="padding:6px 0">` + entries.map(e => deadlineItemHTML(e.m, dueWord, metaWord, e.stage)).join("") + `</div>`;
+  };
+  const absBoard = boardRows("abstract", "Abstracts due", "Meeting");
+  const grantBoard = boardRows("grant", "Application due", "");
+  html += `<div class="section-title" style="display:flex;justify-content:space-between;align-items:center">
+      <span>Abstract Deadlines</span>
+      <span id="meet-settings" style="color:var(--blue);font-size:12px;font-weight:600;text-transform:none;letter-spacing:0;cursor:pointer">Societies ›</span>
+    </div>`;
+  if (absBoard) html += absBoard;
+  else html += `<div class="card" style="color:var(--text2);font-size:14px;line-height:1.5">${state.meetings.length ? "No upcoming abstract deadlines for your subscribed societies." : "No meetings yet — tap <b>+</b> → New Deadline, or load sample data."}</div>`;
+  html += `<div class="section-title">Grant &amp; Funding Deadlines</div>`;
+  if (grantBoard) html += grantBoard;
+  else html += `<div class="card" style="color:var(--text2);font-size:14px;line-height:1.5">No upcoming grant deadlines for your subscribed societies.</div>`;
+
+  if (Object.keys(phaseCounts).length) {
+    html += `<div class="section-title">Pipeline</div><div class="card">`;
+    PHASES.forEach(p => {
+      if (!phaseCounts[p]) return;
+      const pct = Math.round(100 * phaseCounts[p] / active.length);
+      html += `
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:14px;font-weight:600;margin:7px 0 3px 0">
+          <span>${esc(p)}</span><span style="color:var(--text2)">${phaseCounts[p]}</span>
+        </div>
+        <div class="progressbar"><div style="width:${pct}%;background:${PHASE_COLORS[p]}"></div></div>`;
+    });
+    html += `</div>`;
+  }
+
+  if (overdue.length) {
+    html += `<div class="section-title">⚠️ Overdue</div><div class="card">`;
+    overdue.sort((a, b) => a.due.localeCompare(b.due)).forEach(t => { html += taskRowHTML(t); });
+    html += `</div>`;
+  }
+  if (upcoming.length) {
+    html += `<div class="section-title">Next 14 Days</div><div class="card">`;
+    upcoming.forEach(t => { html += taskRowHTML(t); });
+    html += `</div>`;
+  }
+  if (!state.studies.length) {
+    html += `<div class="empty"><div class="big">🔬</div>Welcome! Tap <b>+</b> to add your first study,<br>or load sample data from Settings.</div>`;
+  }
+  $main.innerHTML = html;
+  bindTaskRows();
+  const ms = document.getElementById("meet-settings");
+  if (ms) ms.onclick = () => { tab = "settings"; render(); setTimeout(() => { const el = document.getElementById("societies-anchor"); if (el) el.scrollIntoView({ behavior: "smooth" }); }, 60); };
+  bindDeadlineRows($main);
+}
+
+// Sheet to associate studies with a deadline (grant or abstract)
+function openLinkSheet(meetingId) {
+  const m = state.meetings.find(x => x.id === meetingId);
+  if (!m) return;
+  m.studyIds = m.studyIds || [];
+  if (!state.studies.length) {
+    openSheet("Link a Project", `<div style="color:var(--text2);font-size:14px;padding:8px 2px">No studies yet. Add a study first, then link it here.</div>`, () => true);
+    document.getElementById("sheet-save").style.visibility = "hidden";
+    return;
+  }
+  const body = `<div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">Select the projects associated with <b>${esc(m.society)} — ${esc(m.name)}</b>.</div>
+    <div class="fgroup">` +
+    state.studies.slice().sort((a, b) => a.title.localeCompare(b.title)).map(s => `
+      <div class="frow" style="gap:12px">
+        <input type="checkbox" class="link-study" data-sid="${s.id}" ${m.studyIds.includes(s.id) ? "checked" : ""} style="flex:0;width:22px;height:22px">
+        <label style="flex:1;min-width:0;font-weight:600">${esc(s.title)}</label>
+      </div>`).join("") + `</div>`;
+  openSheet("Link Projects", body, () => {
+    const checked = [...document.querySelectorAll(".link-study")].filter(c => c.checked).map(c => c.dataset.sid);
+    m.studyIds = checked;
+    saveLocal(); pushItem("meeting", m); render();
+    toast("Projects linked");
+  });
+}
+
+// Sheet to associate deadlines (grants/abstracts) with a study, from the study's page
+function openStudyLinkSheet(studyId) {
+  const list = state.meetings.slice().sort((a, b) =>
+    (a.type || "").localeCompare(b.type || "") || a.society.localeCompare(b.society) || a.name.localeCompare(b.name));
+  if (!list.length) {
+    openSheet("Link Deadline", `<div style="color:var(--text2);font-size:14px;padding:8px 2px">No grants or meetings tracked yet.</div>`, () => true);
+    document.getElementById("sheet-save").style.visibility = "hidden";
+    return;
+  }
+  const body = `<div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">Link this project to grants or abstract deadlines.</div>
+    <div class="fgroup">` + list.map(m => `
+      <div class="frow" style="gap:12px">
+        <input type="checkbox" class="link-mtg" data-mid="${m.id}" ${(m.studyIds || []).includes(studyId) ? "checked" : ""} style="flex:0;width:22px;height:22px">
+        <label style="flex:1;min-width:0;font-weight:600;font-size:14px">${esc(m.society)} — ${esc(m.name)}<div style="font-weight:400;font-size:12px;color:var(--text2)">${(m.type||"abstract")==="grant"?"Grant":"Abstract"}${m.deadline?" · "+fmtDate(m.deadline):""}</div></label>
+      </div>`).join("") + `</div>`;
+  openSheet("Link Deadlines", body, () => {
+    const checkedIds = new Set([...document.querySelectorAll(".link-mtg")].filter(c => c.checked).map(c => c.dataset.mid));
+    const changed = [];
+    list.forEach(m => {
+      m.studyIds = m.studyIds || [];
+      const has = m.studyIds.includes(studyId);
+      if (checkedIds.has(m.id) && !has) { m.studyIds.push(studyId); changed.push(m); }
+      else if (!checkedIds.has(m.id) && has) { m.studyIds = m.studyIds.filter(x => x !== studyId); changed.push(m); }
+    });
+    saveLocal(); changed.forEach(m => pushItem("meeting", m)); render();
+    toast("Deadlines linked");
+  });
+}
+
+function studyCardHTML(s) {
+  const openCount = state.tasks.filter(t => t.studyId === s.id && !t.done).length;
+  const nextMs = (s.milestones || []).filter(m => !m.done && m.date).sort((a, b) => a.date.localeCompare(b.date))[0];
+  return `
+  <div class="card study-row" data-study="${s.id}">
+    <div class="title-line" style="align-items:center;gap:10px">
+      <div style="flex-shrink:0;line-height:0">${studyEmblem(s, 34)}</div>
+      <h3 style="flex:1;min-width:0">${esc(s.title)}</h3>
+      <span class="badge" style="background:${PHASE_COLORS[s.phase] || "var(--text2)"}">${esc(s.phase)}</span>
+    </div>
+    <div class="chip-row">
+      <span class="badge outline">${esc(DESIGN_SHORT[s.design] || "—")}</span>
+      ${s.pi ? `<span class="meta">PI: ${esc(s.pi)}</span>` : ""}
+      ${s.journal && SUBMITTED_PHASES.includes(s.phase) ? `<span class="badge" style="background:var(--teal);font-size:10px">${esc(s.journal)}</span>` : ""}
+      ${s.priority && s.priority !== "Medium" ? `<span class="meta" style="color:${PRIORITY_COLORS[s.priority]};font-weight:700">${esc(s.priority)}</span>` : ""}
+    </div>
+    <div class="meta">
+      ${openCount ? `${openCount} open task${openCount > 1 ? "s" : ""}` : "No open tasks"}
+      ${(s.enrollCurrent !== "" || s.enrollTarget !== "") && (s.phase === "Enrolling" || s.phase === "Initiation") ? ` · ${s.enrollCurrent === "" ? "—" : s.enrollCurrent}/${s.enrollTarget === "" ? "—" : s.enrollTarget} enrolled` : ""}
+      ${nextMs ? ` · <span class="${dueClass(nextMs.date)}">${esc(nextMs.name)}: ${fmtDate(nextMs.date)}</span>` : ""}
+    </div>
+  </div>`;
+}
+
+function renderStudies() {
+  $title.textContent = "Studies";
+  const filters = ["Active", "All", "Published", "On Hold"];
+  // status-filtered base set (drives the phase dropdown options + counts)
+  let base = state.studies.slice();
+  if (studyFilter === "Active") base = base.filter(isActive);
+  else if (studyFilter !== "All") base = base.filter(s => s.phase === studyFilter);
+  const phaseCount = {};
+  base.forEach(s => { phaseCount[s.phase] = (phaseCount[s.phase] || 0) + 1; });
+  const presentPhases = PHASES.filter(p => phaseCount[p]);
+  if (studyPhaseFilter !== "All phases" && !presentPhases.includes(studyPhaseFilter)) studyPhaseFilter = "All phases";
+
+  let list = (studyPhaseFilter === "All phases") ? base : base.filter(s => s.phase === studyPhaseFilter);
+  list.sort((a, b) => PHASES.indexOf(a.phase) - PHASES.indexOf(b.phase) || a.title.localeCompare(b.title));
+
+  let html = `<div class="seg">` + filters.map(f =>
+    `<button class="${f === studyFilter ? "active" : ""}" data-filter="${f}">${f}</button>`).join("") + `</div>`;
+  html += `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 14px 4px">
+      <span style="font-size:13px;font-weight:600;color:var(--text2)">Phase</span>
+      <select id="phase-filter" style="flex:1;-webkit-appearance:none;appearance:none;background:var(--card);border:none;border-radius:10px;padding:9px 30px 9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.06)">
+        <option value="All phases" ${studyPhaseFilter === "All phases" ? "selected" : ""}>All phases (${base.length})</option>
+        ${presentPhases.map(p => `<option value="${esc(p)}" ${p === studyPhaseFilter ? "selected" : ""}>${esc(p)} (${phaseCount[p]})</option>`).join("")}
+      </select>
+    </div>`;
+  if (!list.length) {
+    html += `<div class="empty"><div class="big">⚗️</div>No studies match this filter.<br>Tap <b>+</b> to add one.</div>`;
+  } else {
+    html += list.map(studyCardHTML).join("");
+  }
+  $main.innerHTML = html;
+  $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { studyFilter = b.dataset.filter; studyPhaseFilter = "All phases"; render(); });
+  document.getElementById("phase-filter").onchange = (e) => { studyPhaseFilter = e.target.value; render(); };
+  $main.querySelectorAll("[data-study]").forEach(el => el.onclick = () => { detailStudyId = el.dataset.study; render(); });
+}
+
+function nextAfterInit(s) { return phasesFor(s)[2] || "Enrolling"; }
+
+function enrollmentBlockHTML(s) {
+  const tgt = parseInt(s.enrollTarget, 10);
+  const cur = parseInt(s.enrollCurrent, 10);
+  const hasAny = s.enrollTarget !== "" || s.enrollCurrent !== "";
+  if (!hasAny) return "";
+  const pct = (tgt > 0 && !isNaN(cur)) ? Math.min(100, Math.round(100 * cur / tgt)) : 0;
+  return `
+  <div class="section-title">Enrollment</div>
+  <div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:baseline">
+      <div style="font-size:26px;font-weight:800">${isNaN(cur) ? "—" : cur}<span style="font-size:15px;color:var(--text2);font-weight:600"> / ${isNaN(tgt) ? "—" : tgt}</span></div>
+      <div style="font-size:13px;color:var(--text2);font-weight:600">${tgt > 0 && !isNaN(cur) ? pct + "% of target" : "enrolled / target"}</div>
+    </div>
+    ${tgt > 0 ? `<div class="progressbar" style="margin-top:8px;height:7px"><div style="width:${pct}%;background:${pct >= 100 ? "var(--green)" : "var(--blue)"}"></div></div>` : ""}
+  </div>`;
+}
+
+function initiationBlockHTML(s) {
+  if (s.phase !== "Initiation") return "";
+  const init = s.initiation || {};
+  const done = INIT_STEPS.filter(st => init[st.key]).length;
+  const target = esc(nextAfterInit(s));
+  return `
+  <div class="section-title">Initiation Checklist</div>
+  <div class="card">
+    <div style="font-size:12.5px;color:var(--text2);margin-bottom:6px">${done} of ${INIT_STEPS.length} steps complete. When the study is ready, check the final box to move it to <b>${target}</b>.</div>
+    ${INIT_STEPS.map(st => `
+      <div class="milestone-row">
+        <button class="task-check ${init[st.key] ? "done" : ""}" data-init="${st.key}" style="width:22px;height:22px;min-width:22px"></button>
+        <div style="flex:1;font-size:14.5px;font-weight:600;${init[st.key] ? "color:var(--text2)" : ""}">${esc(st.label)}</div>
+      </div>`).join("")}
+    <div class="milestone-row" style="border-top:1px solid var(--line);margin-top:6px;padding-top:12px">
+      <button class="task-check ${init.ready ? "done" : ""}" data-init="ready" style="width:24px;height:24px;min-width:24px;border-color:var(--green)"></button>
+      <div style="flex:1;font-size:15px;font-weight:800">Study Ready for Enrollment</div>
+    </div>
+  </div>`;
+}
+
+function renderStudyDetail() {
+  const s = studyById(detailStudyId);
+  if (!s) { detailStudyId = null; renderStudies(); return; }
+  $title.textContent = "Study";
+  const stepperPhases = phasesFor(s).filter(p => p !== "Published" && p !== "On Hold");
+  const tasks = state.tasks.filter(t => t.studyId === s.id).sort((a, b) => (a.done - b.done) || (a.due || "9999").localeCompare(b.due || "9999"));
+  const milestones = (s.milestones || []).slice().sort((a, b) => (a.date || "9999").localeCompare(b.date || "9999"));
+  const docs = (s.docs || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const abstracts = (s.abstracts || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const linkedMeetings = meetingsForStudy(s.id).sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
+  const inputStyle = "border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none";
+
+  let html = `
+  <button class="btn secondary" id="back-btn" style="margin:8px 0 12px 0">‹ All Studies</button>
+  <div class="card detail-h">
+    <div style="display:flex;gap:13px;align-items:flex-start">
+      <div style="flex-shrink:0;line-height:0">${studyEmblem(s, 56)}</div>
+      <div style="flex:1;min-width:0">
+        <div class="title-line" style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+          <h3 style="font-size:20px;font-weight:800;line-height:1.25">${esc(s.title)}</h3>
+          <span class="badge" style="background:${PHASE_COLORS[s.phase]}">${esc(s.phase)}</span>
+        </div>
+      </div>
+    </div>
+    ${isActive(s) ? `<div class="phase-stepper">${stepperPhases.map((p, i) => `<span class="${i <= stepperPhases.indexOf(s.phase) ? "on" : ""}"></span>`).join("")}</div>` : ""}
+    <div class="meta" style="font-size:13.5px;color:var(--text2);margin-top:8px;line-height:1.6">
+      ${s.pi ? `<b>PI:</b> ${esc(s.pi)}<br>` : ""}
+      ${s.team ? `<b>Team:</b> ${esc(s.team)}<br>` : ""}
+      <b>Design:</b> ${esc(s.design || "—")} · <b>Priority:</b> <span style="color:${PRIORITY_COLORS[s.priority] || "inherit"}">${esc(s.priority || "Medium")}</span>
+      ${s.journal ? `<br><b>Journal:</b> ${esc(s.journal)}` : ""}
+      ${s.irb ? `<br><b>IRB #:</b> ${esc(s.irb)}` : ""}
+      ${s.start ? `<br><b>Started:</b> ${fmtDate(s.start)}` : ""}
+    </div>
+    ${s.notes ? `<div style="font-size:14px;margin-top:10px;line-height:1.5;white-space:pre-wrap">${esc(s.notes)}</div>` : ""}
+  </div>
+  <button class="btn secondary" id="edit-study-btn">Edit Study</button>
+  ${enrollmentBlockHTML(s)}
+  ${initiationBlockHTML(s)}
+
+  <div class="section-title">Milestones</div>
+  <div class="card">
+    ${milestones.length ? milestones.map((m, i) => `
+      <div class="milestone-row">
+        <button class="task-check ${m.done ? "done" : ""}" data-ms="${i}" style="width:20px;height:20px;min-width:20px"></button>
+        <div style="flex:1">
+          <div style="font-size:14.5px;font-weight:600;${m.done ? "text-decoration:line-through;color:var(--text2)" : ""}">${esc(m.name)}</div>
+          ${m.date ? `<div style="font-size:12.5px" class="${m.done ? "" : dueClass(m.date)}" >${fmtDate(m.date)}</div>` : ""}
+        </div>
+        <button data-ms-del="${i}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
+      </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No milestones yet.</div>`}
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <input id="ms-name" placeholder="New milestone" style="flex:1;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+      <input id="ms-date" type="date" style="border:none;background:var(--bg);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none;max-width:135px">
+      <button id="ms-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:15px;cursor:pointer">Add</button>
+    </div>
+  </div>
+
+  <div class="section-title">Manuscript &amp; Documents</div>
+  <div class="card">
+    ${docs.length ? docs.map(dc => `
+      <div class="milestone-row">
+        <div style="flex:1;cursor:pointer;min-width:0" data-doc="${dc.id}">
+          <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 ${esc(dc.name)}</div>
+          <div style="font-size:12px;color:var(--text2)">${dc.label ? esc(dc.label) + " · " : ""}${fmtDate(dc.date)}${dc.by ? " · " + esc(dc.by) : ""}${dc.size ? " · " + fmtSize(dc.size) : ""}</div>
+        </div>
+        <button data-doc-del="${dc.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
+      </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No documents yet. Upload manuscript drafts to keep a version history — tap a file to download it.</div>`}
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <input id="doc-label" placeholder="Version label (e.g. v2 — post-review)" style="flex:1;${inputStyle}">
+      <button id="doc-upload" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:15px;cursor:pointer">Upload</button>
+    </div>
+    <input type="file" id="doc-file" style="display:none">
+    ${sb ? "" : `<div style="font-size:12px;color:var(--text2);margin-top:8px">Without Team Sync, files stay on this device only (max 2.5 MB each).</div>`}
+  </div>
+
+  <div class="section-title">Abstract Submissions</div>
+  <div class="card">
+    ${abstracts.length ? abstracts.map(a => `
+      <div class="milestone-row">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14.5px;font-weight:600">${esc(a.meeting)}</div>
+          ${a.date ? `<div style="font-size:12px;color:var(--text2)">${fmtDate(a.date)}</div>` : ""}
+        </div>
+        <button class="badge" data-abs-status="${a.id}" style="background:${ABS_COLORS[a.status] || "var(--text2)"};border:none;cursor:pointer;font-family:inherit" title="Tap to change status">${esc(a.status)}</button>
+        <button data-abs-del="${a.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
+      </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No abstracts yet. Tap a status badge to update it (Planned → Submitted → Accepted…).</div>`}
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <input id="abs-meeting" placeholder="Meeting (e.g. AAOS 2027)" style="flex:1;min-width:130px;${inputStyle}">
+      <input id="abs-date" type="date" style="${inputStyle};padding:9px 10px;font-size:14px;max-width:135px">
+      <button id="abs-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:9px 14px;font-weight:700;font-size:15px;cursor:pointer">Add</button>
+    </div>
+  </div>
+
+  <div class="section-title">Grant &amp; Submission Deadlines</div>
+  <div class="card" style="padding:6px 0">
+    ${linkedMeetings.length ? linkedMeetings.map(m => {
+      const dl = m.deadline ? daysUntil(m.deadline) : null;
+      const col = dl == null ? "var(--text2)" : dl < 0 ? "var(--text2)" : dl <= 7 ? "var(--red)" : dl <= 30 ? "var(--orange)" : "var(--green)";
+      return `<div class="task-row" style="padding:8px 16px" data-open-meeting="${m.id}">
+        <div style="min-width:50px;text-align:center"><div style="font-size:18px;font-weight:800;color:${col}">${m.deadline && dl >= 0 ? dl : "—"}</div><div style="font-size:9px;color:var(--text2);font-weight:700">${m.deadline && dl >= 0 ? "DAYS" : ""}</div></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;font-weight:600"><span class="badge" style="background:var(--indigo);font-size:9.5px;padding:2px 6px;margin-right:5px">${esc(m.society)}</span>${esc(m.name)}</div>
+          <div style="font-size:12px;color:var(--text2)">${(m.type||"abstract")==="grant"?"Grant":"Abstract"}${m.deadline?" · due "+fmtDate(m.deadline):""}</div>
+        </div>
+        <button data-unlink-meeting="${m.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
+      </div>`;
+    }).join("") : `<div style="color:var(--text2);font-size:14px;padding:6px 16px">No linked grants or abstract deadlines.</div>`}
+    <div style="padding:10px 16px 4px 16px">
+      <select id="link-existing-dl" style="width:100%;-webkit-appearance:none;appearance:none;background:var(--bg);border:none;border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+        <option value="">＋ Link an existing deadline…</option>
+        ${(() => {
+          const linkedIds = new Set((s.id ? meetingsForStudy(s.id) : []).map(m => m.id));
+          const opts = state.meetings.filter(m => !linkedIds.has(m.id)).sort((a, b) => (a.type || "").localeCompare(b.type || "") || a.society.localeCompare(b.society) || a.name.localeCompare(b.name));
+          const grp = (t) => opts.filter(m => (m.type || "abstract") === t).map(m => `<option value="${m.id}">${esc(m.society)} — ${esc(m.name)}${m.deadline ? " (" + fmtDate(m.deadline) + ")" : ""}</option>`).join("");
+          const g = grp("grant"), a = grp("abstract");
+          return (g ? `<optgroup label="Grants">${g}</optgroup>` : "") + (a ? `<optgroup label="Abstract deadlines">${a}</optgroup>` : "");
+        })()}
+      </select>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <input id="custom-dl-name" placeholder="Or type a custom deadline…" style="flex:1;min-width:150px;${inputStyle}">
+        <input id="custom-dl-date" type="date" style="${inputStyle};padding:9px 10px;font-size:14px;max-width:135px">
+        <select id="custom-dl-type" style="${inputStyle};-webkit-appearance:none;appearance:none"><option value="abstract">Abstract</option><option value="grant">Grant</option></select>
+        <button id="custom-dl-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:9px 14px;font-weight:700;font-size:15px;cursor:pointer">Add</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">Tasks</div>
+  <div class="card">
+    ${tasks.length ? tasks.map(taskRowHTML).join("") : `<div style="color:var(--text2);font-size:14px">No tasks for this study.</div>`}
+    <button class="btn secondary" id="add-task-here" style="margin:12px 0 0 0;padding:10px">+ Add Task</button>
+  </div>
+  <button class="btn danger" id="del-study-btn">Delete Study</button>`;
+
+  $main.innerHTML = html;
+  document.getElementById("back-btn").onclick = () => { detailStudyId = null; render(); };
+  document.getElementById("edit-study-btn").onclick = () => openStudyForm(s);
+  document.getElementById("del-study-btn").onclick = () => {
+    if (confirm(`Delete "${s.title}" and its tasks? This can't be undone.`)) { detailStudyId = null; removeStudy(s.id); toast("Study deleted"); }
+  };
+  document.getElementById("add-task-here").onclick = () => openTaskForm(null, s.id);
+  // Initiation checklist
+  $main.querySelectorAll("[data-init]").forEach(b => b.onclick = () => {
+    s.initiation = s.initiation || { sportsSubmission: false, irbApproved: false, caApproved: false, piqBuilt: false, ready: false };
+    const k = b.dataset.init;
+    s.initiation[k] = !s.initiation[k];
+    if (k === "ready" && s.initiation.ready && s.phase === "Initiation") {
+      s.phase = nextAfterInit(s);
+      upsertStudy(s); toast("Study moved to " + s.phase);
+    } else {
+      upsertStudy(s);
+    }
+  });
+  // Deadlines: link existing via dropdown
+  document.getElementById("link-existing-dl").onchange = (e) => {
+    if (e.target.value) { toggleStudyLink(e.target.value, s.id); toast("Deadline linked"); }
+  };
+  // Deadlines: add a custom free-text deadline (also appears on the dashboard board)
+  document.getElementById("custom-dl-add").onclick = () => {
+    const name = document.getElementById("custom-dl-name").value.trim();
+    if (!name) { toast("Type a deadline name"); return; }
+    const m = { id: uid(), society: "Custom", type: document.getElementById("custom-dl-type").value, name,
+      deadline: document.getElementById("custom-dl-date").value, dates: "", location: "", link: "",
+      aim: "", criteria: "", funded: [], studyIds: [s.id], unconfirmed: false, verifiedOn: "" };
+    upsertMeeting(m); toast("Custom deadline added");
+  };
+  $main.querySelectorAll("[data-open-meeting]").forEach(el => el.onclick = (e) => {
+    if (e.target.closest("[data-unlink-meeting]")) return;
+    const m = state.meetings.find(x => x.id === el.dataset.openMeeting); if (m) openMeetingForm(m);
+  });
+  $main.querySelectorAll("[data-unlink-meeting]").forEach(b => b.onclick = (e) => {
+    e.stopPropagation(); toggleStudyLink(b.dataset.unlinkMeeting, s.id); toast("Unlinked");
+  });
+  document.getElementById("ms-add").onclick = () => {
+    const name = document.getElementById("ms-name").value.trim();
+    const date = document.getElementById("ms-date").value;
+    if (!name) return;
+    s.milestones = s.milestones || [];
+    s.milestones.push({ name, date, done: false });
+    upsertStudy(s); toast("Milestone added");
+  };
+  $main.querySelectorAll("[data-ms]").forEach(b => b.onclick = () => {
+    const m = milestones[+b.dataset.ms];
+    m.done = !m.done; upsertStudy(s);
+  });
+  $main.querySelectorAll("[data-ms-del]").forEach(b => b.onclick = () => {
+    const m = milestones[+b.dataset.msDel];
+    s.milestones = (s.milestones || []).filter(x => x !== m);
+    upsertStudy(s);
+  });
+
+  // Documents
+  document.getElementById("doc-upload").onclick = () => document.getElementById("doc-file").click();
+  document.getElementById("doc-file").onchange = (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const maxMB = sb ? 8 : 2.5;
+    if (f.size > maxMB * 1024 * 1024) { toast(`File too large (max ${maxMB} MB${sb ? "" : " until Team Sync is on"})`); return; }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const id = uid();
+      if (!sb) {
+        try { localStorage.setItem("rt-file-" + id, reader.result); }
+        catch (err) { toast("Device storage full — connect Team Sync for file space"); return; }
+      } else {
+        try { localStorage.setItem("rt-file-" + id, reader.result); } catch (err) {}
+        const { error } = await sb.from("items").upsert({ id, kind: "file", data: { name: f.name, content: reader.result }, updated_at: new Date().toISOString() });
+        if (error) { toast("Upload failed — check connection"); localStorage.removeItem("rt-file-" + id); return; }
+      }
+      const label = document.getElementById("doc-label").value.trim();
+      s.docs = s.docs || [];
+      s.docs.push({ id, name: f.name, label, by: me(), date: todayStr(), size: f.size });
+      upsertStudy(s);
+      toast("Document uploaded");
+    };
+    reader.readAsDataURL(f);
+  };
+  $main.querySelectorAll("[data-doc]").forEach(el => el.onclick = () => {
+    const dc = (s.docs || []).find(x => x.id === el.dataset.doc);
+    if (dc) downloadDoc(dc);
+  });
+  $main.querySelectorAll("[data-doc-del]").forEach(b => b.onclick = () => {
+    const dc = (s.docs || []).find(x => x.id === b.dataset.docDel);
+    if (!dc || !confirm(`Delete "${dc.name}"? All team copies are removed.`)) return;
+    s.docs = s.docs.filter(x => x.id !== dc.id);
+    localStorage.removeItem("rt-file-" + dc.id);
+    deleteRemote(dc.id);
+    upsertStudy(s);
+    toast("Document deleted");
+  });
+
+  // Abstracts
+  document.getElementById("abs-add").onclick = () => {
+    const meeting = document.getElementById("abs-meeting").value.trim();
+    if (!meeting) { toast("Enter the meeting name"); return; }
+    s.abstracts = s.abstracts || [];
+    s.abstracts.push({ id: uid(), meeting, date: document.getElementById("abs-date").value, status: "Submitted" });
+    upsertStudy(s);
+    toast("Abstract added");
+  };
+  $main.querySelectorAll("[data-abs-status]").forEach(b => b.onclick = () => {
+    const a = (s.abstracts || []).find(x => x.id === b.dataset.absStatus);
+    if (!a) return;
+    a.status = ABS_STATUSES[(ABS_STATUSES.indexOf(a.status) + 1) % ABS_STATUSES.length];
+    upsertStudy(s);
+  });
+  $main.querySelectorAll("[data-abs-del]").forEach(b => b.onclick = () => {
+    const a = (s.abstracts || []).find(x => x.id === b.dataset.absDel);
+    if (!a || !confirm(`Remove "${a.meeting}" from abstract history?`)) return;
+    s.abstracts = s.abstracts.filter(x => x.id !== a.id);
+    upsertStudy(s);
+  });
+
+  bindTaskRows();
+}
+
+function taskRowHTML(t) {
+  const s = t.studyId ? studyById(t.studyId) : null;
+  const meta = [];
+  if (t.due) meta.push(`<span class="${t.done ? "" : dueClass(t.due)}">${dueLabel(t.due)}</span>`);
+  if (t.assignee) meta.push(esc(t.assignee));
+  if (s && tab !== "studies") meta.push(esc(s.title));
+  return `
+  <div class="task-row">
+    <button class="task-check ${t.done ? "done" : ""}" data-toggle="${t.id}" aria-label="toggle"></button>
+    <div class="task-body ${t.done ? "done" : ""}" data-task="${t.id}">
+      <div class="t-title">${esc(t.title)}</div>
+      ${meta.length ? `<div class="t-meta">${meta.join(" · ")}</div>` : ""}
+    </div>
+  </div>`;
+}
+function bindTaskRows() {
+  $main.querySelectorAll("[data-toggle]").forEach(b => b.onclick = (e) => {
+    e.stopPropagation();
+    const t = state.tasks.find(x => x.id === b.dataset.toggle);
+    if (t) { t.done = !t.done; upsertTask(t); }
+  });
+  $main.querySelectorAll("[data-task]").forEach(el => el.onclick = () => {
+    const t = state.tasks.find(x => x.id === el.dataset.task);
+    if (t) openTaskForm(t);
+  });
+}
+
+function renderTasks() {
+  $title.textContent = "Tasks";
+  const filters = ["Open", "Mine", "Overdue", "Done", "All"];
+  const myName = me().toLowerCase();
+  let list = state.tasks.slice();
+  if (taskFilter === "Open") list = list.filter(t => !t.done);
+  else if (taskFilter === "Mine") list = list.filter(t => !t.done && myName && (t.assignee || "").toLowerCase() === myName);
+  else if (taskFilter === "Overdue") list = list.filter(t => !t.done && t.due && t.due < todayStr());
+  else if (taskFilter === "Done") list = list.filter(t => t.done);
+  list.sort((a, b) => (a.done - b.done) || (a.due || "9999").localeCompare(b.due || "9999"));
+
+  let html = `<div class="seg">` + filters.map(f =>
+    `<button class="${f === taskFilter ? "active" : ""}" data-filter="${f}">${f}</button>`).join("") + `</div>`;
+  if (!list.length) {
+    html += (taskFilter === "Mine" && !myName)
+      ? `<div class="empty"><div class="big">👤</div>Set <b>Your name</b> in Settings<br>to see tasks assigned to you.</div>`
+      : `<div class="empty"><div class="big">☑️</div>No ${taskFilter.toLowerCase()} tasks.</div>`;
+  } else {
+    html += `<div class="card">` + list.map(taskRowHTML).join("") + `</div>`;
+  }
+  $main.innerHTML = html;
+  $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { taskFilter = b.dataset.filter; render(); });
+  bindTaskRows();
+}
+
+/* ============ Working Study List (spreadsheet view) ============ */
+let worklistShowClosed = false;
+function renderWorkingList() {
+  $title.textContent = "Working Study List";
+  let studies = state.studies.slice();
+  if (!worklistShowClosed) studies = studies.filter(isActive);
+  // Active studies first, then by workflow phase order, then by nickname/title.
+  studies.sort((a, b) =>
+    (isActive(a) ? 0 : 1) - (isActive(b) ? 0 : 1) ||
+    PHASES.indexOf(a.phase) - PHASES.indexOf(b.phase) ||
+    (a.nickname || a.title).localeCompare(b.nickname || b.title));
+
+  const cols = ["ORA / IRB #", "IRB Status", "Enrollment", "IRB Study Name", "Nickname", "Study Status", "Next Steps"];
+  let html = `<div class="seg">
+      <button class="${!worklistShowClosed ? "active" : ""}" data-wl="active">Active</button>
+      <button class="${worklistShowClosed ? "active" : ""}" data-wl="all">All</button>
+    </div>`;
+
+  if (!studies.length) {
+    html += `<div class="empty"><div class="big">▦</div>No ${worklistShowClosed ? "" : "active "}studies yet.<br>Tap <b>+</b> to add one.</div>`;
+    $main.innerHTML = html;
+    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
+    return;
+  }
+
+  const enrollCell = (s) => {
+    const hasAny = (s.enrollCurrent !== "" && s.enrollCurrent != null) || (s.enrollTarget !== "" && s.enrollTarget != null);
+    if (!hasAny) return `<span style="color:var(--text2)">—</span>`;
+    const cur = (s.enrollCurrent === "" || s.enrollCurrent == null) ? "—" : s.enrollCurrent;
+    const tgt = (s.enrollTarget === "" || s.enrollTarget == null) ? "—" : s.enrollTarget;
+    return `${esc(String(cur))} / ${esc(String(tgt))}`;
+  };
+  const stepsCell = (s) => {
+    const open = state.tasks.filter(t => t.studyId === s.id && !t.done)
+      .sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"));
+    if (!open.length) return `<span class="none">No open tasks</span>`;
+    return `<ul>` + open.slice(0, 5).map(t =>
+      `<li>${esc(t.title)}${t.due ? ` <span class="${dueClass(t.due)}" style="font-size:11px">(${fmtDate(t.due)})</span>` : ""}</li>`).join("")
+      + (open.length > 5 ? `<li class="none">+${open.length - 5} more</li>` : "") + `</ul>`;
+  };
+
+  const rows = studies.map(s => `
+    <tr data-open-study="${s.id}">
+      <td>${s.irb ? esc(s.irb) : `<span style="color:var(--text2)">—</span>`}</td>
+      <td><span class="wl-pill" style="background:${IRB_STATUS_COLORS[s.irbStatus] || "var(--text2)"}">${esc(s.irbStatus || "—")}</span></td>
+      <td>${enrollCell(s)}</td>
+      <td class="wl-title">${esc(s.title)}</td>
+      <td class="wl-name">${esc(s.nickname || "—")}</td>
+      <td><span class="wl-pill" style="background:${PHASE_COLORS[s.phase] || "var(--text2)"}">${esc(s.phase)}</span></td>
+      <td class="wl-steps">${stepsCell(s)}</td>
+    </tr>`).join("");
+
+  html += `<div class="wl-wrap"><table class="wl">
+      <thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Swipe sideways to see all columns. Tap a row to open the study. Next steps are the study's open tasks (soonest due first).</div>`;
+
+  $main.innerHTML = html;
+  $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
+  $main.querySelectorAll("[data-open-study]").forEach(el => el.onclick = () => {
+    detailStudyId = el.dataset.openStudy; tab = "studies"; render();
+  });
+}
+
+/* ============ Settings ============ */
+function renderSettings() {
+  $title.textContent = "Settings";
+  const cfg = syncConfig() || {};
+  const currentSubs = subs();
+  const allMeetings = state.meetings.slice().sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
+  $main.innerHTML = `
+  <div class="section-title">You &amp; Your Team</div>
+  <div class="fgroup">
+    <div class="frow"><label>Your name</label><input id="me-name" list="dl-people-set" placeholder="Used for 'Mine' filter &amp; uploads" value="${esc(me())}"></div>
+  </div>
+  <datalist id="dl-people-set">${state.roster.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
+  <div class="card">
+    <div style="font-size:12px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin-bottom:10px">TEAM MEMBERS — used for task assignment</div>
+    <div class="chip-row">
+      ${state.roster.length ? state.roster.map(n => `<span class="badge outline" style="font-size:13px;padding:6px 12px">${esc(n)}<span data-roster-del="${esc(n)}" style="cursor:pointer;font-weight:800;margin-left:6px;color:var(--red)">×</span></span>`).join("") : `<span style="color:var(--text2);font-size:14px">No members yet.</span>`}
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <input id="roster-name" placeholder="Add team member" style="flex:1;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+      <button id="roster-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:15px;cursor:pointer">Add</button>
+    </div>
+  </div>
+
+  <div class="section-title">Team Sync (optional)</div>
+  <div class="card" style="font-size:14px;line-height:1.55;color:var(--text2)">
+    Connect a free Supabase project so your whole team shares the same data.
+    Setup instructions are in the <b>SETUP-GUIDE</b> file that came with this app.
+  </div>
+  <div class="fgroup">
+    <div class="frow"><label>URL</label><input id="sb-url" placeholder="https://xxxx.supabase.co" value="${esc(cfg.url || "")}" autocapitalize="off" autocorrect="off"></div>
+    <div class="frow"><label>API Key</label><input id="sb-key" placeholder="anon public key" value="${esc(cfg.key || "")}" autocapitalize="off" autocorrect="off"></div>
+  </div>
+  <button class="btn" id="sb-save">${cfg.url ? "Update Sync Settings" : "Connect Team Sync"}</button>
+  ${cfg.url ? `<button class="btn danger" id="sb-off">Disconnect Sync</button>` : ""}
+
+  <div class="section-title" id="societies-anchor">Society Subscriptions</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">Toggle which societies appear on your dashboard deadline board. This is a personal view setting — it won't change what your teammates see.</div>
+  <div class="fgroup">
+    ${Object.entries(SOCIETIES).map(([k, full]) => `
+      <div class="frow">
+        <div style="flex:1"><div style="font-size:15px;font-weight:600">${k}</div><div style="font-size:11.5px;color:var(--text2);line-height:1.3">${esc(full)}</div></div>
+        <input type="checkbox" class="sub-toggle" data-soc="${k}" ${currentSubs[k] !== false ? "checked" : ""} style="flex:0;width:24px;height:24px">
+      </div>`).join("")}
+  </div>
+
+  <div class="section-title">Tracked Meetings</div>
+  <div class="card" style="padding:6px 0">
+    ${allMeetings.length ? allMeetings.map(m => `
+      <div class="task-row" style="padding:9px 16px;cursor:pointer" data-meeting-edit="${m.id}">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14.5px;font-weight:600"><span class="badge" style="background:var(--indigo);font-size:10px;padding:2px 7px;margin-right:6px">${esc(m.society)}</span>${esc(m.name)}</div>
+          <div style="font-size:12px;color:var(--text2);margin-top:2px">${(m.type || "abstract") === "grant" ? "Grant" : "Abstract"} · ${m.deadline ? "Due " + fmtDate(m.deadline) : "No deadline set"}${m.unconfirmed ? " · ⚠︎ unconfirmed" : ""}</div>
+        </div>
+        <span style="color:var(--text2);font-size:18px">›</span>
+      </div>`).join("") : `<div style="color:var(--text2);font-size:14px;padding:8px 16px">No meetings tracked yet.</div>`}
+  </div>
+  <button class="btn secondary" id="add-meeting-btn">+ Add Meeting Deadline</button>
+
+  <div class="section-title">Data</div>
+  <button class="btn secondary" id="export-btn">Export Data (JSON backup)</button>
+  <button class="btn secondary" id="import-btn">Import Data</button>
+  <input type="file" id="import-file" accept=".json" style="display:none">
+  <button class="btn secondary" id="sample-btn">Load Sample Data</button>
+  <button class="btn danger" id="wipe-btn">Erase All Data</button>
+
+  <div class="section-title">About</div>
+  <div class="card" style="font-size:13.5px;color:var(--text2);line-height:1.55">
+    Research Tracker v1.0 · ${state.studies.length} studies, ${state.tasks.length} tasks stored.
+    Data lives on this device${syncConfig() ? " and syncs to your team workspace" : ""}.
+    Tip: in Safari tap Share → <b>Add to Home Screen</b> to use this as an app.
+  </div>`;
+
+  document.getElementById("me-name").onchange = (e) => {
+    localStorage.setItem("rt-me", e.target.value.trim());
+    toast("Saved");
+  };
+  $main.querySelectorAll(".sub-toggle").forEach(c => c.onchange = () => {
+    setSub(c.dataset.soc, c.checked);
+  });
+  $main.querySelectorAll("[data-meeting-edit]").forEach(el => el.onclick = () => {
+    const m = state.meetings.find(x => x.id === el.dataset.meetingEdit);
+    if (m) openMeetingForm(m);
+  });
+  document.getElementById("add-meeting-btn").onclick = () => openMeetingForm(null);
+  document.getElementById("roster-add").onclick = () => {
+    const n = document.getElementById("roster-name").value.trim();
+    if (!n) return;
+    if (state.roster.some(x => x.toLowerCase() === n.toLowerCase())) { toast("Already on the team"); return; }
+    state.roster.push(n); state.roster.sort();
+    saveLocal(); pushRoster(); render(); toast(n + " added");
+  };
+  $main.querySelectorAll("[data-roster-del]").forEach(b => b.onclick = () => {
+    state.roster = state.roster.filter(x => x !== b.dataset.rosterDel);
+    saveLocal(); pushRoster(); render();
+  });
+
+  document.getElementById("sb-save").onclick = async () => {
+    const url = document.getElementById("sb-url").value.trim().replace(/\/+$/, "");
+    const key = document.getElementById("sb-key").value.trim();
+    if (!url || !key) { toast("Enter both URL and key"); return; }
+    localStorage.setItem("rt-sync", JSON.stringify({ url, key }));
+    toast("Connecting…");
+    await initSync();
+    if (sb) {
+      // seed workspace with local data if remote is empty
+      const { data } = await sb.from("items").select("id").limit(1);
+      if (data && data.length === 0 && (state.studies.length || state.tasks.length)) {
+        await pushAllLocal();
+        toast("Connected — local data uploaded");
+      } else { toast("Connected"); }
+      render();
+    } else { toast("Could not connect — check values"); }
+  };
+  const off = document.getElementById("sb-off");
+  if (off) off.onclick = () => {
+    localStorage.removeItem("rt-sync"); sb = null; setSyncPill(false, ""); render(); toast("Sync disconnected");
+  };
+
+  document.getElementById("export-btn").onclick = () => {
+    const files = {};
+    Object.keys(localStorage).filter(k => k.startsWith("rt-file-")).forEach(k => { files[k.slice(8)] = localStorage.getItem(k); });
+    const blob = new Blob([JSON.stringify(Object.assign({}, state, { files }), null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "research-tracker-backup-" + todayStr() + ".json";
+    a.click();
+    toast("Backup downloaded");
+  };
+  document.getElementById("import-btn").onclick = () => document.getElementById("import-file").click();
+  document.getElementById("import-file").onchange = (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const data = JSON.parse(r.result);
+        if (!Array.isArray(data.studies) || !Array.isArray(data.tasks)) throw new Error("bad format");
+        const files = data.files || {}; delete data.files;
+        if (data.mergeMode === "add") {
+          // Additive import: upsert by id, keep everything else (incl. deadline board) intact
+          const upsert = (arr, item) => { const i = arr.findIndex(x => x.id === item.id); if (i >= 0) arr[i] = item; else arr.push(item); };
+          (data.studies || []).forEach(s => upsert(state.studies, s));
+          (data.tasks || []).forEach(t => upsert(state.tasks, t));
+          (data.meetings || []).forEach(m => upsert(state.meetings, m));
+          (data.roster || []).forEach(n => { if (!state.roster.some(x => x.toLowerCase() === n.toLowerCase())) state.roster.push(n); });
+          state.roster.sort();
+          // Resolve study→deadline links by stable meeting key (ids differ per device)
+          (data.studies || []).forEach(s => {
+            if (Array.isArray(s.linkKeys)) {
+              s.linkKeys.forEach(k => {
+                const m = state.meetings.find(x => x.key === k);
+                if (m) { m.studyIds = m.studyIds || []; if (!m.studyIds.includes(s.id)) m.studyIds.push(s.id); }
+              });
+              delete s.linkKeys;
+            }
+          });
+        } else {
+          state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [] }, data);
+        }
+        migrate(); saveLocal();
+        Object.entries(files).forEach(([id, c]) => { try { localStorage.setItem("rt-file-" + id, c); } catch (e2) {} });
+        state.studies.forEach(s => pushItem("study", s));
+        state.tasks.forEach(t => pushItem("task", t));
+        state.meetings.forEach(m => pushItem("meeting", m));
+        pushRoster();
+        render(); toast(data.mergeMode === "add" ? "Studies imported" : "Data imported");
+      } catch (err) { toast("Invalid import file"); }
+    };
+    r.readAsText(f);
+  };
+  document.getElementById("sample-btn").onclick = () => {
+    if (state.studies.length && !confirm("Add sample data alongside your existing data?")) return;
+    loadSample(); toast("Sample data loaded");
+  };
+  document.getElementById("wipe-btn").onclick = () => {
+    if (!confirm("Erase ALL studies, tasks, and files on this device?")) return;
+    if (sb && !confirm("Also note: this only clears THIS device, not the team workspace. Continue?")) return;
+    Object.keys(localStorage).filter(k => k.startsWith("rt-file-")).forEach(k => localStorage.removeItem(k));
+    state = { studies: [], tasks: [], roster: [], meetings: [] }; saveLocal(); render(); toast("All data erased");
+  };
+}
+
+/* ============ Forms (bottom sheets) ============ */
+function openSheet(title, bodyHTML, onSave) {
+  // Remove any prior sheet instantly — a delayed (animated) removal would leave
+  // duplicate element IDs and route the Save button to the wrong handler.
+  document.querySelectorAll("#sheet-bd, #sheet").forEach(el => el.remove());
+  const bd = document.createElement("div"); bd.className = "sheet-backdrop"; bd.id = "sheet-bd";
+  const sh = document.createElement("div"); sh.className = "sheet"; sh.id = "sheet";
+  sh.innerHTML = `
+    <div class="sheet-head">
+      <button id="sheet-cancel">Cancel</button>
+      <h2>${esc(title)}</h2>
+      <button id="sheet-save" style="font-weight:800">Save</button>
+    </div>
+    <div class="sheet-body">${bodyHTML}</div>`;
+  document.body.appendChild(bd); document.body.appendChild(sh);
+  requestAnimationFrame(() => { bd.classList.add("show"); sh.classList.add("show"); });
+  bd.onclick = closeSheet;
+  document.getElementById("sheet-cancel").onclick = closeSheet;
+  document.getElementById("sheet-save").onclick = () => { if (onSave() !== false) closeSheet(); };
+}
+function closeSheet() {
+  const bd = document.getElementById("sheet-bd"), sh = document.getElementById("sheet");
+  if (bd) { bd.classList.remove("show"); setTimeout(() => bd.remove(), 260); }
+  if (sh) { sh.classList.remove("show"); setTimeout(() => sh.remove(), 320); }
+}
+function selectHTML(id, options, selected) {
+  return `<select id="${id}">` + options.map(o => `<option ${o === selected ? "selected" : ""}>${esc(o)}</option>`).join("") + `</select>`;
+}
+
+function openStudyForm(existing) {
+  const s = existing || { id: uid(), title: "", nickname: "", pi: "", team: "", design: "Prospective (Consented)", phase: "Concept", priority: "Medium", irb: "", irbStatus: "Not Submitted", start: todayStr(), notes: "", journal: "", milestones: [] };
+  const showJournal = SUBMITTED_PHASES.includes(s.phase);
+  openSheet(existing ? "Edit Study" : "New Study", `
+    <div class="fgroup">
+      <div class="frow"><label>Title</label><input id="f-title" placeholder="IRB study name / title" value="${esc(s.title)}"></div>
+      <div class="frow"><label>Nickname</label><input id="f-nickname" placeholder="Short name (e.g. ACL Registry)" value="${esc(s.nickname || "")}"></div>
+      <div class="frow"><label>PI</label><input id="f-pi" list="dl-pis" placeholder="Principal investigator" value="${esc(s.pi)}"></div>
+      <div class="frow"><label>Team</label><input id="f-team" placeholder="Co-Is, coordinators…" value="${esc(s.team || "")}"></div>
+    </div>
+    <datalist id="dl-pis">${PIS.map(p => `<option value="${esc(p)}">`).join("")}</datalist>
+    <div class="fgroup">
+      <div class="frow"><label>Design</label>${selectHTML("f-design", DESIGNS, s.design)}</div>
+      <div class="frow"><label>Phase</label>${selectHTML("f-phase", TRACK_PHASES[s.design] || TRACK_PHASES[DESIGNS[0]], s.phase)}</div>
+      <div class="frow"><label>Priority</label>${selectHTML("f-priority", PRIORITIES, s.priority)}</div>
+    </div>
+    <div class="fgroup" id="journal-row" style="display:${showJournal ? "flex" : "none"};flex-direction:column">
+      <div class="frow"><label>Journal</label><input id="f-journal" list="dl-journals" placeholder="e.g. AJSM, Arthroscopy" value="${esc(s.journal || "")}"></div>
+    </div>
+    <datalist id="dl-journals">${JOURNALS.map(j => `<option value="${esc(j)}">`).join("")}</datalist>
+    <div class="fgroup">
+      <div class="frow"><label>ORA / IRB #</label><input id="f-irb" placeholder="Protocol #, Exempt, or N/A" value="${esc(s.irb || "")}"></div>
+      <div class="frow"><label>IRB status</label>${selectHTML("f-irbstatus", IRB_STATUSES, s.irbStatus || "Not Submitted")}</div>
+      <div class="frow"><label>Start</label><input id="f-start" type="date" value="${esc(s.start || "")}"></div>
+    </div>
+    <div class="fgroup">
+      <div class="frow"><label>Enrolled</label><input id="f-enroll-cur" type="number" inputmode="numeric" min="0" placeholder="current # enrolled" value="${esc(s.enrollCurrent === 0 ? "0" : (s.enrollCurrent || ""))}"></div>
+      <div class="frow"><label>Target</label><input id="f-enroll-tgt" type="number" inputmode="numeric" min="0" placeholder="enrollment goal" value="${esc(s.enrollTarget === 0 ? "0" : (s.enrollTarget || ""))}"></div>
+    </div>
+    <div class="fgroup">
+      <div class="frow"><textarea id="f-notes" placeholder="Notes…">${esc(s.notes || "")}</textarea></div>
+    </div>`,
+    () => {
+      const title = document.getElementById("f-title").value.trim();
+      if (!title) { toast("Title is required"); return false; }
+      Object.assign(s, {
+        title,
+        nickname: document.getElementById("f-nickname").value.trim(),
+        pi: document.getElementById("f-pi").value.trim(),
+        team: document.getElementById("f-team").value.trim(),
+        design: document.getElementById("f-design").value,
+        phase: document.getElementById("f-phase").value,
+        priority: document.getElementById("f-priority").value,
+        irb: document.getElementById("f-irb").value.trim(),
+        irbStatus: document.getElementById("f-irbstatus").value,
+        start: document.getElementById("f-start").value,
+        notes: document.getElementById("f-notes").value.trim(),
+        journal: document.getElementById("f-journal").value.trim(),
+        enrollCurrent: document.getElementById("f-enroll-cur").value.trim(),
+        enrollTarget: document.getElementById("f-enroll-tgt").value.trim()
+      });
+      delete s.type;
+      upsertStudy(s);
+      toast(existing ? "Study updated" : "Study added");
+    });
+  // When design changes, swap the phase list to that track
+  document.getElementById("f-design").onchange = (e) => {
+    const phases = TRACK_PHASES[e.target.value];
+    const phaseSel = document.getElementById("f-phase");
+    const current = phaseSel.value;
+    phaseSel.innerHTML = phases.map(p => `<option ${p === current ? "selected" : ""}>${esc(p)}</option>`).join("");
+    if (!phases.includes(current)) phaseSel.value = phases[0];
+    toggleJournalRow();
+  };
+  const toggleJournalRow = () => {
+    document.getElementById("journal-row").style.display =
+      SUBMITTED_PHASES.includes(document.getElementById("f-phase").value) ? "flex" : "none";
+  };
+  document.getElementById("f-phase").onchange = toggleJournalRow;
+}
+
+function openTaskForm(existing, presetStudyId) {
+  const t = existing || { id: uid(), title: "", studyId: presetStudyId || "", due: "", assignee: "", notes: "", done: false };
+  const studyOpts = [`<option value="">(none)</option>`]
+    .concat(state.studies.map(s => `<option value="${s.id}" ${s.id === t.studyId ? "selected" : ""}>${esc(s.title)}</option>`)).join("");
+  openSheet(existing ? "Edit Task" : "New Task", `
+    <div class="fgroup">
+      <div class="frow"><label>Task</label><input id="f-ttitle" placeholder="What needs doing?" value="${esc(t.title)}"></div>
+      <div class="frow"><label>Study</label><select id="f-tstudy">${studyOpts}</select></div>
+      <div class="frow"><label>Due</label><input id="f-tdue" type="date" value="${esc(t.due || "")}"></div>
+      <div class="frow"><label>Assignee</label><input id="f-tassignee" list="dl-people" placeholder="Who's on it?" value="${esc(t.assignee || "")}"></div>
+    </div>
+    <datalist id="dl-people">${state.roster.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
+    <div class="fgroup">
+      <div class="frow"><textarea id="f-tnotes" placeholder="Notes…">${esc(t.notes || "")}</textarea></div>
+    </div>
+    ${existing ? `<button class="btn danger" id="f-tdel">Delete Task</button>` : ""}`,
+    () => {
+      const title = document.getElementById("f-ttitle").value.trim();
+      if (!title) { toast("Task name is required"); return false; }
+      Object.assign(t, {
+        title,
+        studyId: document.getElementById("f-tstudy").value,
+        due: document.getElementById("f-tdue").value,
+        assignee: document.getElementById("f-tassignee").value.trim(),
+        notes: document.getElementById("f-tnotes").value.trim()
+      });
+      upsertTask(t);
+      toast(existing ? "Task updated" : "Task added");
+    });
+  const del = document.getElementById("f-tdel");
+  if (del) del.onclick = () => { removeTask(t.id); closeSheet(); toast("Task deleted"); };
+}
+
+function openMeetingForm(existing) {
+  const m = existing || { id: uid(), society: "AAOS", name: "", type: "abstract", location: "", dates: "", deadline: "", link: "", unconfirmed: false };
+  const typeLabel = { abstract: "Abstract", grant: "Grant / Funding" };
+  openSheet(existing ? "Edit Deadline" : "New Deadline", `
+    <div class="fgroup">
+      <div class="frow"><label>Type</label><select id="f-mtype"><option value="abstract" ${(m.type || "abstract") === "abstract" ? "selected" : ""}>Abstract</option><option value="grant" ${m.type === "grant" ? "selected" : ""}>Grant / Funding</option></select></div>
+      <div class="frow"><label>Society</label>${selectHTML("f-msoc", Object.keys(SOCIETIES), m.society)}</div>
+      <div class="frow"><label>Name</label><input id="f-mname" placeholder="e.g. 2027 Annual Meeting or Clinical Research Award" value="${esc(m.name)}"></div>
+      <div class="frow"><label>LOI due</label><input id="f-mloi" type="date" value="${esc(m.loiDeadline || "")}"></div>
+      <div class="frow"><label id="f-mdeadline-lbl">${(m.type || "abstract") === "grant" ? "Application due" : "Deadline"}</label><input id="f-mdeadline" type="date" value="${esc(m.deadline || "")}"></div>
+      <div class="frow"><label>Meeting dates</label><input id="f-mdates" placeholder="e.g. Mar 3–6, 2027" value="${esc(m.dates || "")}"></div>
+      <div class="frow"><label>Location</label><input id="f-mloc" placeholder="City" value="${esc(m.location || "")}"></div>
+      <div class="frow"><label>Link</label><input id="f-mlink" placeholder="Call-for-abstracts / grant URL" value="${esc(m.link || "")}" autocapitalize="off" autocorrect="off"></div>
+      <div class="frow"><label>Unconfirmed</label><input type="checkbox" id="f-municonf" ${m.unconfirmed ? "checked" : ""} style="flex:0;width:22px;height:22px"></div>
+    </div>
+    <div id="grant-fields" style="display:${(m.type || "abstract") === "grant" ? "block" : "none"}">
+      <div class="fgroup">
+        <div class="frow"><textarea id="f-maim" placeholder="Aim — one sentence describing the grant's purpose">${esc(m.aim || "")}</textarea></div>
+      </div>
+      <div class="fgroup">
+        <div class="frow"><textarea id="f-mcrit" placeholder="Eligibility & criteria to apply" style="min-height:88px">${esc(m.criteria || "")}</textarea></div>
+      </div>
+      <div class="fgroup">
+        <div class="frow"><textarea id="f-mfunded" placeholder="Recently funded titles — one per line">${esc((m.funded || []).join("\n"))}</textarea></div>
+      </div>
+    </div>
+    <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:-4px 4px 12px 4px">Leave <b>LOI due</b> blank if there's no letter of intent. When both are set, the LOI and the application show as two separate, linked rows on the dashboard. Tick "Unconfirmed" if you're estimating a date — it shows a ⚠︎ flag until you verify it.</div>
+    ${m.link ? `<a href="${esc(m.link)}" target="_blank" rel="noopener" class="btn secondary" style="text-align:center;text-decoration:none">Open Call for Abstracts ↗</a>` : ""}
+    ${existing ? `<button class="btn danger" id="f-mdel">Delete Meeting</button>` : ""}`,
+    () => {
+      const name = document.getElementById("f-mname").value.trim();
+      if (!name) { toast("Meeting name is required"); return false; }
+      Object.assign(m, {
+        type: document.getElementById("f-mtype").value,
+        society: document.getElementById("f-msoc").value,
+        name,
+        loiDeadline: document.getElementById("f-mloi").value,
+        deadline: document.getElementById("f-mdeadline").value,
+        dates: document.getElementById("f-mdates").value.trim(),
+        location: document.getElementById("f-mloc").value.trim(),
+        link: document.getElementById("f-mlink").value.trim(),
+        unconfirmed: document.getElementById("f-municonf").checked,
+        aim: document.getElementById("f-maim").value.trim(),
+        criteria: document.getElementById("f-mcrit").value.trim(),
+        funded: document.getElementById("f-mfunded").value.split("\n").map(x => x.trim()).filter(Boolean)
+      });
+      upsertMeeting(m);
+      toast(existing ? "Deadline updated" : "Deadline added");
+    });
+  document.getElementById("f-mtype").addEventListener("change", (e) => {
+    document.getElementById("grant-fields").style.display = e.target.value === "grant" ? "block" : "none";
+    document.getElementById("f-mdeadline-lbl").textContent = e.target.value === "grant" ? "Application due" : "Deadline";
+  });
+  const md = document.getElementById("f-mdel");
+  if (md) md.onclick = () => { if (confirm(`Delete "${m.name}"?`)) { removeMeeting(m.id); closeSheet(); toast("Meeting deleted"); } };
+}
+
+/* ============ Sample data ============ */
+function loadSample() {
+  const d = (offset) => { const dt = new Date(); dt.setDate(dt.getDate() + offset); return dt.toISOString().slice(0, 10); };
+  const s1 = { id: uid(), title: "ACL Reconstruction Outcomes Registry", nickname: "ACL Registry", pi: "Yanke", team: "Smith (coord), Lee (fellow)", design: "Prospective (Consented)", phase: "Enrolling", priority: "High", irb: "ORA-24-1102", irbStatus: "Continuing Review Due", start: d(-220), notes: "Monthly enrollment review.", enrollCurrent: "62", enrollTarget: "150", milestones: [{ name: "50% enrollment", date: d(30), done: false }, { name: "IRB continuing review", date: d(75), done: false }] };
+  const s2 = { id: uid(), title: "Cartilage Scaffold Biomechanics (Ex Vivo)", nickname: "Scaffold Biomech", pi: "Yanke", team: "Chen (postdoc)", design: "Basic Science / Exempt", phase: "Analysis", priority: "Medium", irb: "Exempt", irbStatus: "Exempt", start: d(-400), notes: "Mechanical testing complete; histology pending.", milestones: [{ name: "Histology complete", date: d(14), done: false }] };
+  const s3 = { id: uid(), title: "MPFL Repair vs Reconstruction RCT", nickname: "MPFL RCT", pi: "Yanke", team: "", design: "Prospective (Consented)", phase: "Initiation", priority: "High", irb: "ORA-26-0341", irbStatus: "Submitted - Pending", start: d(-30), notes: "In study initiation — working through approvals.", initiation: { sportsSubmission: true, irbApproved: false, caApproved: false, piqBuilt: false, ready: false }, milestones: [{ name: "IRB approval", date: d(21), done: false }] };
+  const s4 = { id: uid(), title: "Osteochondral Allograft Survivorship", nickname: "OCA Survivorship", pi: "Yanke", team: "", design: "Retrospective (Non-Consented)", phase: "Published", priority: "Low", irb: "ORA-22-0877", irbStatus: "Closed", start: d(-900), notes: "Chart review, consent waiver. AJSM 2025.", milestones: [] };
+  const s5 = { id: uid(), title: "Trochlear Dysplasia Imaging Classification", nickname: "Trochlear Imaging", pi: "Yanke", team: "Lee (fellow)", design: "Retrospective (Non-Consented)", phase: "Data Extraction", priority: "Medium", irb: "ORA-25-0512", irbStatus: "Approved", start: d(-90), notes: "Consent waiver approved. ~300 charts.", milestones: [{ name: "Chart review complete", date: d(45), done: false }] };
+  s1.abstracts = [
+    { id: uid(), meeting: "AAOS Annual Meeting", date: d(-120), status: "Presented" },
+    { id: uid(), meeting: "AOSSM Annual Meeting", date: d(10), status: "Submitted" }
+  ];
+  s4.abstracts = [{ id: uid(), meeting: "ISAKOS Congress", date: d(-300), status: "Accepted" }];
+  state.studies.push(s1, s2, s3, s4, s5);
+  migrate(); // backfill new study fields (initiation, enrollment, journal) on sample data
+  if (!state.roster.length) { state.roster = ["Adam", "Chen", "Lee", "Smith"]; pushRoster(); }
+  seedMeetings();
+  state.tasks.push(
+    { id: uid(), title: "Respond to IRB stipulations", studyId: s3.id, due: d(-2), assignee: "Adam", notes: "", done: false },
+    { id: uid(), title: "Enroll subjects 41–45", studyId: s1.id, due: d(7), assignee: "Smith", notes: "", done: false },
+    { id: uid(), title: "Finalize histology protocol", studyId: s2.id, due: d(5), assignee: "Chen", notes: "", done: false },
+    { id: uid(), title: "Draft methods section", studyId: s2.id, due: d(20), assignee: "Adam", notes: "", done: false },
+    { id: uid(), title: "Submit conflict-of-interest disclosures", studyId: "", due: d(12), assignee: "Adam", notes: "Annual requirement", done: false },
+    { id: uid(), title: "Order specimen shipping kits", studyId: s2.id, due: d(-10), assignee: "Chen", notes: "", done: true }
+  );
+  saveLocal();
+  state.studies.forEach(s => pushItem("study", s));
+  state.tasks.forEach(t => pushItem("task", t));
+  state.meetings.forEach(m => pushItem("meeting", m));
+  render();
+}
+
+// Verified deadlines as of June 2026 (AAOS, ICRS confirmed from society sites;
+// others seeded as editable placeholders flagged "unconfirmed" — fill from each society's call for abstracts).
+function seedMeetings() {
+  applyFeedEntries(SEED_FEED, false);
+}
+
+// Built-in seed feed (mirrors deadlines.json; used when the hosted file isn't reachable, e.g. opened locally).
+// "key" is a stable identifier so the biweekly auto-update can match and refresh the right meeting.
+const SEED_FEED = [
+  { key: "AAOS|2027 Annual Meeting", society: "AAOS", name: "2027 Annual Meeting", deadline: "2026-06-08", dates: "Mar 3–6, 2027 (paper/poster/ePoster abstracts due 6/8, extended; OVT 7/15; OrthoDome 8/31)", location: "Las Vegas, NV", link: "https://www.aaos.org/annual/explore-the-program/abstracts-applications/", unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "AANA|2027 Annual Meeting", society: "AANA", name: "2027 Annual Meeting", deadline: "2026-08-10", dates: "Podium/E-presentation abstracts due 8/10/2026; ICLs due 7/10/2026; Diplomat Beach Resort, Hollywood, FL", location: "Hollywood, FL", link: "https://rise.aana.org/aanaimis/AnnualMeeting/Default.aspx", unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "ICRS|8th ICRS Summit (Porto)", society: "ICRS", name: "8th ICRS Summit (Porto)", deadline: "", dates: "Summit Oct 8–10, 2026; abstracts closed (opened 4/1, closed 5/5/2026; posters only, under-40 early career)", location: "Porto, Portugal", link: "https://cartilage.org/8th-icrs-summit-porto-2026/", unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "ICRS|19th World Congress", society: "ICRS", name: "19th World Congress", deadline: "", dates: "May 1–3, 2027, Rotterdam; registration now open; abstract call not yet open (more details to follow)", location: "Rotterdam, NL", link: "https://cartilage.org/events/19worldcongress/", unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "AOSSM|2026 Annual Meeting", society: "AOSSM", name: "Annual Meeting", deadline: "", dates: "2026 abstracts closed (notifications Dec 2025/Aug 2026); Specialty Day Mar 5, 2027; 2027 cycle not yet open", location: "", link: "https://www.sportsmed.org/education/abstract-and-instructional-course-submissions", unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "IPSG|2026 Annual Meeting", society: "IPSG", name: "Annual Meeting", deadline: "", dates: "Members-only; no public deadline", location: "", link: "https://www.ipsg.org/", unconfirmed: true, verifiedOn: "2026-06-04" },
+  // Grants & funding
+  { key: "OREF|Clinical Research Award", society: "OREF", type: "grant", name: "OREF Clinical Research Award", deadline: "2026-07-01", dates: "$20,000", location: "", link: "https://www.oref.org/for-researchers/funding-opportunities", aim: "Supports clinical research that advances patient care across orthopaedic subspecialties.", criteria: "$20,000 award. Application deadline 7/1/2026 (no LOI). See the OREF RFA for eligibility and proposal requirements; apply via proposalCENTRAL.", funded: [], unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "OREF|Mentored Clinician Scientist Grant", society: "OREF", type: "grant", name: "Mentored Clinician Scientist Grant", deadline: "2026-06-24", dates: "$20,000 · requires K award · RFA released 3/23/2026", location: "", link: "https://www.oref.org/for-researchers/funding-opportunities", aim: "Helps clinician-scientists who already hold a 'K' award build toward independent research funding.", criteria: "$20,000. Applicant must have been awarded an NIH 'K' (career development) award to apply. Application deadline 6/24/2026 (no LOI).", funded: [], unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "OREF|Resident Research Project Grant", society: "OREF", type: "grant", name: "Resident Research Project Grant", loiDeadline: "2026-04-22", deadline: "2026-06-24", dates: "$5,000 · RFA released 3/23/2026", location: "", link: "https://www.oref.org/for-researchers/funding-opportunities", aim: "Funds focused research projects led by orthopaedic residents.", criteria: "$5,000. For orthopaedic residents. LOI due 4/22/2026; application deadline 6/24/2026.", funded: [], unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "OREF|Resident Clinician Scientist Training Research Grant", society: "OREF", type: "grant", name: "Resident Clinician Scientist Training Research Grant", loiDeadline: "2026-04-22", deadline: "2026-06-24", dates: "$20,000 · RFA released 3/23/2026", location: "", link: "https://www.oref.org/for-researchers/funding-opportunities", aim: "Supports orthopaedic residents pursuing clinician-scientist training through a mentored research project.", criteria: "$20,000. For orthopaedic residents in clinician-scientist training. LOI due 4/22/2026; application deadline 6/24/2026. See OREF RFA on proposalCENTRAL.", funded: [], unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "OREF|ORS-OREF Distinguished Investigator Award", society: "OREF", type: "grant", name: "ORS/OREF Distinguished Investigator Award", deadline: "2026-09-11", dates: "Honorary · RFA released 6/1/2026", location: "", link: "https://www.oref.org/for-researchers/funding-opportunities", aim: "Honors an investigator for sustained, distinguished contributions to musculoskeletal research.", criteria: "Honorary award (joint with ORS). Nomination-based; application deadline 9/11/2026.", funded: [], unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "AOSSM|AF Hip Osteoarthritis Grant", society: "AOSSM", type: "grant", name: "AOSSM-AF Hip Osteoarthritis Grant (Full)", loiDeadline: "2026-04-17", deadline: "2026-06-26", dates: "up to $250,000 (1–3 grants)", location: "", link: "https://www.sportsmed.org/research/sports-medicine-research-grants/osteoarthritis-grant", aim: "Funds studies on hip pathology and the rapid development of osteoarthritis that can grow into externally-fundable research programs.", criteria: "In collaboration with the Arthritis Foundation; up to three grants of $250,000 each. Must address an important clinical problem in hip pathology/PTOA and aim to establish a programmatic line of research competitive for NIH/PCORI/DOD funding. LOI due 4/17; full proposals due 6/26/2026.", funded: ["Sex-specific molecular and mechanical factors in cartilage injury — Paula Hernandez, PhD (2022)", "Delivery of chondrogenic genes for articular cartilage repair — Christopher Nagelli, PhD (2021)", "Mechanical Loading Effects in OA Progression Following ACL Reconstruction — Camila B. Carballo, PT, PhD (2019)"], unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "AOSSM|Sandy Kirkley Clinical Outcomes Grant", society: "AOSSM", type: "grant", name: "Sandy Kirkley Clinical Outcomes Grant", deadline: "2026-07-31", dates: "$25,000", location: "", link: "https://www.sportsmed.org/research/sports-medicine-research-grants/sandy-kirkley-clinical-outcomes-research-grant", aim: "Provides seed or supplemental funding for an outcomes research project or pilot study, honoring Dr. Kirkley's advocacy for rigorous RCTs.", criteria: "$25,000 start-up seed or supplemental funding for an outcome research project or pilot study in orthopaedic sports medicine. Submission deadline 7/31/2026.", funded: ["Extended Post-Operative Oral TXA after ACLR: A Multicenter RCT — David Bernholt, MD (2025)", "Arthroscopic Distal Tibia Allograft vs Latarjet for Subcritical Bone Loss — Ivan Wong, MD (2024)", "Evaluating the Efficacy of Erector Spinae Block in Routine Hip Arthroscopy — Benjamin Coobs, MD (2022)"], unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "AOSSM|JRF Ortho Allograft Grant", society: "AOSSM", type: "grant", name: "AOSSM-JRF Ortho Allograft Grant", deadline: "2026-08-01", dates: "up to $50,000", location: "", link: "https://www.sportsmed.org/research/sports-medicine-research-grants/aossm-jrf-ortho-allograft-grant", aim: "Advances insight into meniscal or osteochondral allograft transplantation of the knee.", criteria: "In coordination with JRF Ortho; up to $50,000 for a basic science or clinical project on viable osteochondral (OCA) or meniscus allograft transplantation of the knee. Translational/clinical-care advances reviewed favorably. Deadline 8/1/2026.", funded: ["Understanding OCA structure and matrix nanomechanics to improve integration — Paula Hernandez, PhD (2025)", "Biomechanics of segmental meniscus transplant: a human cadaveric study — Alvin Su, MD, PhD (2024)", "Nonorthotopic osteochondral allograft transplantation to the femoral head — Christopher Nagelli, PhD (2023)"], unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "AOSSM|Arnoczky Young Investigator Grant", society: "AOSSM", type: "grant", name: "Arnoczky Young Investigator Grant (Full)", deadline: "2026-09-20", dates: "$40,000 basic + $40,000 clinical", location: "", link: "https://www.sportsmed.org/research/sports-medicine-research-grants/young-investigator-grant", aim: "Supports early-career principal investigators leading an orthopaedic sports medicine research project, with mentorship.", criteria: "Up to $40,000 each for one clinical and one basic science project ($80,000 total). A Young Investigator is an orthopaedic surgeon who has graduated from or is currently in an approved residency program; the PI must perform the primary project role, remain at the parent institution for the project period, and have received less than $25,000 in external funding. Pre-proposals due 5/15; full proposals due 9/20/2026.", funded: ["Artificial Intelligence for Data and Insights in Young Hip (AIDY) — Yining Lu, MD (2024, Clinical)", "Analysis of Noninvasive Biomarkers for ACL Reconstruction — Luke Troyer, MD (2024, Basic)", "Sex Differences in FAIS Hip Synovium Leading to Differences in Outcomes — Stephanie Wong, MD (2023, Basic)"], unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "AOSSM|Playmaker Grant Lab", society: "AOSSM", type: "grant", name: "Playmaker Grant Lab", deadline: "2026-05-15", dates: "$25,000 each (1–2 grants); LOI due 5/15/2026 (closed); finalists present at the Annual Meeting", location: "", link: "https://www.sportsmed.org/research/sports-medicine-research-grants/playmaker-grant-lab", aim: "Provides start-up, seed, bridge/gap, or supplemental funding to advance exploratory projects on emerging or novel technology in orthopaedic sports medicine.", criteria: "Sponsored by The Aircast Foundation and Haslam Sports Innovation Center. Three-phase process: 2-page LOI (Phase 1, due 5/15/2026), a ≤15-minute presentation to the AOSSM Research Committee at the Annual Meeting (Phase 2), then a formal AOSSM-format grant application for funded projects (Phase 3). Studies involving human subjects receive priority.", funded: ["Virtual Reality as a Prevention Tool for Anterior Cruciate Ligament Injury — Estephania Nunez, DAT (2025)", "Dislocation- and Surgery-Induced Plasticity of the Glenoid Track — Jonathan Hughes, MD (2025)", "Valgus Force on the UCL During Batter's Swing and Hitting Motion — Bradley A. Lezak, MD (2025)"], unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "AOSSM|MAST Research Initiative Grant", society: "AOSSM", type: "grant", name: "2026 MAST Research Initiative Grant", deadline: "2026-08-07", dates: "$150,000 total funding pool · new joint AOSSM/AANA/SOMOS grant", location: "", link: "https://www.sportsmed.org/research/sports-medicine-research-grants/mast-research-initiative-grant", aim: "Funds orthopaedic research relevant to the military or general population, jointly sponsored by AOSSM, AANA, and the Society of Military Orthopaedic Surgeons (SOMOS).", criteria: "New for 2026. $150,000 total funding pool. Joint initiative among AOSSM, the Arthroscopy Association of North America (AANA), and the Society of Military Orthopaedic Surgeons (SOMOS) for research pertaining to the military population or general population. Apply via Proposal Central by 8/7/2026.", funded: [], unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "AANA|Research Grant", society: "AANA", type: "grant", name: "AANA Research Grant", deadline: "", dates: "2026 cycle closed; timelines TBA", location: "", link: "https://www.aana.org/research/research-grants/", aim: "Funds clinical or basic science research that advances arthroscopic surgery and disorders amenable to arthroscopic treatment.", criteria: "Funding pool up to $200,000: one project at $100,000 (preference for a multicenter trial), plus $50,000 and $25,000 seed/pilot awards. 2026 submission site is currently closed; future timelines TBA.", funded: [], unconfirmed: false, verifiedOn: "2026-07-07T14:00" },
+  { key: "AAOS|OREF Clinical Gaps Research Grant", society: "AAOS", type: "grant", name: "OREF/AAOS Clinical Gaps Research Grant", deadline: "", dates: "Administered via OREF — not on current OREF open/upcoming list; cycle dates TBA", location: "", link: "https://www.oref.org/for-researchers/funding-opportunities", aim: "Supports investigator-initiated research addressing clinical gaps in healing, repair, or diagnostics through devices, biologics, or technology.", criteria: "Administered via OREF. Translational, preclinical, or clinical research, preferably including pilot human studies. Cycle dates TBA — confirm on the OREF funding page.", funded: [], unconfirmed: true, verifiedOn: "2026-06-04" }
+];
+
+// Merge feed entries into state.meetings. A feed entry updates the matching meeting only when its
+// verifiedOn is newer than what we last applied, so manual edits between refreshes are preserved
+// until a genuinely newer verified value arrives.
+function applyFeedEntries(entries, fromNetwork) {
+  let changed = [];
+  (entries || []).forEach(e => {
+    if (!e.key) return;
+    let m = state.meetings.find(x => x.key === e.key)
+         || state.meetings.find(x => !x.key && x.society === e.society && x.name === e.name);
+    if (!m) {
+      m = { id: uid(), key: e.key, society: e.society, name: e.name, type: e.type || "abstract", loiDeadline: e.loiDeadline || "", deadline: e.deadline || "", dates: e.dates || "", location: e.location || "", link: e.link || "", aim: e.aim || "", criteria: e.criteria || "", funded: Array.isArray(e.funded) ? e.funded.slice() : [], studyIds: [], unconfirmed: !!e.unconfirmed, verifiedOn: e.verifiedOn || "" };
+      state.meetings.push(m); changed.push(m);
+    } else if (!m.verifiedOn || (e.verifiedOn || "") > m.verifiedOn) {
+      // feed-sourced fields refresh; studyIds (user associations) are preserved
+      m.key = e.key; m.type = e.type || m.type || "abstract";
+      m.loiDeadline = e.loiDeadline || ""; m.deadline = e.deadline || ""; m.dates = e.dates || ""; m.location = e.location || "";
+      m.link = e.link || ""; m.unconfirmed = !!e.unconfirmed; m.verifiedOn = e.verifiedOn || "";
+      if (e.aim != null) m.aim = e.aim;
+      if (e.criteria != null) m.criteria = e.criteria;
+      if (Array.isArray(e.funded)) m.funded = e.funded.slice();
+      changed.push(m);
+    }
+  });
+  if (changed.length) { saveLocal(); changed.forEach(m => pushItem("meeting", m)); render(); }
+  return changed.length;
+}
+
+// Pull the hosted deadlines.json (updated biweekly) so every team device gets refreshed dates.
+async function fetchDeadlineFeed() {
+  try {
+    const res = await fetch("./deadlines.json?t=" + Date.now(), { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json();
+    const entries = Array.isArray(data) ? data : data.meetings;
+    const n = applyFeedEntries(entries, true);
+    if (n) toast("Deadlines updated");
+  } catch (e) { /* offline or opened as a local file — seeds already cover it */ }
+}
+
+/* ============ Wiring ============ */
+document.querySelectorAll("nav.tabbar button").forEach(b => {
+  b.onclick = () => { tab = b.dataset.tab; if (tab !== "studies") detailStudyId = null; render(); };
+});
+document.getElementById("add-btn").onclick = () => {
+  if (tab === "tasks") openTaskForm(null, null);
+  else if (tab === "studies" && detailStudyId) openTaskForm(null, detailStudyId);
+  else if (tab === "studies") openStudyForm(null);
+  else if (tab === "worklist") openStudyForm(null);
+  else {
+    // dashboard: quick choice
+    openSheet("Add", `
+      <button class="btn" id="qa-study" style="margin-top:6px">New Study</button>
+      <button class="btn secondary" id="qa-task">New Task</button>
+      <button class="btn secondary" id="qa-meeting">New Meeting Deadline</button>`,
+      () => false);
+    document.getElementById("sheet-save").style.visibility = "hidden";
+    document.getElementById("qa-study").onclick = () => { closeSheet(); setTimeout(() => openStudyForm(null), 350); };
+    document.getElementById("qa-task").onclick = () => { closeSheet(); setTimeout(() => openTaskForm(null), 350); };
+    document.getElementById("qa-meeting").onclick = () => { closeSheet(); setTimeout(() => openMeetingForm(null), 350); };
+  }
+};
+
+loadLocal();
+// On first ever launch, seed the meeting board so deadlines show without needing sample data.
+if (!localStorage.getItem("rt-seeded")) {
+  applyFeedEntries(SEED_FEED, false);
+  localStorage.setItem("rt-seeded", "1");
+}
+render();
+initSync();
+fetchDeadlineFeed();
+</script>
+</body>
+</html>
