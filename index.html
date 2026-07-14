@@ -62,10 +62,9 @@
   header.topbar h1 { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }
   .brand-lockup { display: flex; align-items: center; gap: 8px; }
   .brand-badge {
-    width: 26px; height: 26px; min-width: 26px; border-radius: 50%;
-    background: var(--brand-teal); color: #1d1d1d;
+    width: 28px; height: 28px; min-width: 28px; border-radius: 50%;
+    background: var(--brand-teal);
     display: flex; align-items: center; justify-content: center;
-    font-size: 12px; font-weight: 800; letter-spacing: -0.5px;
   }
   .brand-tag {
     font-size: 10px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
@@ -318,7 +317,13 @@
 <div id="app">
   <header class="topbar">
     <div class="brand-lockup">
-      <div class="brand-badge" aria-hidden="true">M</div>
+      <div class="brand-badge" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+          <line x1="14" y1="35" x2="27" y2="13" stroke="#fff" stroke-width="8" stroke-linecap="round"/>
+          <line x1="24" y1="35" x2="35" y2="19" stroke="#fff" stroke-width="8" stroke-linecap="round"/>
+          <circle cx="35" cy="30" r="6" fill="#fff"/>
+        </svg>
+      </div>
       <div>
         <div class="brand-tag">Midwest Orthopaedics at Rush</div>
         <h1 id="page-title">Dashboard</h1>
@@ -557,7 +562,7 @@ async function pushItem(kind, obj) {
     // Advance our own baseline immediately so the save we just made isn't flagged as stale.
     remoteMeta[obj.id] = { kind, updated_at: updatedAt };
     if (editingRef && editingRef.id === obj.id) editingRef.baseline = updatedAt;
-    setSyncPill(true, realtimeChannel ? "Live" : "Synced");
+    setSyncPill(true, realtimeConfirmed ? "Live" : "Synced");
   } catch (e) { console.warn("push failed", e); setSyncPill(false, "Offline"); }
 }
 async function deleteRemote(id) {
@@ -568,14 +573,20 @@ async function deleteRemote(id) {
 
 /* ============ Realtime (instant cross-device updates) ============ */
 // Requires Realtime to be enabled on the "items" table in Supabase (Table Editor → Realtime
-// toggle, or `alter publication supabase_realtime add table items;`). If it isn't enabled, this
-// silently never subscribes and the app just falls back to the existing pull-on-tab-focus sync.
+// toggle, or `alter publication supabase_realtime add table items;`). Reaching "SUBSCRIBED"
+// only confirms the websocket handshake with Supabase succeeded — it does NOT confirm Postgres
+// is actually publishing row changes for this table. So we don't claim "Live" until we've seen
+// a real postgres_changes event come through; until then the pill honestly stays "Synced" and
+// the existing pull-on-tab-focus behavior keeps things eventually consistent either way.
+let realtimeConfirmed = false;
 function subscribeRealtime() {
   if (!sb || realtimeChannel) return;
   try {
     realtimeChannel = sb
       .channel("items-sync")
       .on("postgres_changes", { event: "*", schema: "public", table: "items" }, (payload) => {
+        realtimeConfirmed = true;
+        setSyncPill(true, "Live");
         if (payload.eventType === "DELETE") {
           applyRealtimeDelete(payload.old && payload.old.id);
         } else if (payload.new) {
@@ -583,9 +594,9 @@ function subscribeRealtime() {
         }
       })
       .subscribe((status) => {
-        if (status === "SUBSCRIBED") setSyncPill(true, "Live");
-        else if ((status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") && sb) {
-          setSyncPill(true, "Synced"); // realtime unavailable — tab-focus pulls still cover us
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") {
+          realtimeConfirmed = false;
+          if (sb) setSyncPill(true, "Synced"); // realtime unavailable — tab-focus pulls still cover us
         }
       });
   } catch (e) { console.warn("realtime subscribe failed", e); }
@@ -593,6 +604,7 @@ function subscribeRealtime() {
 function unsubscribeRealtime() {
   if (realtimeChannel && sb) { try { sb.removeChannel(realtimeChannel); } catch (e) {} }
   realtimeChannel = null;
+  realtimeConfirmed = false;
 }
 // Apply one changed row from another device/tab without touching unrelated in-flight edits —
 // only the matching array entry is replaced, not the whole studies/tasks/meetings list.

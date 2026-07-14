@@ -60,6 +60,8 @@ alter publication supabase_realtime add table items;
 
 Now everyone shares one live workspace, and edits show up on other people's screens within a second or two — no need to reopen the app. If step 4 above was skipped or Realtime isn't available for some reason, it quietly falls back to refreshing whenever you reopen the app, exactly as before — nothing breaks either way.
 
+**Checking it's actually live:** the pill next to the **+** button says **Synced** as soon as Team Sync connects, and only switches to **Live** once it's actually seen a real-time change come through. If it stays on "Synced" even after a teammate saves something (and you'd expect to see it appear without reopening), step 4 almost certainly wasn't run yet — go back to the SQL Editor and run that one line. It's harmless to run again if you're not sure.
+
 **If two people edit the exact same study, task, or deadline at the same time:** the app now checks for that. Whoever saves second gets a warning — "this was updated by someone else while you were editing" — with the choice to overwrite or reload the latest version first, so a change is never silently lost without at least a heads-up.
 
 **Team features once synced:** add your lab members under Settings → Team Members (used for task assignment suggestions), and have each person set "Your name" in Settings — that powers the "Mine" task filter and stamps document uploads. Manuscript files uploaded on a study (up to 8 MB each) and abstract submission histories are shared with the whole team — no extra Supabase setup needed. Without sync, files stay on your own device (max 2.5 MB each).
