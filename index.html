@@ -67,6 +67,7 @@
      on desktop it becomes a row with a collapsible dashboard sidebar. */
   .layout { display: contents; }
   .sidebar { display: none; }
+  .sidebar-resizer { display: none; }
 
   @media (min-width: 900px) {
     /* Desktop: fixed-height shell with two independently-scrolling panes (sidebar + main),
@@ -95,6 +96,15 @@
       cursor: pointer; padding: 4px 6px; font-family: inherit;
     }
     .sidebar-body { padding: 4px 16px 80px 16px; }
+    .sidebar-resizer {
+      display: block; flex: none; width: 7px; margin-left: -4px; cursor: col-resize;
+      position: relative; z-index: 3; touch-action: none;
+    }
+    .sidebar-resizer::after {
+      content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: transparent;
+    }
+    .sidebar-resizer:hover::after, .sidebar-resizer.dragging::after { background: var(--blue); width: 2px; }
+    .sidebar.collapsed + .sidebar-resizer { display: none; }
     .layout > main { flex: 1; min-width: 0; max-width: none; padding: 16px 32px 80px 32px; overflow-y: auto; height: 100%; }
     nav.tabbar { max-width: 480px; margin: 0 auto; border-radius: 20px 20px 0 0; }
     /* Dashboard now lives permanently in the sidebar, so drop it from the desktop tab bar. */
@@ -305,6 +315,7 @@
       </div>
       <div class="sidebar-body" id="sidebar-body"></div>
     </aside>
+    <div class="sidebar-resizer" id="sidebar-resizer" role="separator" aria-orientation="vertical" aria-label="Resize dashboard sidebar"></div>
     <main id="main"></main>
   </div>
   <nav class="tabbar">
@@ -678,6 +689,7 @@ const $title = document.getElementById("page-title");
 const $sidebar = document.getElementById("sidebar");
 const $sidebarBody = document.getElementById("sidebar-body");
 const $sidebarToggle = document.getElementById("sidebar-toggle");
+const $sidebarResizer = document.getElementById("sidebar-resizer");
 
 function render() {
   document.querySelectorAll("nav.tabbar button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
@@ -1836,6 +1848,7 @@ function applyFeedEntries(entries, fromNetwork) {
     } else if (!m.verifiedOn || (e.verifiedOn || "") > m.verifiedOn) {
       // feed-sourced fields refresh; studyIds (user associations) are preserved
       m.key = e.key; m.type = e.type || m.type || "abstract";
+      if (e.name) m.name = e.name;
       m.loiDeadline = e.loiDeadline || ""; m.deadline = e.deadline || ""; m.dates = e.dates || ""; m.location = e.location || "";
       m.link = e.link || ""; m.unconfirmed = !!e.unconfirmed; m.verifiedOn = e.verifiedOn || "";
       if (e.aim != null) m.aim = e.aim;
@@ -1864,12 +1877,22 @@ async function fetchDeadlineFeed() {
 document.querySelectorAll("nav.tabbar button").forEach(b => {
   b.onclick = () => { tab = b.dataset.tab; if (tab !== "studies") detailStudyId = null; render(); };
 });
-// Desktop-only collapsible dashboard sidebar
+// Desktop-only collapsible + resizable dashboard sidebar
+const SIDEBAR_MIN_WIDTH = 220, SIDEBAR_MAX_WIDTH = 560;
 let sidebarCollapsed = localStorage.getItem("rt-sidebar-collapsed") === "1";
+let sidebarWidth = parseInt(localStorage.getItem("rt-sidebar-width"), 10);
+if (!sidebarWidth || isNaN(sidebarWidth)) sidebarWidth = 320;
+sidebarWidth = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, sidebarWidth));
+function applySidebarWidth() {
+  if (!$sidebar) return;
+  // Collapsed width is owned by CSS (.sidebar.collapsed); clear any inline override so it applies.
+  $sidebar.style.width = sidebarCollapsed ? "" : sidebarWidth + "px";
+}
 function applySidebarCollapsed() {
   if (!$sidebar) return;
   $sidebar.classList.toggle("collapsed", sidebarCollapsed);
   if ($sidebarToggle) $sidebarToggle.textContent = sidebarCollapsed ? "›" : "‹";
+  applySidebarWidth();
 }
 if ($sidebarToggle) {
   $sidebarToggle.onclick = () => {
@@ -1880,6 +1903,33 @@ if ($sidebarToggle) {
 }
 applySidebarCollapsed();
 desktopMQ.addEventListener("change", () => renderSidebar());
+
+// Drag the sidebar/main divider to resize the dashboard panel
+if ($sidebarResizer) {
+  let dragging = false;
+  $sidebarResizer.addEventListener("pointerdown", (e) => {
+    if (sidebarCollapsed) return;
+    dragging = true;
+    $sidebarResizer.setPointerCapture(e.pointerId);
+    $sidebarResizer.classList.add("dragging");
+    document.body.style.userSelect = "none";
+  });
+  $sidebarResizer.addEventListener("pointermove", (e) => {
+    if (!dragging || !$sidebar) return;
+    const rect = $sidebar.getBoundingClientRect();
+    sidebarWidth = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, e.clientX - rect.left));
+    $sidebar.style.width = sidebarWidth + "px";
+  });
+  const endSidebarDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    $sidebarResizer.classList.remove("dragging");
+    document.body.style.userSelect = "";
+    localStorage.setItem("rt-sidebar-width", String(Math.round(sidebarWidth)));
+  };
+  $sidebarResizer.addEventListener("pointerup", endSidebarDrag);
+  $sidebarResizer.addEventListener("pointercancel", endSidebarDrag);
+}
 
 document.getElementById("add-btn").onclick = () => {
   if (tab === "tasks") openTaskForm(null, null);
