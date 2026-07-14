@@ -1,6 +1,6 @@
 {
   "_comment": "Abstract-deadline feed for Research Tracker. The biweekly scheduled task rewrites this file after checking each society. The app fetches it on load and merges any entry whose verifiedOn is newer. 'key' must stay stable so updates match the right meeting. Set unconfirmed=false only when a date is verified from the society's official call for abstracts.",
-  "updatedOn": "2026-07-07",
+  "updatedOn": "2026-07-13",
   "meetings": [
     {
       "key": "AAOS|2027 Annual Meeting",
@@ -11,18 +11,30 @@
       "location": "Las Vegas, NV",
       "link": "https://www.aaos.org/annual/explore-the-program/abstracts-applications/",
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
+    },
+    {
+      "key": "AAOS|Orthopaedic Video Theater (OVT)",
+      "society": "AAOS",
+      "type": "abstract",
+      "name": "Orthopaedic Video Theater (OVT) Submission",
+      "deadline": "2026-07-15",
+      "dates": "Video submissions due July 15, 2026 (peer-reviewed; presented at 2027 Annual Meeting; eligible for award designation and JAAOS video abstract inclusion)",
+      "location": "Las Vegas, NV",
+      "link": "https://www.aaos.org/annual/explore-the-program/abstracts-applications/",
+      "unconfirmed": false,
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "AANA|2027 Annual Meeting",
       "society": "AANA",
       "name": "2027 Annual Meeting",
       "deadline": "2026-08-10",
-      "dates": "Podium/E-presentation abstracts due 8/10/2026; ICLs due 7/10/2026; Diplomat Beach Resort, Hollywood, FL",
+      "dates": "Podium/E-presentation abstracts due 8/10/2026; ICLs due 7/20/2026 (moved out from 7/10); Diplomat Beach Resort, Hollywood, FL",
       "location": "Hollywood, FL",
       "link": "https://rise.aana.org/aanaimis/AnnualMeeting/Default.aspx",
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "ICRS|8th ICRS Summit (Porto)",
@@ -33,7 +45,7 @@
       "location": "Porto, Portugal",
       "link": "https://cartilage.org/8th-icrs-summit-porto-2026/",
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "ICRS|19th World Congress",
@@ -44,18 +56,18 @@
       "location": "Rotterdam, NL",
       "link": "https://cartilage.org/events/19worldcongress/",
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "AOSSM|2026 Annual Meeting",
       "society": "AOSSM",
-      "name": "Annual Meeting",
-      "deadline": "",
-      "dates": "2026 abstracts closed (notifications Dec 2025/Aug 2026); Specialty Day Mar 5, 2027; 2027 cycle not yet open",
+      "name": "2027 Annual Meeting",
+      "deadline": "2026-09-09",
+      "dates": "2027 Annual Meeting abstract/IC submissions open 7/15/2026, close 9/9/2026 (decisions ~Dec 2026); Specialty Day abstracts closed (notifications Aug 2026); Specialty Day Mar 5, 2027",
       "location": "",
       "link": "https://www.sportsmed.org/education/abstract-and-instructional-course-submissions",
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "IPSG|2026 Annual Meeting",
@@ -81,7 +93,7 @@
       "criteria": "$20,000 award. Application deadline 7/1/2026 (no LOI). See the OREF RFA for eligibility and proposal requirements; apply via proposalCENTRAL.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "OREF|Mentored Clinician Scientist Grant",
@@ -96,7 +108,7 @@
       "criteria": "$20,000. Applicant must have been awarded an NIH 'K' (career development) award to apply. Application deadline 6/24/2026 (no LOI).",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "OREF|Resident Research Project Grant",
@@ -111,7 +123,7 @@
       "criteria": "$5,000. For orthopaedic residents. LOI due 4/22/2026; application deadline 6/24/2026.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00",
+      "verifiedOn": "2026-07-13T18:45",
       "loiDeadline": "2026-04-22"
     },
     {
@@ -127,7 +139,7 @@
       "criteria": "$20,000. For orthopaedic residents in clinician-scientist training. LOI due 4/22/2026; application deadline 6/24/2026. See OREF RFA on proposalCENTRAL.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00",
+      "verifiedOn": "2026-07-13T18:45",
       "loiDeadline": "2026-04-22"
     },
     {
@@ -143,7 +155,7 @@
       "criteria": "Honorary award (joint with ORS). Nomination-based; application deadline 9/11/2026.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "AOSSM|AF Hip Osteoarthritis Grant",
@@ -162,7 +174,7 @@
         "Mechanical Loading Effects in OA Progression Following ACL Reconstruction — Camila B. Carballo, PT, PhD (2019)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00",
+      "verifiedOn": "2026-07-13T18:45",
       "loiDeadline": "2026-04-17"
     },
     {
@@ -182,7 +194,7 @@
         "Evaluating the Efficacy of Erector Spinae Block in Routine Hip Arthroscopy — Benjamin Coobs, MD (2022)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "AOSSM|JRF Ortho Allograft Grant",
@@ -201,7 +213,7 @@
         "Nonorthotopic osteochondral allograft transplantation to the femoral head — Christopher Nagelli, PhD (2023)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "AOSSM|Arnoczky Young Investigator Grant",
@@ -220,7 +232,7 @@
         "Sex Differences in FAIS Hip Synovium Leading to Differences in Outcomes — Stephanie Wong, MD (2023, Basic)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "AOSSM|Playmaker Grant Lab",
@@ -239,7 +251,7 @@
         "Valgus Force on the UCL During Batter's Swing and Hitting Motion — Bradley A. Lezak, MD (2025)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "AOSSM|MAST Research Initiative Grant",
@@ -254,7 +266,7 @@
       "criteria": "New for 2026. $150,000 total funding pool. Joint initiative among AOSSM, the Arthroscopy Association of North America (AANA), and the Society of Military Orthopaedic Surgeons (SOMOS) for research pertaining to the military population or general population. Apply via Proposal Central by 8/7/2026.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "AANA|Research Grant",
@@ -269,7 +281,7 @@
       "criteria": "Funding pool up to $200,000: one project at $100,000 (preference for a multicenter trial), plus $50,000 and $25,000 seed/pilot awards. 2026 submission site is currently closed; future timelines TBA.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-07T14:00"
+      "verifiedOn": "2026-07-13T18:45"
     },
     {
       "key": "AAOS|OREF Clinical Gaps Research Grant",
