@@ -467,6 +467,14 @@ function migrate() {
 
 /* ============ Optional Supabase sync ============ */
 let sb = null;
+let realtimeChannel = null;
+// Last-known server updated_at per record id (studies/tasks/meetings/roster), kept fresh by
+// pullAll() and by the realtime subscription. Used to detect "someone else changed this
+// since you opened it" before an edit is saved over the top of it.
+let remoteMeta = {};
+// { kind, id, baseline } for whichever record is currently open in an edit sheet, so we can
+// warn instead of silently clobbering a concurrent edit. Cleared whenever the sheet closes.
+let editingRef = null;
 function syncConfig() {
   try { return JSON.parse(localStorage.getItem("rt-sync") || "null"); } catch (e) { return null; }
 }
@@ -481,6 +489,7 @@ async function initSync() {
   const cfg = syncConfig();
   if (!cfg || !cfg.url || !cfg.key) { setSyncPill(false, ""); return; }
   setSyncPill(false, "Connecting…");
+  unsubscribeRealtime();
   try {
     if (!window.supabase) {
       await new Promise((res, rej) => {
@@ -493,6 +502,7 @@ async function initSync() {
     sb = window.supabase.createClient(cfg.url, cfg.key);
     await pullAll();
     setSyncPill(true, "Synced");
+    subscribeRealtime();
   } catch (e) {
     console.warn("sync init failed", e);
     sb = null;
@@ -501,7 +511,7 @@ async function initSync() {
 }
 async function pullAll() {
   if (!sb) return;
-  const { data, error } = await sb.from("items").select("id, kind, data").neq("kind", "file");
+  const { data, error } = await sb.from("items").select("id, kind, data, updated_at").neq("kind", "file");
   if (error) throw error;
   if (data) {
     state.studies = data.filter(r => r.kind === "study").map(r => r.data);
@@ -509,6 +519,7 @@ async function pullAll() {
     state.meetings = data.filter(r => r.kind === "meeting").map(r => r.data);
     const meta = data.find(r => r.kind === "meta");
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
+    data.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; });
     migrate();
     saveLocal();
     render();
@@ -518,14 +529,98 @@ function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster })
 async function pushItem(kind, obj) {
   if (!sb) return;
   try {
-    const { error } = await sb.from("items").upsert({ id: obj.id, kind, data: obj, updated_at: new Date().toISOString() });
+    const updatedAt = new Date().toISOString();
+    const { error } = await sb.from("items").upsert({ id: obj.id, kind, data: obj, updated_at: updatedAt });
     if (error) throw error;
-    setSyncPill(true, "Synced");
+    // Advance our own baseline immediately so the save we just made isn't flagged as stale.
+    remoteMeta[obj.id] = { kind, updated_at: updatedAt };
+    if (editingRef && editingRef.id === obj.id) editingRef.baseline = updatedAt;
+    setSyncPill(true, realtimeChannel ? "Live" : "Synced");
   } catch (e) { console.warn("push failed", e); setSyncPill(false, "Offline"); }
 }
 async function deleteRemote(id) {
+  delete remoteMeta[id];
   if (!sb) return;
   try { await sb.from("items").delete().eq("id", id); } catch (e) { console.warn(e); }
+}
+
+/* ============ Realtime (instant cross-device updates) ============ */
+// Requires Realtime to be enabled on the "items" table in Supabase (Table Editor → Realtime
+// toggle, or `alter publication supabase_realtime add table items;`). If it isn't enabled, this
+// silently never subscribes and the app just falls back to the existing pull-on-tab-focus sync.
+function subscribeRealtime() {
+  if (!sb || realtimeChannel) return;
+  try {
+    realtimeChannel = sb
+      .channel("items-sync")
+      .on("postgres_changes", { event: "*", schema: "public", table: "items" }, (payload) => {
+        if (payload.eventType === "DELETE") {
+          applyRealtimeDelete(payload.old && payload.old.id);
+        } else if (payload.new) {
+          applyRealtimeRow(payload.new.kind, payload.new.id, payload.new.data, payload.new.updated_at);
+        }
+      })
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") setSyncPill(true, "Live");
+        else if ((status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") && sb) {
+          setSyncPill(true, "Synced"); // realtime unavailable — tab-focus pulls still cover us
+        }
+      });
+  } catch (e) { console.warn("realtime subscribe failed", e); }
+}
+function unsubscribeRealtime() {
+  if (realtimeChannel && sb) { try { sb.removeChannel(realtimeChannel); } catch (e) {} }
+  realtimeChannel = null;
+}
+// Apply one changed row from another device/tab without touching unrelated in-flight edits —
+// only the matching array entry is replaced, not the whole studies/tasks/meetings list.
+function applyRealtimeRow(kind, id, data, updatedAt) {
+  if (kind === "file") { remoteMeta[id] = { kind, updated_at: updatedAt }; return; }
+  remoteMeta[id] = { kind, updated_at: updatedAt };
+  if (kind === "meta") {
+    if (Array.isArray(data.names)) { state.roster = data.names; saveLocal(); render(); }
+    return;
+  }
+  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : null;
+  if (!arr) return;
+  const i = arr.findIndex(x => x.id === id);
+  if (i >= 0) arr[i] = data; else arr.push(data);
+  saveLocal();
+  if (editingRef && editingRef.kind === kind && editingRef.id === id) {
+    toast("Heads up — this was just updated elsewhere");
+  }
+  render();
+}
+function applyRealtimeDelete(id) {
+  if (!id) return;
+  let hitOpenRecord = false;
+  ["studies", "tasks", "meetings"].forEach(key => {
+    const before = state[key].length;
+    state[key] = state[key].filter(x => x.id !== id);
+    if (state[key].length !== before && editingRef && editingRef.id === id) hitOpenRecord = true;
+  });
+  delete remoteMeta[id];
+  saveLocal();
+  if (hitOpenRecord) { toast("This was deleted elsewhere"); closeSheet(); }
+  render();
+}
+// True when the record's server copy has changed since this edit session started.
+function isStale(kind, id, baseline) {
+  const meta = remoteMeta[id];
+  return !!(meta && baseline && meta.updated_at > baseline);
+}
+// Ask before overwriting a concurrent edit. Returns true if the caller should proceed with
+// its save; otherwise reopens the form with the latest data so nothing is silently lost.
+function confirmOverwriteOrReload(kind, id) {
+  const proceed = confirm("This was updated by someone else while you were editing.\n\nSave your changes anyway and overwrite theirs? Choose Cancel to reload the latest version instead.");
+  if (proceed) return true;
+  closeSheet();
+  const fresh = kind === "study" ? studyById(id) : kind === "task" ? state.tasks.find(x => x.id === id) : state.meetings.find(x => x.id === id);
+  if (!fresh) { toast("That record no longer exists"); return false; }
+  if (kind === "study") openStudyForm(fresh);
+  else if (kind === "task") openTaskForm(fresh);
+  else openMeetingForm(fresh);
+  return false;
 }
 // Seed remote with all local data (used right after connecting)
 async function pushAllLocal() {
@@ -1512,6 +1607,7 @@ function renderSettings() {
   };
   const off = document.getElementById("sb-off");
   if (off) off.onclick = () => {
+    unsubscribeRealtime();
     localStorage.removeItem("rt-sync"); sb = null; setSyncPill(false, ""); render(); toast("Sync disconnected");
   };
 
@@ -1602,6 +1698,7 @@ function closeSheet() {
   const bd = document.getElementById("sheet-bd"), sh = document.getElementById("sheet");
   if (bd) { bd.classList.remove("show"); setTimeout(() => bd.remove(), 260); }
   if (sh) { sh.classList.remove("show"); setTimeout(() => sh.remove(), 320); }
+  editingRef = null;
 }
 function selectHTML(id, options, selected) {
   return `<select id="${id}">` + options.map(o => `<option ${o === selected ? "selected" : ""}>${esc(o)}</option>`).join("") + `</select>`;
@@ -1609,6 +1706,7 @@ function selectHTML(id, options, selected) {
 
 function openStudyForm(existing) {
   const s = existing || { id: uid(), title: "", nickname: "", pi: "", team: "", design: "Prospective (Consented)", phase: "Concept", priority: "Medium", irb: "", irbStatus: "Not Submitted", start: todayStr(), notes: "", journal: "", milestones: [] };
+  editingRef = existing ? { kind: "study", id: s.id, baseline: remoteMeta[s.id] ? remoteMeta[s.id].updated_at : null } : null;
   const showJournal = SUBMITTED_PHASES.includes(s.phase);
   openSheet(existing ? "Edit Study" : "New Study", `
     <div class="fgroup">
@@ -1642,6 +1740,9 @@ function openStudyForm(existing) {
     () => {
       const title = document.getElementById("f-title").value.trim();
       if (!title) { toast("Title is required"); return false; }
+      if (existing && isStale("study", s.id, editingRef && editingRef.baseline)) {
+        if (!confirmOverwriteOrReload("study", s.id)) return false;
+      }
       Object.assign(s, {
         title,
         nickname: document.getElementById("f-nickname").value.trim(),
@@ -1680,6 +1781,7 @@ function openStudyForm(existing) {
 
 function openTaskForm(existing, presetStudyId) {
   const t = existing || { id: uid(), title: "", studyId: presetStudyId || "", due: "", assignee: "", notes: "", done: false };
+  editingRef = existing ? { kind: "task", id: t.id, baseline: remoteMeta[t.id] ? remoteMeta[t.id].updated_at : null } : null;
   const studyOpts = [`<option value="">(none)</option>`]
     .concat(state.studies.map(s => `<option value="${s.id}" ${s.id === t.studyId ? "selected" : ""}>${esc(s.title)}</option>`)).join("");
   openSheet(existing ? "Edit Task" : "New Task", `
@@ -1697,6 +1799,9 @@ function openTaskForm(existing, presetStudyId) {
     () => {
       const title = document.getElementById("f-ttitle").value.trim();
       if (!title) { toast("Task name is required"); return false; }
+      if (existing && isStale("task", t.id, editingRef && editingRef.baseline)) {
+        if (!confirmOverwriteOrReload("task", t.id)) return false;
+      }
       Object.assign(t, {
         title,
         studyId: document.getElementById("f-tstudy").value,
@@ -1713,6 +1818,7 @@ function openTaskForm(existing, presetStudyId) {
 
 function openMeetingForm(existing) {
   const m = existing || { id: uid(), society: "AAOS", name: "", type: "abstract", location: "", dates: "", deadline: "", link: "", unconfirmed: false };
+  editingRef = existing ? { kind: "meeting", id: m.id, baseline: remoteMeta[m.id] ? remoteMeta[m.id].updated_at : null } : null;
   const typeLabel = { abstract: "Abstract", grant: "Grant / Funding" };
   openSheet(existing ? "Edit Deadline" : "New Deadline", `
     <div class="fgroup">
@@ -1743,6 +1849,9 @@ function openMeetingForm(existing) {
     () => {
       const name = document.getElementById("f-mname").value.trim();
       if (!name) { toast("Meeting name is required"); return false; }
+      if (existing && isStale("meeting", m.id, editingRef && editingRef.baseline)) {
+        if (!confirmOverwriteOrReload("meeting", m.id)) return false;
+      }
       Object.assign(m, {
         type: document.getElementById("f-mtype").value,
         society: document.getElementById("f-msoc").value,

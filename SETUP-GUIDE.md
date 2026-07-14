@@ -43,14 +43,24 @@ alter table items enable row level security;
 create policy "team access" on items for all using (true) with check (true);
 ```
 
-4. In the left sidebar: **Project Settings → API Keys**. Copy two things:
+4. Still in the SQL Editor, turn on realtime updates for that table so teammates see each other's changes instantly instead of only on reopen:
+
+```sql
+alter publication supabase_realtime add table items;
+```
+
+(If you already created the table before this step existed, just run this one line by itself — it's safe to run any time.)
+
+5. In the left sidebar: **Project Settings → API Keys**. Copy two things:
    - **Project URL** (looks like `https://abcd1234.supabase.co`)
    - **anon / public key** (long string of letters)
-5. In the app: **Settings → Team Sync**, paste both, tap **Connect Team Sync**.
+6. In the app: **Settings → Team Sync**, paste both, tap **Connect Team Sync**.
    Your existing data uploads automatically.
-6. Have each team member do step 5 with the same URL and key (just text them the two values).
+7. Have each team member do step 6 with the same URL and key (just text them the two values).
 
-Now everyone shares one live workspace. The app refreshes whenever you reopen it.
+Now everyone shares one live workspace, and edits show up on other people's screens within a second or two — no need to reopen the app. If step 4 above was skipped or Realtime isn't available for some reason, it quietly falls back to refreshing whenever you reopen the app, exactly as before — nothing breaks either way.
+
+**If two people edit the exact same study, task, or deadline at the same time:** the app now checks for that. Whoever saves second gets a warning — "this was updated by someone else while you were editing" — with the choice to overwrite or reload the latest version first, so a change is never silently lost without at least a heads-up.
 
 **Team features once synced:** add your lab members under Settings → Team Members (used for task assignment suggestions), and have each person set "Your name" in Settings — that powers the "Mine" task filter and stamps document uploads. Manuscript files uploaded on a study (up to 8 MB each) and abstract submission histories are shared with the whole team — no extra Supabase setup needed. Without sync, files stay on your own device (max 2.5 MB each).
 
