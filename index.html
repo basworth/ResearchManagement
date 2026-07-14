@@ -5,31 +5,36 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Research Tracker">
-<title>Research Tracker</title>
+<meta name="apple-mobile-web-app-title" content="MOR Tracker">
+<title>MOR Research Tracker</title>
 <style>
   :root {
-    --bg: #f2f2f7;
+    /* Midwest Orthopaedics at Rush brand teal, darkened for AA text/icon contrast on a light
+       background (the site's own bright #28bfa1 fails contrast as text/small UI on white —
+       it's used there only as a filled button/banner with dark text on top). */
+    --bg: #f7f8f8;
     --card: #ffffff;
-    --text: #1c1c1e;
-    --text2: #8e8e93;
+    --text: #1d1d1d;
+    --text2: #6b6f70;
     --line: #e5e5ea;
-    --blue: #007aff;
+    --blue: #0f7a68;
     --green: #34c759;
     --orange: #ff9500;
     --red: #ff3b30;
     --purple: #af52de;
     --teal: #30b0c7;
     --indigo: #5856d6;
+    --brand-teal: #28bfa1;
     --radius: 14px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #000000;
-      --card: #1c1c1e;
+      --bg: #1d1d1d;
+      --card: #262626;
       --text: #ffffff;
       --text2: #98989f;
-      --line: #2c2c2e;
+      --line: #333333;
+      --blue: #28bfa1;
     }
   }
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -55,6 +60,17 @@
     display: flex; align-items: center; justify-content: space-between;
   }
   header.topbar h1 { font-size: 28px; font-weight: 800; letter-spacing: -0.5px; }
+  .brand-lockup { display: flex; align-items: center; gap: 8px; }
+  .brand-badge {
+    width: 26px; height: 26px; min-width: 26px; border-radius: 50%;
+    background: var(--brand-teal); color: #1d1d1d;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 800; letter-spacing: -0.5px;
+  }
+  .brand-tag {
+    font-size: 10px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--blue); line-height: 1.15;
+  }
   .topbar-btn {
     border: none; background: var(--card); color: var(--blue);
     width: 36px; height: 36px; border-radius: 50%;
@@ -301,7 +317,13 @@
 <body>
 <div id="app">
   <header class="topbar">
-    <h1 id="page-title">Dashboard</h1>
+    <div class="brand-lockup">
+      <div class="brand-badge" aria-hidden="true">M</div>
+      <div>
+        <div class="brand-tag">Midwest Orthopaedics at Rush</div>
+        <h1 id="page-title">Dashboard</h1>
+      </div>
+    </div>
     <div style="display:flex;gap:8px;align-items:center">
       <span id="sync-pill" class="syncpill" style="display:none">Synced</span>
       <button class="topbar-btn" id="add-btn" aria-label="Add">+</button>
