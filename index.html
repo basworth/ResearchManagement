@@ -434,6 +434,7 @@ let state = { studies: [], tasks: [], roster: [], meetings: [] };
 let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
+let studyDesignFilter = "All designs";
 let taskFilter = "Open";
 let detailStudyId = null;
 
@@ -1090,16 +1091,29 @@ function renderStudies() {
   const presentPhases = PHASES.filter(p => phaseCount[p]);
   if (studyPhaseFilter !== "All phases" && !presentPhases.includes(studyPhaseFilter)) studyPhaseFilter = "All phases";
 
+  const designCount = {};
+  base.forEach(s => { const d = s.design || "Unspecified"; designCount[d] = (designCount[d] || 0) + 1; });
+  const presentDesigns = DESIGNS.filter(d => designCount[d]);
+  if (studyDesignFilter !== "All designs" && !presentDesigns.includes(studyDesignFilter)) studyDesignFilter = "All designs";
+
   let list = (studyPhaseFilter === "All phases") ? base : base.filter(s => s.phase === studyPhaseFilter);
+  if (studyDesignFilter !== "All designs") list = list.filter(s => s.design === studyDesignFilter);
   list.sort((a, b) => PHASES.indexOf(a.phase) - PHASES.indexOf(b.phase) || a.title.localeCompare(b.title));
 
   let html = `<div class="seg">` + filters.map(f =>
     `<button class="${f === studyFilter ? "active" : ""}" data-filter="${f}">${f}</button>`).join("") + `</div>`;
-  html += `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 14px 4px">
+  html += `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 10px 4px">
       <span style="font-size:13px;font-weight:600;color:var(--text2)">Phase</span>
       <select id="phase-filter" style="flex:1;-webkit-appearance:none;appearance:none;background:var(--card);border:none;border-radius:10px;padding:9px 30px 9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.06)">
         <option value="All phases" ${studyPhaseFilter === "All phases" ? "selected" : ""}>All phases (${base.length})</option>
         ${presentPhases.map(p => `<option value="${esc(p)}" ${p === studyPhaseFilter ? "selected" : ""}>${esc(p)} (${phaseCount[p]})</option>`).join("")}
+      </select>
+    </div>`;
+  html += `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 14px 4px">
+      <span style="font-size:13px;font-weight:600;color:var(--text2)">Design</span>
+      <select id="design-filter" style="flex:1;-webkit-appearance:none;appearance:none;background:var(--card);border:none;border-radius:10px;padding:9px 30px 9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.06)">
+        <option value="All designs" ${studyDesignFilter === "All designs" ? "selected" : ""}>All designs (${base.length})</option>
+        ${presentDesigns.map(d => `<option value="${esc(d)}" ${d === studyDesignFilter ? "selected" : ""}>${esc(DESIGN_SHORT[d] || d)} (${designCount[d]})</option>`).join("")}
       </select>
     </div>`;
   if (!list.length) {
@@ -1108,8 +1122,9 @@ function renderStudies() {
     html += list.map(studyCardHTML).join("");
   }
   $main.innerHTML = html;
-  $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { studyFilter = b.dataset.filter; studyPhaseFilter = "All phases"; render(); });
+  $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { studyFilter = b.dataset.filter; studyPhaseFilter = "All phases"; studyDesignFilter = "All designs"; render(); });
   document.getElementById("phase-filter").onchange = (e) => { studyPhaseFilter = e.target.value; render(); };
+  document.getElementById("design-filter").onchange = (e) => { studyDesignFilter = e.target.value; render(); };
   $main.querySelectorAll("[data-study]").forEach(el => el.onclick = () => { detailStudyId = el.dataset.study; render(); });
 }
 
@@ -1463,17 +1478,48 @@ function renderTasks() {
 
 /* ============ Working Study List (spreadsheet view) ============ */
 let worklistShowClosed = false;
+let worklistSort = { key: null, dir: 1 };
 function renderWorkingList() {
   $title.textContent = "Working Study List";
   let studies = state.studies.slice();
   if (!worklistShowClosed) studies = studies.filter(isActive);
-  // Active studies first, then by workflow phase order, then by nickname/title.
-  studies.sort((a, b) =>
-    (isActive(a) ? 0 : 1) - (isActive(b) ? 0 : 1) ||
-    PHASES.indexOf(a.phase) - PHASES.indexOf(b.phase) ||
-    (a.nickname || a.title).localeCompare(b.nickname || b.title));
 
-  const cols = ["ORA / IRB #", "IRB Status", "Enrollment", "IRB Study Name", "Nickname", "Study Status", "Next Steps"];
+  const sortKeyFns = {
+    irb: s => (s.irb || "").toLowerCase(),
+    irbStatus: s => (s.irbStatus || "").toLowerCase(),
+    enrollment: s => { const cur = parseInt(s.enrollCurrent, 10); return isNaN(cur) ? -1 : cur; },
+    title: s => (s.title || "").toLowerCase(),
+    nickname: s => (s.nickname || s.title || "").toLowerCase(),
+    design: s => (s.design || "").toLowerCase(),
+    phase: s => PHASES.indexOf(s.phase),
+    steps: s => state.tasks.filter(t => t.studyId === s.id && !t.done).length,
+  };
+
+  if (worklistSort.key && sortKeyFns[worklistSort.key]) {
+    const fn = sortKeyFns[worklistSort.key];
+    studies.sort((a, b) => {
+      const va = fn(a), vb = fn(b);
+      const cmp = typeof va === "number" && typeof vb === "number" ? va - vb : String(va).localeCompare(String(vb));
+      return cmp * worklistSort.dir;
+    });
+  } else {
+    // Default: active studies first, then by workflow phase order, then by nickname/title.
+    studies.sort((a, b) =>
+      (isActive(a) ? 0 : 1) - (isActive(b) ? 0 : 1) ||
+      PHASES.indexOf(a.phase) - PHASES.indexOf(b.phase) ||
+      (a.nickname || a.title).localeCompare(b.nickname || b.title));
+  }
+
+  const cols = [
+    { key: "irb", label: "ORA / IRB #" },
+    { key: "irbStatus", label: "IRB Status" },
+    { key: "enrollment", label: "Enrollment" },
+    { key: "title", label: "IRB Study Name" },
+    { key: "nickname", label: "Nickname" },
+    { key: "design", label: "Design" },
+    { key: "phase", label: "Study Status" },
+    { key: "steps", label: "Next Steps" },
+  ];
   let html = `<div class="seg">
       <button class="${!worklistShowClosed ? "active" : ""}" data-wl="active">Active</button>
       <button class="${worklistShowClosed ? "active" : ""}" data-wl="all">All</button>
@@ -1509,18 +1555,26 @@ function renderWorkingList() {
       <td>${enrollCell(s)}</td>
       <td class="wl-title">${esc(s.title)}</td>
       <td class="wl-name">${esc(s.nickname || "—")}</td>
+      <td><span class="badge outline" style="font-size:11px">${esc(DESIGN_SHORT[s.design] || "—")}</span></td>
       <td><span class="wl-pill" style="background:${PHASE_COLORS[s.phase] || "var(--text2)"}">${esc(s.phase)}</span></td>
       <td class="wl-steps">${stepsCell(s)}</td>
     </tr>`).join("");
 
+  const sortArrow = (key) => worklistSort.key === key ? (worklistSort.dir === 1 ? " ▲" : " ▼") : "";
   html += `<div class="wl-wrap"><table class="wl">
-      <thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead>
+      <thead><tr>${cols.map(c => `<th data-sort="${c.key}" style="cursor:pointer;user-select:none;white-space:nowrap">${esc(c.label)}${sortArrow(c.key)}</th>`).join("")}</tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Swipe sideways to see all columns. Tap a row to open the study. Next steps are the study's open tasks (soonest due first).</div>`;
+    <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Swipe sideways to see all columns. Tap a column header to sort, tap a row to open the study. Next steps are the study's open tasks (soonest due first).</div>`;
 
   $main.innerHTML = html;
   $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
+  $main.querySelectorAll("[data-sort]").forEach(th => th.onclick = () => {
+    const key = th.dataset.sort;
+    if (worklistSort.key === key) worklistSort.dir *= -1;
+    else { worklistSort.key = key; worklistSort.dir = 1; }
+    render();
+  });
   $main.querySelectorAll("[data-open-study]").forEach(el => el.onclick = () => {
     detailStudyId = el.dataset.openStudy; tab = "studies"; render();
   });
