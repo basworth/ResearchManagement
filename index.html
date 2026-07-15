@@ -1546,7 +1546,7 @@ function taskRowHTML(t) {
   const meta = [];
   if (t.due) meta.push(`<span class="${t.done ? "" : dueClass(t.due)}">${dueLabel(t.due)}</span>`);
   if (t.assignee) meta.push(esc(t.assignee));
-  if (s && tab !== "studies") meta.push(esc(s.title));
+  if (s && tab !== "studies") meta.push(`<span data-goto-study="${s.id}" style="text-decoration:underline;text-underline-offset:2px;cursor:pointer">${esc(s.title)} ›</span>`);
   return `
   <div class="task-row">
     <button class="task-check ${t.done ? "done" : ""}" data-toggle="${t.id}" aria-label="toggle"></button>
@@ -1562,6 +1562,10 @@ function bindTaskRows(root) {
     e.stopPropagation();
     const t = state.tasks.find(x => x.id === b.dataset.toggle);
     if (t) { t.done = !t.done; upsertTask(t); }
+  });
+  root.querySelectorAll("[data-goto-study]").forEach(el => el.onclick = (e) => {
+    e.stopPropagation();
+    detailStudyId = el.dataset.gotoStudy; tab = "studies"; render();
   });
   root.querySelectorAll("[data-task]").forEach(el => el.onclick = () => {
     const t = state.tasks.find(x => x.id === el.dataset.task);
@@ -2043,6 +2047,7 @@ function openTaskForm(existing, presetStudyId) {
     <div class="fgroup">
       <div class="frow"><textarea id="f-tnotes" placeholder="Notes…">${esc(t.notes || "")}</textarea></div>
     </div>
+    ${existing && t.studyId && studyById(t.studyId) ? `<button type="button" class="btn secondary" id="f-tgoto-study">Open Study: ${esc(studyById(t.studyId).nickname || studyById(t.studyId).title)} ›</button>` : ""}
     ${existing ? `<button class="btn danger" id="f-tdel">Delete Task</button>` : ""}`,
     () => {
       const title = document.getElementById("f-ttitle").value.trim();
@@ -2062,6 +2067,8 @@ function openTaskForm(existing, presetStudyId) {
     });
   const del = document.getElementById("f-tdel");
   if (del) del.onclick = () => { removeTask(t.id); closeSheet(); toast("Task deleted"); };
+  const gotoStudy = document.getElementById("f-tgoto-study");
+  if (gotoStudy) gotoStudy.onclick = () => { detailStudyId = t.studyId; tab = "studies"; closeSheet(); render(); };
 }
 
 function openMeetingForm(existing) {
