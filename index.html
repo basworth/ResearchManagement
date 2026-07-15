@@ -362,21 +362,21 @@
 const DESIGNS = ["Prospective (Consented)", "Retrospective (Non-Consented)", "Basic Science / Exempt"];
 const DESIGN_SHORT = { "Prospective (Consented)": "Prospective", "Retrospective (Non-Consented)": "Retrospective", "Basic Science / Exempt": "Basic Science" };
 const TRACK_PHASES = {
-  "Prospective (Consented)": ["Concept", "Initiation", "Enrolling", "Data Collection", "Analysis", "Manuscript", "Submitted", "Published", "On Hold"],
-  "Retrospective (Non-Consented)": ["Concept", "Initiation", "Data Extraction", "Analysis", "Manuscript", "Submitted", "Published", "On Hold"],
-  "Basic Science / Exempt": ["Concept", "Initiation", "Experiments", "Analysis", "Manuscript", "Submitted", "Published", "On Hold"]
+  "Prospective (Consented)": ["Concept", "Initiation", "Enrolling", "Data Collection", "Analysis", "Manuscript", "Submitted", "Revisions Required", "Published", "On Hold"],
+  "Retrospective (Non-Consented)": ["Concept", "Initiation", "Data Extraction", "Analysis", "Manuscript", "Submitted", "Revisions Required", "Published", "On Hold"],
+  "Basic Science / Exempt": ["Concept", "Initiation", "Experiments", "Analysis", "Manuscript", "Submitted", "Revisions Required", "Published", "On Hold"]
 };
 // Master ordered list of all phases (for pipeline display & sorting)
 const PHASES = [
   "Concept", "Initiation", "Enrolling", "Data Extraction", "Experiments", "Data Collection",
-  "Analysis", "Manuscript", "Submitted", "Published", "On Hold"
+  "Analysis", "Manuscript", "Submitted", "Revisions Required", "Published", "On Hold"
 ];
 const PHASE_COLORS = {
   "Concept": "var(--text2)", "Initiation": "var(--orange)",
   "Enrolling": "var(--blue)", "Data Extraction": "var(--blue)", "Experiments": "var(--blue)",
   "Data Collection": "var(--blue)",
   "Analysis": "var(--purple)", "Manuscript": "var(--purple)",
-  "Submitted": "var(--orange)", "Published": "var(--green)", "On Hold": "var(--red)"
+  "Submitted": "var(--orange)", "Revisions Required": "var(--indigo)", "Published": "var(--green)", "On Hold": "var(--red)"
 };
 // Old (pre-Initiation) phases → new, for migrating existing/imported data
 const PHASE_MIGRATE = {
@@ -404,7 +404,9 @@ function phasesFor(s) { return TRACK_PHASES[s.design] || TRACK_PHASES["Prospecti
 const PIS = ["Yanke", "Cole", "Chahla", "Verma", "Forsythe", "Nicholson", "Garrigues"];
 // Sports-medicine / orthopaedic journals (abbreviated). "journal" becomes relevant once a study is Submitted.
 const JOURNALS = ["AJSM", "OJSM", "Arthroscopy", "ASMAR", "Cartilage", "JCJP", "JKS", "VJSM", "KSSTA", "Sports Health", "JBJS", "JSES", "JISAKOS", "AOSSM Other"];
-const SUBMITTED_PHASES = ["Submitted", "Published"];
+const SUBMITTED_PHASES = ["Submitted", "Revisions Required", "Published"];
+// Funding sources seen so far (free text still allowed via the datalist input)
+const GRANT_SOURCES = ["OREF", "AOSSM", "AANA", "AAOS", "NIH", "Industry", "Institutional"];
 const ABS_STATUSES = ["Planned", "Submitted", "Accepted", "Rejected", "Presented"];
 const ABS_COLORS = { Planned: "var(--text2)", Submitted: "var(--orange)", Accepted: "var(--green)", Rejected: "var(--red)", Presented: "var(--indigo)" };
 const ROSTER_ID = "00000000-0000-0000-0000-000000000001";
@@ -465,6 +467,16 @@ function migrate() {
     if (s.journal == null) s.journal = "";
     if (s.submittedDate == null) s.submittedDate = "";
     if (s.journalTrackingId == null) s.journalTrackingId = "";
+    if (s.revisionsReceivedDate == null) s.revisionsReceivedDate = "";
+    if (s.revisionsDeadline == null) s.revisionsDeadline = "";
+    if (s.revisedManuscriptLink == null) s.revisedManuscriptLink = "";
+    if (s.responseToReviewersLink == null) s.responseToReviewersLink = "";
+    if (s.workingAbstractLink == null) s.workingAbstractLink = "";
+    if (s.workingManuscriptLink == null) s.workingManuscriptLink = "";
+    if (s.dataCollectionSheetLink == null) s.dataCollectionSheetLink = "";
+    if (s.dataProcessDocLink == null) s.dataProcessDocLink = "";
+    if (s.trackingSheetLink == null) s.trackingSheetLink = "";
+    if (!s.grant) s.grant = { enabled: false, amount: "", source: "", awardDate: "", balance: "", expirationDate: "", balanceUpdatedDate: "" };
     if (s.enrollTarget == null) s.enrollTarget = "";
     if (s.enrollCurrent == null) s.enrollCurrent = "";
     if (s.nickname == null) s.nickname = "";
@@ -1149,6 +1161,24 @@ function enrollmentBlockHTML(s) {
   </div>`;
 }
 
+function grantBlockHTML(s) {
+  const g = s.grant;
+  if (!g || !g.enabled) return "";
+  return `
+  <div class="section-title">Grant &amp; Award Funding</div>
+  <div class="card">
+    <div class="meta" style="font-size:13.5px;color:var(--text2);line-height:1.7">
+      ${g.amount ? `<b>Amount awarded:</b> ${esc(g.amount)}<br>` : ""}
+      ${g.source ? `<b>Awarded by:</b> ${esc(g.source)}<br>` : ""}
+      ${g.awardDate ? `<b>Date of award:</b> ${fmtDate(g.awardDate)}<br>` : ""}
+      ${g.balance ? `<b>Current balance:</b> ${esc(g.balance)}<br>` : ""}
+      ${g.expirationDate ? `<b>Award expires:</b> ${fmtDate(g.expirationDate)}<br>` : ""}
+      ${g.balanceUpdatedDate ? `<b>Balance last updated:</b> ${fmtDate(g.balanceUpdatedDate)}` : ""}
+    </div>
+    ${!g.amount && !g.source && !g.awardDate && !g.balance && !g.expirationDate && !g.balanceUpdatedDate ? `<div style="color:var(--text2);font-size:14px">No grant details entered yet. Tap Edit Study to add them.</div>` : ""}
+  </div>`;
+}
+
 function initiationBlockHTML(s) {
   if (s.phase !== "Initiation") return "";
   const init = s.initiation || {};
@@ -1170,6 +1200,22 @@ function initiationBlockHTML(s) {
   </div>`;
 }
 
+function linkFieldRow(label, id, value) {
+  return `
+  <div class="milestone-row" style="gap:8px;align-items:flex-end">
+    <div style="flex:1;min-width:0">
+      <div style="font-size:12px;color:var(--text2);font-weight:600;margin-bottom:4px">${esc(label)}</div>
+      <input id="${id}" placeholder="Paste link…" value="${esc(value || "")}" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14.5px;font-family:inherit;color:var(--text);outline:none">
+    </div>
+    ${value ? `<a href="${esc(value)}" target="_blank" rel="noopener" style="flex:none;color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:9px 2px">Open ↗</a>` : ""}
+  </div>`;
+}
+function bindLinkFieldRow(root, id, s, key) {
+  const el = root.querySelector("#" + id);
+  if (!el) return;
+  el.onchange = (e) => { s[key] = e.target.value.trim(); upsertStudy(s); };
+}
+
 function renderStudyDetail() {
   const s = studyById(detailStudyId);
   if (!s) { detailStudyId = null; renderStudies(); return; }
@@ -1177,7 +1223,8 @@ function renderStudyDetail() {
   const stepperPhases = phasesFor(s).filter(p => p !== "Published" && p !== "On Hold");
   const tasks = state.tasks.filter(t => t.studyId === s.id).sort((a, b) => (a.done - b.done) || (a.due || "9999").localeCompare(b.due || "9999"));
   const milestones = (s.milestones || []).slice().sort((a, b) => (a.date || "9999").localeCompare(b.date || "9999"));
-  const docs = (s.docs || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const docs = (s.docs || []).filter(dc => dc.category !== "revision").slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const revisionDocs = (s.docs || []).filter(dc => dc.category === "revision").slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const abstracts = (s.abstracts || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const linkedMeetings = meetingsForStudy(s.id).sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
   const inputStyle = "border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none";
@@ -1202,6 +1249,8 @@ function renderStudyDetail() {
       ${s.journal ? `<br><b>Journal:</b> ${esc(s.journal)}` : ""}
       ${s.submittedDate ? `<br><b>Submitted on:</b> ${fmtDate(s.submittedDate)}` : ""}
       ${s.journalTrackingId ? `<br><b>Tracking ID:</b> ${esc(s.journalTrackingId)}` : ""}
+      ${s.revisionsReceivedDate ? `<br><b>Revisions received:</b> ${fmtDate(s.revisionsReceivedDate)}` : ""}
+      ${s.revisionsDeadline ? `<br><b>Revisions due:</b> ${fmtDate(s.revisionsDeadline)}` : ""}
       ${s.irb ? `<br><b>IRB #:</b> ${esc(s.irb)}` : ""}
       ${s.start ? `<br><b>Started:</b> ${fmtDate(s.start)}` : ""}
     </div>
@@ -1210,7 +1259,17 @@ function renderStudyDetail() {
   </div>
   <button class="btn secondary" id="edit-study-btn">Edit Study</button>
   ${enrollmentBlockHTML(s)}
+  ${grantBlockHTML(s)}
   ${initiationBlockHTML(s)}
+
+  <div class="section-title">Working Documents</div>
+  <div class="card">
+    ${linkFieldRow("Working Abstract", "wd-abstract", s.workingAbstractLink)}
+    ${linkFieldRow("Working Manuscript", "wd-manuscript", s.workingManuscriptLink)}
+    ${linkFieldRow("Data Collection Spreadsheet", "wd-sheet", s.dataCollectionSheetLink)}
+    ${linkFieldRow("Data Collection Process &amp; Analysis Doc", "wd-process", s.dataProcessDocLink)}
+    ${linkFieldRow("Tracking Sheet (Enrolling Studies)", "wd-tracking", s.trackingSheetLink)}
+  </div>
 
   <div class="section-title">Milestones</div>
   <div class="card">
@@ -1246,6 +1305,25 @@ function renderStudyDetail() {
     </div>
     <input type="file" id="doc-file" style="display:none">
     ${sb ? "" : `<div style="font-size:12px;color:var(--text2);margin-top:8px">Without Team Sync, files stay on this device only (max 2.5 MB each).</div>`}
+  </div>
+
+  <div class="section-title">Revision Documents</div>
+  <div class="card">
+    ${revisionDocs.length ? revisionDocs.map(dc => `
+      <div class="milestone-row">
+        <div style="flex:1;cursor:pointer;min-width:0" data-doc="${dc.id}">
+          <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 ${esc(dc.name)}</div>
+          <div style="font-size:12px;color:var(--text2)">${dc.label ? esc(dc.label) + " · " : ""}${fmtDate(dc.date)}${dc.by ? " · " + esc(dc.by) : ""}${dc.size ? " · " + fmtSize(dc.size) : ""}</div>
+        </div>
+        <button data-doc-del="${dc.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
+      </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No revision comments uploaded yet.</div>`}
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <input id="revdoc-label" placeholder="e.g. Reviewer comments — round 1" style="flex:1;${inputStyle}">
+      <button id="revdoc-upload" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:15px;cursor:pointer">Upload</button>
+    </div>
+    <input type="file" id="revdoc-file" style="display:none">
+    ${linkFieldRow("Revised Manuscript", "wd-revised-ms", s.revisedManuscriptLink)}
+    ${linkFieldRow("Response to Reviewers", "wd-response", s.responseToReviewersLink)}
   </div>
 
   <div class="section-title">Abstract Submissions</div>
@@ -1402,6 +1480,41 @@ function renderStudyDetail() {
     upsertStudy(s);
     toast("Document deleted");
   });
+
+  // Revision documents (uploaded file tagged category:"revision", plus link fields)
+  document.getElementById("revdoc-upload").onclick = () => document.getElementById("revdoc-file").click();
+  document.getElementById("revdoc-file").onchange = (e) => {
+    const f = e.target.files[0]; if (!f) return;
+    const maxMB = sb ? 8 : 2.5;
+    if (f.size > maxMB * 1024 * 1024) { toast(`File too large (max ${maxMB} MB${sb ? "" : " until Team Sync is on"})`); return; }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const id = uid();
+      if (!sb) {
+        try { localStorage.setItem("rt-file-" + id, reader.result); }
+        catch (err) { toast("Device storage full — connect Team Sync for file space"); return; }
+      } else {
+        try { localStorage.setItem("rt-file-" + id, reader.result); } catch (err) {}
+        const { error } = await sb.from("items").upsert({ id, kind: "file", data: { name: f.name, content: reader.result }, updated_at: new Date().toISOString() });
+        if (error) { toast("Upload failed — check connection"); localStorage.removeItem("rt-file-" + id); return; }
+      }
+      const label = document.getElementById("revdoc-label").value.trim();
+      s.docs = s.docs || [];
+      s.docs.push({ id, name: f.name, label, by: me(), date: todayStr(), size: f.size, category: "revision" });
+      upsertStudy(s);
+      toast("Revision comments uploaded");
+    };
+    reader.readAsDataURL(f);
+  };
+  bindLinkFieldRow($main, "wd-revised-ms", s, "revisedManuscriptLink");
+  bindLinkFieldRow($main, "wd-response", s, "responseToReviewersLink");
+
+  // Working documents (link fields)
+  bindLinkFieldRow($main, "wd-abstract", s, "workingAbstractLink");
+  bindLinkFieldRow($main, "wd-manuscript", s, "workingManuscriptLink");
+  bindLinkFieldRow($main, "wd-sheet", s, "dataCollectionSheetLink");
+  bindLinkFieldRow($main, "wd-process", s, "dataProcessDocLink");
+  bindLinkFieldRow($main, "wd-tracking", s, "trackingSheetLink");
 
   // Abstracts
   document.getElementById("abs-add").onclick = () => {
@@ -1798,9 +1911,12 @@ function selectHTML(id, options, selected) {
 }
 
 function openStudyForm(existing) {
-  const s = existing || { id: uid(), title: "", nickname: "", pi: "", team: "", design: "Prospective (Consented)", phase: "Concept", priority: "Medium", irb: "", irbStatus: "Not Submitted", start: todayStr(), notes: "", journal: "", submittedDate: "", journalTrackingId: "", milestones: [] };
+  const s = existing || { id: uid(), title: "", nickname: "", pi: "", team: "", design: "Prospective (Consented)", phase: "Concept", priority: "Medium", irb: "", irbStatus: "Not Submitted", start: todayStr(), notes: "", journal: "", submittedDate: "", journalTrackingId: "", revisionsReceivedDate: "", revisionsDeadline: "", milestones: [] };
+  if (!s.grant) s.grant = { enabled: false, amount: "", source: "", awardDate: "", balance: "", expirationDate: "", balanceUpdatedDate: "" };
   editingRef = existing ? { kind: "study", id: s.id, baseline: remoteMeta[s.id] ? remoteMeta[s.id].updated_at : null } : null;
   const showJournal = SUBMITTED_PHASES.includes(s.phase);
+  const showRevisions = s.phase === "Revisions Required";
+  const g = s.grant;
   openSheet(existing ? "Edit Study" : "New Study", `
     <div class="fgroup">
       <div class="frow"><label>Title</label><input id="f-title" placeholder="IRB study name / title" value="${esc(s.title)}"></div>
@@ -1821,6 +1937,10 @@ function openStudyForm(existing) {
       <div style="font-size:12px;color:var(--orange);line-height:1.4;padding:4px 2px 0 2px">⚠︎ Reminder: once a manuscript is submitted, update this study's Title above to match the exact title used in the journal's submission system — the project tracker should mirror the submitted title, not just the IRB title.</div>
     </div>
     <datalist id="dl-journals">${JOURNALS.map(j => `<option value="${esc(j)}">`).join("")}</datalist>
+    <div class="fgroup" id="revisions-row" style="display:${showRevisions ? "flex" : "none"};flex-direction:column">
+      <div class="frow"><label>Revisions received</label><input id="f-revisions-received" type="date" value="${esc(s.revisionsReceivedDate || "")}"></div>
+      <div class="frow"><label>Revisions due</label><input id="f-revisions-deadline" type="date" value="${esc(s.revisionsDeadline || "")}"></div>
+    </div>
     <div class="fgroup">
       <div class="frow"><label>ORA / IRB #</label><input id="f-irb" placeholder="Protocol #, Exempt, or N/A" value="${esc(s.irb || "")}"></div>
       <div class="frow"><label>IRB status</label>${selectHTML("f-irbstatus", IRB_STATUSES, s.irbStatus || "Not Submitted")}</div>
@@ -1829,6 +1949,21 @@ function openStudyForm(existing) {
     <div class="fgroup">
       <div class="frow"><label>Enrolled</label><input id="f-enroll-cur" type="number" inputmode="numeric" min="0" placeholder="current # enrolled" value="${esc(s.enrollCurrent === 0 ? "0" : (s.enrollCurrent || ""))}"></div>
       <div class="frow"><label>Target</label><input id="f-enroll-tgt" type="number" inputmode="numeric" min="0" placeholder="enrollment goal" value="${esc(s.enrollTarget === 0 ? "0" : (s.enrollTarget || ""))}"></div>
+    </div>
+    <div class="fgroup">
+      <div class="frow" style="gap:10px">
+        <input type="checkbox" id="f-grant-enabled" ${g.enabled ? "checked" : ""} style="flex:0;width:20px;height:20px">
+        <label for="f-grant-enabled" style="flex:1">This study has grant / award funding</label>
+      </div>
+      <div id="grant-row" style="display:${g.enabled ? "flex" : "none"};flex-direction:column">
+        <div class="frow"><label>Amount awarded</label><input id="f-grant-amount" placeholder="e.g. $25,000" value="${esc(g.amount || "")}"></div>
+        <div class="frow"><label>Awarded by</label><input id="f-grant-source" list="dl-grant-sources" placeholder="e.g. OREF, AOSSM, NIH" value="${esc(g.source || "")}"></div>
+        <datalist id="dl-grant-sources">${GRANT_SOURCES.map(gs => `<option value="${esc(gs)}">`).join("")}</datalist>
+        <div class="frow"><label>Date of award</label><input id="f-grant-award-date" type="date" value="${esc(g.awardDate || "")}"></div>
+        <div class="frow"><label>Current balance</label><input id="f-grant-balance" placeholder="e.g. $18,200" value="${esc(g.balance || "")}"></div>
+        <div class="frow"><label>Expiration date (if applicable)</label><input id="f-grant-expiration" type="date" value="${esc(g.expirationDate || "")}"></div>
+        <div class="frow"><label>Balance last updated</label><input id="f-grant-balance-updated" type="date" value="${esc(g.balanceUpdatedDate || "")}"></div>
+      </div>
     </div>
     <div class="fgroup">
       <div class="frow"><textarea id="f-notes" placeholder="Notes…">${esc(s.notes || "")}</textarea></div>
@@ -1854,8 +1989,19 @@ function openStudyForm(existing) {
         journal: document.getElementById("f-journal").value.trim(),
         submittedDate: document.getElementById("f-submitted-date").value,
         journalTrackingId: document.getElementById("f-tracking-id").value.trim(),
+        revisionsReceivedDate: document.getElementById("f-revisions-received").value,
+        revisionsDeadline: document.getElementById("f-revisions-deadline").value,
         enrollCurrent: document.getElementById("f-enroll-cur").value.trim(),
-        enrollTarget: document.getElementById("f-enroll-tgt").value.trim()
+        enrollTarget: document.getElementById("f-enroll-tgt").value.trim(),
+        grant: {
+          enabled: document.getElementById("f-grant-enabled").checked,
+          amount: document.getElementById("f-grant-amount").value.trim(),
+          source: document.getElementById("f-grant-source").value.trim(),
+          awardDate: document.getElementById("f-grant-award-date").value,
+          balance: document.getElementById("f-grant-balance").value.trim(),
+          expirationDate: document.getElementById("f-grant-expiration").value,
+          balanceUpdatedDate: document.getElementById("f-grant-balance-updated").value
+        }
       });
       delete s.type;
       upsertStudy(s);
@@ -1868,13 +2014,17 @@ function openStudyForm(existing) {
     const current = phaseSel.value;
     phaseSel.innerHTML = phases.map(p => `<option ${p === current ? "selected" : ""}>${esc(p)}</option>`).join("");
     if (!phases.includes(current)) phaseSel.value = phases[0];
-    toggleJournalRow();
+    togglePhaseRows();
   };
-  const toggleJournalRow = () => {
-    document.getElementById("journal-row").style.display =
-      SUBMITTED_PHASES.includes(document.getElementById("f-phase").value) ? "flex" : "none";
+  const togglePhaseRows = () => {
+    const phase = document.getElementById("f-phase").value;
+    document.getElementById("journal-row").style.display = SUBMITTED_PHASES.includes(phase) ? "flex" : "none";
+    document.getElementById("revisions-row").style.display = phase === "Revisions Required" ? "flex" : "none";
   };
-  document.getElementById("f-phase").onchange = toggleJournalRow;
+  document.getElementById("f-phase").onchange = togglePhaseRows;
+  document.getElementById("f-grant-enabled").onchange = (e) => {
+    document.getElementById("grant-row").style.display = e.target.checked ? "flex" : "none";
+  };
 }
 
 function openTaskForm(existing, presetStudyId) {
