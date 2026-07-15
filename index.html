@@ -723,14 +723,42 @@ function upsertMeeting(m) {
 }
 function removeMeeting(id) {
   state.meetings = state.meetings.filter(m => m.id !== id);
-  saveLocal(); deleteRemote(id); render();
+  // Clean up any submission tasks that were auto-created for this deadline.
+  const orphaned = state.tasks.filter(t => t.linkedMeetingId === id).map(t => t.id);
+  state.tasks = state.tasks.filter(t => t.linkedMeetingId !== id);
+  saveLocal(); deleteRemote(id); orphaned.forEach(deleteRemote); render();
+}
+// Tagging a study to an abstract/grant deadline (from either side) keeps a linked
+// "submission" task in sync — creating one when linked, removing it when unlinked.
+function submissionTaskTitle(m) {
+  return ((m.type || "abstract") === "grant" ? "Submit grant application: " : "Submit abstract: ") + m.name;
+}
+function linkedSubmissionTask(meetingId, studyId) {
+  return state.tasks.find(t => t.linkedMeetingId === meetingId && t.studyId === studyId);
+}
+function syncSubmissionTask(m, studyId, linked) {
+  const existing = linkedSubmissionTask(m.id, studyId);
+  if (linked) {
+    if (existing) return;
+    const t = {
+      id: uid(), title: submissionTaskTitle(m), studyId, due: m.deadline || "",
+      assignee: "", notes: `Auto-linked to ${m.society} — ${m.name}.`, done: false, linkedMeetingId: m.id
+    };
+    state.tasks.push(t);
+    pushItem("task", t);
+  } else if (existing) {
+    state.tasks = state.tasks.filter(t => t.id !== existing.id);
+    deleteRemote(existing.id);
+  }
 }
 function toggleStudyLink(meetingId, studyId) {
   const m = state.meetings.find(x => x.id === meetingId);
   if (!m) return;
   m.studyIds = m.studyIds || [];
   const i = m.studyIds.indexOf(studyId);
-  if (i >= 0) m.studyIds.splice(i, 1); else m.studyIds.push(studyId);
+  const linking = i < 0;
+  if (linking) m.studyIds.push(studyId); else m.studyIds.splice(i, 1);
+  syncSubmissionTask(m, studyId, linking);
   saveLocal(); pushItem("meeting", m); render();
 }
 function meetingsForStudy(studyId) {
@@ -1034,6 +1062,11 @@ function openLinkSheet(meetingId) {
       </div>`).join("") + `</div>`;
   openSheet("Link Projects", body, () => {
     const checked = [...document.querySelectorAll(".link-study")].filter(c => c.checked).map(c => c.dataset.sid);
+    const before = new Set(m.studyIds), after = new Set(checked);
+    state.studies.forEach(s => {
+      const wasLinked = before.has(s.id), nowLinked = after.has(s.id);
+      if (wasLinked !== nowLinked) syncSubmissionTask(m, s.id, nowLinked);
+    });
     m.studyIds = checked;
     saveLocal(); pushItem("meeting", m); render();
     toast("Projects linked");
@@ -1061,8 +1094,8 @@ function openStudyLinkSheet(studyId) {
     list.forEach(m => {
       m.studyIds = m.studyIds || [];
       const has = m.studyIds.includes(studyId);
-      if (checkedIds.has(m.id) && !has) { m.studyIds.push(studyId); changed.push(m); }
-      else if (!checkedIds.has(m.id) && has) { m.studyIds = m.studyIds.filter(x => x !== studyId); changed.push(m); }
+      if (checkedIds.has(m.id) && !has) { m.studyIds.push(studyId); syncSubmissionTask(m, studyId, true); changed.push(m); }
+      else if (!checkedIds.has(m.id) && has) { m.studyIds = m.studyIds.filter(x => x !== studyId); syncSubmissionTask(m, studyId, false); changed.push(m); }
     });
     saveLocal(); changed.forEach(m => pushItem("meeting", m)); render();
     toast("Deadlines linked");
@@ -1415,6 +1448,7 @@ function renderStudyDetail() {
     const m = { id: uid(), society: "Custom", type: document.getElementById("custom-dl-type").value, name,
       deadline: document.getElementById("custom-dl-date").value, dates: "", location: "", link: "",
       aim: "", criteria: "", funded: [], studyIds: [s.id], unconfirmed: false, verifiedOn: "" };
+    syncSubmissionTask(m, s.id, true);
     upsertMeeting(m); toast("Custom deadline added");
   };
   $main.querySelectorAll("[data-open-meeting]").forEach(el => el.onclick = (e) => {
@@ -1543,10 +1577,12 @@ function renderStudyDetail() {
 
 function taskRowHTML(t) {
   const s = t.studyId ? studyById(t.studyId) : null;
+  const linkedMeeting = t.linkedMeetingId ? state.meetings.find(m => m.id === t.linkedMeetingId) : null;
   const meta = [];
   if (t.due) meta.push(`<span class="${t.done ? "" : dueClass(t.due)}">${dueLabel(t.due)}</span>`);
   if (t.assignee) meta.push(esc(t.assignee));
   if (s && tab !== "studies") meta.push(`<span data-goto-study="${s.id}" style="text-decoration:underline;text-underline-offset:2px;cursor:pointer">${esc(s.title)} ›</span>`);
+  if (linkedMeeting) meta.push(`<span data-goto-meeting="${linkedMeeting.id}" style="text-decoration:underline;text-underline-offset:2px;cursor:pointer">${(linkedMeeting.type || "abstract") === "grant" ? "Grant" : "Abstract"} deadline ›</span>`);
   return `
   <div class="task-row">
     <button class="task-check ${t.done ? "done" : ""}" data-toggle="${t.id}" aria-label="toggle"></button>
@@ -1566,6 +1602,11 @@ function bindTaskRows(root) {
   root.querySelectorAll("[data-goto-study]").forEach(el => el.onclick = (e) => {
     e.stopPropagation();
     detailStudyId = el.dataset.gotoStudy; tab = "studies"; render();
+  });
+  root.querySelectorAll("[data-goto-meeting]").forEach(el => el.onclick = (e) => {
+    e.stopPropagation();
+    const m = state.meetings.find(x => x.id === el.dataset.gotoMeeting);
+    if (m) openMeetingForm(m);
   });
   root.querySelectorAll("[data-task]").forEach(el => el.onclick = () => {
     const t = state.tasks.find(x => x.id === el.dataset.task);
@@ -2048,6 +2089,7 @@ function openTaskForm(existing, presetStudyId) {
       <div class="frow"><textarea id="f-tnotes" placeholder="Notes…">${esc(t.notes || "")}</textarea></div>
     </div>
     ${existing && t.studyId && studyById(t.studyId) ? `<button type="button" class="btn secondary" id="f-tgoto-study">Open Study: ${esc(studyById(t.studyId).nickname || studyById(t.studyId).title)} ›</button>` : ""}
+    ${existing && t.linkedMeetingId && state.meetings.find(x => x.id === t.linkedMeetingId) ? `<button type="button" class="btn secondary" id="f-tgoto-meeting">View Deadline: ${esc(state.meetings.find(x => x.id === t.linkedMeetingId).name)} ›</button>` : ""}
     ${existing ? `<button class="btn danger" id="f-tdel">Delete Task</button>` : ""}`,
     () => {
       const title = document.getElementById("f-ttitle").value.trim();
@@ -2069,6 +2111,11 @@ function openTaskForm(existing, presetStudyId) {
   if (del) del.onclick = () => { removeTask(t.id); closeSheet(); toast("Task deleted"); };
   const gotoStudy = document.getElementById("f-tgoto-study");
   if (gotoStudy) gotoStudy.onclick = () => { detailStudyId = t.studyId; tab = "studies"; closeSheet(); render(); };
+  const gotoMeeting = document.getElementById("f-tgoto-meeting");
+  if (gotoMeeting) gotoMeeting.onclick = () => {
+    const m = state.meetings.find(x => x.id === t.linkedMeetingId);
+    if (m) openMeetingForm(m);
+  };
 }
 
 function openMeetingForm(existing) {
