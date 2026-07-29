@@ -410,6 +410,13 @@ const SUBMITTED_PHASES = ["Submitted", "Revisions Required", "Published"];
 const GRANT_SOURCES = ["OREF", "AOSSM", "AANA", "AAOS", "NIH", "Industry", "Institutional"];
 const ABS_STATUSES = ["Planned", "Submitted", "Accepted", "Rejected", "Presented"];
 const ABS_COLORS = { Planned: "var(--text2)", Submitted: "var(--orange)", Accepted: "var(--green)", Rejected: "var(--red)", Presented: "var(--indigo)" };
+// Per-study metadata for a LINKED abstract deadline (the deadline-board entries tagged to a
+// study, distinct from the free-text abstracts list above): what format was submitted, whether
+// it was accepted/rejected, and — once accepted — which presentation format was granted.
+const ABS_SUBMIT_FORMATS = ["Poster", "Podium"];
+const ABS_LINK_STATUSES = ["Submitted", "Rejected", "Accepted"];
+const ABS_LINK_STATUS_COLORS = { Submitted: "var(--orange)", Rejected: "var(--red)", Accepted: "var(--green)" };
+const ABS_ACCEPTED_FORMATS = ["E-Poster", "Poster", "Podium"];
 const ROSTER_ID = "00000000-0000-0000-0000-000000000001";
 const me = () => localStorage.getItem("rt-me") || "";
 
@@ -524,6 +531,7 @@ function migrate() {
     if (s.enrollTarget == null) s.enrollTarget = "";
     if (s.enrollCurrent == null) s.enrollCurrent = "";
     if (s.nickname == null) s.nickname = "";
+    if (!s.abstractDeadlineInfo) s.abstractDeadlineInfo = {};
     // Infer an initial IRB status from existing data the first time only.
     if (s.irbStatus === undefined) {
       const irb = (s.irb || "").toLowerCase();
@@ -1320,7 +1328,45 @@ function bindCollapsibleSections(root) {
   });
 }
 
-// One row for a linked grant or abstract deadline, used on a study's detail page.
+// Per-study submission tracking for a linked abstract deadline: what format was submitted
+// (poster/podium), the review status, and — once accepted — which format was granted.
+function abstractLinkInfo(s, meetingId) {
+  return (s.abstractDeadlineInfo && s.abstractDeadlineInfo[meetingId]) || { format: "", status: "Submitted", acceptedFormat: "" };
+}
+function setAbstractLinkField(s, meetingId, field, value) {
+  s.abstractDeadlineInfo = s.abstractDeadlineInfo || {};
+  s.abstractDeadlineInfo[meetingId] = Object.assign({ format: "", status: "Submitted", acceptedFormat: "" }, s.abstractDeadlineInfo[meetingId], { [field]: value });
+  upsertStudy(s);
+}
+// Row for a linked abstract deadline on a study's detail page — adds the poster/podium
+// question, a submitted/rejected/accepted status badge, and (once accepted) the granted format.
+function abstractDeadlineRowHTML(m, s) {
+  const info = abstractLinkInfo(s, m.id);
+  const dl = m.deadline ? daysUntil(m.deadline) : null;
+  const col = dl == null ? "var(--text2)" : dl < 0 ? "var(--text2)" : dl <= 7 ? "var(--red)" : dl <= 30 ? "var(--orange)" : "var(--green)";
+  return `<div class="task-row" style="padding:8px 0;align-items:flex-start" data-open-meeting="${m.id}">
+    <div style="min-width:50px;text-align:center"><div style="font-size:18px;font-weight:800;color:${col}">${m.deadline && dl >= 0 ? dl : "—"}</div><div style="font-size:9px;color:var(--text2);font-weight:700">${m.deadline && dl >= 0 ? "DAYS" : ""}</div></div>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:14px;font-weight:600"><span class="badge" style="background:var(--indigo);font-size:9.5px;padding:2px 6px;margin-right:5px">${esc(m.society)}</span>${esc(m.name)}</div>
+      <div style="font-size:12px;color:var(--text2)">${m.deadline ? "Abstract due " + fmtDate(m.deadline) : ""}</div>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center">
+        <select data-abs-format="${m.id}" style="border:none;background:var(--bg);border-radius:8px;padding:7px 10px;font-size:13px;font-family:inherit;color:var(--text);outline:none">
+          <option value="" ${!info.format ? "selected" : ""}>Poster or podium?</option>
+          ${ABS_SUBMIT_FORMATS.map(f => `<option value="${f}" ${info.format === f ? "selected" : ""}>${f}</option>`).join("")}
+        </select>
+        <button class="badge" data-abs-link-status="${m.id}" style="background:${ABS_LINK_STATUS_COLORS[info.status] || "var(--text2)"};border:none;cursor:pointer;font-family:inherit" title="Tap to change status">${esc(info.status)}</button>
+        ${info.status === "Accepted" ? `
+        <select data-abs-accepted-format="${m.id}" style="border:none;background:var(--bg);border-radius:8px;padding:7px 10px;font-size:13px;font-family:inherit;color:var(--text);outline:none">
+          <option value="" ${!info.acceptedFormat ? "selected" : ""}>Accepted as…</option>
+          ${ABS_ACCEPTED_FORMATS.map(f => `<option value="${f}" ${info.acceptedFormat === f ? "selected" : ""}>${f}</option>`).join("")}
+        </select>` : ""}
+      </div>
+    </div>
+    <button data-unlink-meeting="${m.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
+  </div>`;
+}
+
+// One row for a linked grant deadline, used on a study's detail page.
 function meetingRowHTML(m) {
   const dl = m.deadline ? daysUntil(m.deadline) : null;
   const col = dl == null ? "var(--text2)" : dl < 0 ? "var(--text2)" : dl <= 7 ? "var(--red)" : dl <= 30 ? "var(--orange)" : "var(--green)";
@@ -1518,7 +1564,7 @@ function renderStudyDetail() {
     </div>
 
     <div class="dl-sub" style="margin-top:16px">Abstract Deadlines</div>
-    ${linkedAbstractMeetings.length ? linkedAbstractMeetings.map(meetingRowHTML).join("") : `<div style="color:var(--text2);font-size:14px">No linked abstract deadlines.</div>`}
+    ${linkedAbstractMeetings.length ? linkedAbstractMeetings.map(m => abstractDeadlineRowHTML(m, s)).join("") : `<div style="color:var(--text2);font-size:14px">No linked abstract deadlines.</div>`}
     <div style="margin-top:8px">
       <select id="link-existing-dl-abs" style="width:100%;-webkit-appearance:none;appearance:none;background:var(--bg);border:none;border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
         <option value="">＋ Link an existing abstract deadline…</option>
@@ -1608,11 +1654,27 @@ function renderStudyDetail() {
     upsertMeeting(m); toast("Custom grant deadline added");
   };
   $main.querySelectorAll("[data-open-meeting]").forEach(el => el.onclick = (e) => {
-    if (e.target.closest("[data-unlink-meeting]")) return;
+    if (e.target.closest("[data-unlink-meeting], [data-abs-format], [data-abs-link-status], [data-abs-accepted-format]")) return;
     const m = state.meetings.find(x => x.id === el.dataset.openMeeting); if (m) openMeetingForm(m);
   });
   $main.querySelectorAll("[data-unlink-meeting]").forEach(b => b.onclick = (e) => {
     e.stopPropagation(); toggleStudyLink(b.dataset.unlinkMeeting, s.id); toast("Unlinked");
+  });
+  // Linked abstract deadlines: poster/podium format, submission status, and (once accepted) the granted format
+  $main.querySelectorAll("[data-abs-format]").forEach(el => el.onchange = (e) => {
+    e.stopPropagation();
+    setAbstractLinkField(s, el.dataset.absFormat, "format", e.target.value);
+  });
+  $main.querySelectorAll("[data-abs-link-status]").forEach(b => b.onclick = (e) => {
+    e.stopPropagation();
+    const meetingId = b.dataset.absLinkStatus;
+    const current = abstractLinkInfo(s, meetingId).status;
+    const next = ABS_LINK_STATUSES[(ABS_LINK_STATUSES.indexOf(current) + 1) % ABS_LINK_STATUSES.length];
+    setAbstractLinkField(s, meetingId, "status", next);
+  });
+  $main.querySelectorAll("[data-abs-accepted-format]").forEach(el => el.onchange = (e) => {
+    e.stopPropagation();
+    setAbstractLinkField(s, el.dataset.absAcceptedFormat, "acceptedFormat", e.target.value);
   });
   document.getElementById("ms-add").onclick = () => {
     const name = document.getElementById("ms-name").value.trim();
