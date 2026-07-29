@@ -350,6 +350,7 @@
     <button data-tab="studies"><span class="icon">⚗</span>Studies</button>
     <button data-tab="tasks"><span class="icon">☑</span>Tasks</button>
     <button data-tab="worklist"><span class="icon">▦</span>Worklist</button>
+    <button data-tab="notes"><span class="icon">🗒</span>Notes</button>
     <button data-tab="settings"><span class="icon">⚙</span>Settings</button>
   </nav>
 </div>
@@ -432,7 +433,7 @@ function setSub(soc, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], meetings: [] };
+let state = { studies: [], tasks: [], roster: [], meetings: [], teamNotes: [] };
 let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
@@ -447,7 +448,7 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
 function loadLocal() {
   try {
     const raw = localStorage.getItem("rt-data");
-    if (raw) state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [] }, JSON.parse(raw));
+    if (raw) state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], teamNotes: [] }, JSON.parse(raw));
     migrate();
   } catch (e) { console.warn("load failed", e); }
 }
@@ -464,6 +465,8 @@ function migrate() {
     if (!phasesFor(s).includes(s.phase)) s.phase = phasesFor(s)[0];
     s.docs = s.docs || [];
     s.abstracts = s.abstracts || [];
+    s.meetingNotes = s.meetingNotes || [];
+    if (s.projectOverviewLink == null) s.projectOverviewLink = "";
     if (s.journal == null) s.journal = "";
     if (s.submittedDate == null) s.submittedDate = "";
     if (s.journalTrackingId == null) s.journalTrackingId = "";
@@ -490,6 +493,7 @@ function migrate() {
     }
     if (!s.initiation) s.initiation = { sportsSubmission: false, irbApproved: false, caApproved: false, piqBuilt: false, ready: false };
   });
+  if (!Array.isArray(state.teamNotes)) state.teamNotes = [];
   if (!Array.isArray(state.meetings)) state.meetings = [];
   state.meetings.forEach(m => {
     if (!m.type) m.type = "abstract";
@@ -559,6 +563,7 @@ async function pullAll() {
     state.studies = data.filter(r => r.kind === "study").map(r => r.data);
     state.tasks = data.filter(r => r.kind === "task").map(r => r.data);
     state.meetings = data.filter(r => r.kind === "meeting").map(r => r.data);
+    state.teamNotes = data.filter(r => r.kind === "teamNote").map(r => r.data);
     const meta = data.find(r => r.kind === "meta");
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
     data.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; });
@@ -630,7 +635,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
     if (Array.isArray(data.names)) { state.roster = data.names; saveLocal(); render(); }
     return;
   }
-  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : null;
+  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : null;
   if (!arr) return;
   const i = arr.findIndex(x => x.id === id);
   if (i >= 0) arr[i] = data; else arr.push(data);
@@ -643,7 +648,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
 function applyRealtimeDelete(id) {
   if (!id) return;
   let hitOpenRecord = false;
-  ["studies", "tasks", "meetings"].forEach(key => {
+  ["studies", "tasks", "meetings", "teamNotes"].forEach(key => {
     const before = state[key].length;
     state[key] = state[key].filter(x => x.id !== id);
     if (state[key].length !== before && editingRef && editingRef.id === id) hitOpenRecord = true;
@@ -679,6 +684,7 @@ async function pushAllLocal() {
     ...state.studies.map(s => ({ id: s.id, kind: "study", data: s, updated_at: now() })),
     ...state.tasks.map(t => ({ id: t.id, kind: "task", data: t, updated_at: now() })),
     ...state.meetings.map(m => ({ id: m.id, kind: "meeting", data: m, updated_at: now() })),
+    ...state.teamNotes.map(n => ({ id: n.id, kind: "teamNote", data: n, updated_at: now() })),
     { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster }, updated_at: now() }
   ];
   await sb.from("items").upsert(rows);
@@ -727,6 +733,17 @@ function removeMeeting(id) {
   const orphaned = state.tasks.filter(t => t.linkedMeetingId === id).map(t => t.id);
   state.tasks = state.tasks.filter(t => t.linkedMeetingId !== id);
   saveLocal(); deleteRemote(id); orphaned.forEach(deleteRemote); render();
+}
+// Global weekly "all studies" meeting notes log — not tied to any one study.
+function upsertTeamNote(n) {
+  state.teamNotes = state.teamNotes || [];
+  const i = state.teamNotes.findIndex(x => x.id === n.id);
+  if (i >= 0) state.teamNotes[i] = n; else state.teamNotes.push(n);
+  saveLocal(); pushItem("teamNote", n); render();
+}
+function removeTeamNote(id) {
+  state.teamNotes = (state.teamNotes || []).filter(n => n.id !== id);
+  saveLocal(); deleteRemote(id); render();
 }
 // Tagging a study to an abstract/grant deadline (from either side) keeps a linked
 // "submission" task in sync — creating one when linked, removing it when unlinked.
@@ -866,11 +883,12 @@ const $sidebarResizer = document.getElementById("sidebar-resizer");
 function render() {
   document.querySelectorAll("nav.tabbar button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
   const addBtn = document.getElementById("add-btn");
-  addBtn.style.visibility = (tab === "settings") ? "hidden" : "visible";
+  addBtn.style.visibility = (tab === "settings" || tab === "notes") ? "hidden" : "visible";
   if (tab === "dashboard") renderDashboard();
   else if (tab === "studies") detailStudyId ? renderStudyDetail() : renderStudies();
   else if (tab === "tasks") renderTasks();
   else if (tab === "worklist") renderWorkingList();
+  else if (tab === "notes") renderTeamNotes();
   else renderSettings();
   renderSidebar(); // desktop-only collapsible dashboard panel, kept in sync with every render
 }
@@ -1259,6 +1277,7 @@ function renderStudyDetail() {
   const docs = (s.docs || []).filter(dc => dc.category !== "revision").slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const revisionDocs = (s.docs || []).filter(dc => dc.category === "revision").slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const abstracts = (s.abstracts || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const meetingNotes = (s.meetingNotes || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const linkedMeetings = meetingsForStudy(s.id).sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
   const inputStyle = "border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none";
 
@@ -1298,10 +1317,32 @@ function renderStudyDetail() {
   <div class="section-title">Working Documents</div>
   <div class="card">
     ${linkFieldRow("Working Abstract", "wd-abstract", s.workingAbstractLink)}
+    ${linkFieldRow("Project Overview", "wd-overview", s.projectOverviewLink)}
     ${linkFieldRow("Working Manuscript", "wd-manuscript", s.workingManuscriptLink)}
     ${linkFieldRow("Data Collection Spreadsheet", "wd-sheet", s.dataCollectionSheetLink)}
     ${linkFieldRow("Data Collection Process & Analysis Doc", "wd-process", s.dataProcessDocLink)}
     ${linkFieldRow("Tracking Sheet (Enrolling Studies)", "wd-tracking", s.trackingSheetLink)}
+  </div>
+
+  <div class="section-title">Meeting Notes</div>
+  <div class="card">
+    ${meetingNotes.length ? meetingNotes.map(n => `
+      <div class="milestone-row">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14.5px;font-weight:600">${esc(n.label || "Meeting Notes")}</div>
+          ${n.date ? `<div style="font-size:12px;color:var(--text2)">${fmtDate(n.date)}</div>` : ""}
+        </div>
+        ${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:8px 4px">Open ↗</a>` : ""}
+        <button data-mnote-del="${n.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
+      </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No meeting notes linked yet. Add one every time this study comes up in a meeting.</div>`}
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <input id="mnote-label" placeholder="e.g. Weekly Research Meeting 7/29" style="flex:1;min-width:150px;${inputStyle}">
+      <input id="mnote-date" type="date" style="${inputStyle};padding:9px 10px;font-size:14px;max-width:135px">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <input id="mnote-link" placeholder="Paste link to the notes…" style="flex:1;${inputStyle}">
+      <button id="mnote-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:15px;cursor:pointer">Add</button>
+    </div>
   </div>
 
   <div class="section-title">Milestones</div>
@@ -1545,10 +1586,30 @@ function renderStudyDetail() {
 
   // Working documents (link fields)
   bindLinkFieldRow($main, "wd-abstract", s, "workingAbstractLink");
+  bindLinkFieldRow($main, "wd-overview", s, "projectOverviewLink");
   bindLinkFieldRow($main, "wd-manuscript", s, "workingManuscriptLink");
   bindLinkFieldRow($main, "wd-sheet", s, "dataCollectionSheetLink");
   bindLinkFieldRow($main, "wd-process", s, "dataProcessDocLink");
   bindLinkFieldRow($main, "wd-tracking", s, "trackingSheetLink");
+
+  // Meeting notes (repeatable list, linked to this study)
+  document.getElementById("mnote-add").onclick = () => {
+    const label = document.getElementById("mnote-label").value.trim();
+    const link = document.getElementById("mnote-link").value.trim();
+    const date = document.getElementById("mnote-date").value;
+    if (!link) { toast("Paste a link to the notes"); return; }
+    s.meetingNotes = s.meetingNotes || [];
+    s.meetingNotes.push({ id: uid(), label, link, date });
+    upsertStudy(s);
+    toast("Meeting notes added");
+  };
+  $main.querySelectorAll("[data-mnote-del]").forEach(b => b.onclick = () => {
+    const n = (s.meetingNotes || []).find(x => x.id === b.dataset.mnoteDel);
+    if (!n) return;
+    s.meetingNotes = s.meetingNotes.filter(x => x.id !== n.id);
+    upsertStudy(s);
+    toast("Removed");
+  });
 
   // Abstracts
   document.getElementById("abs-add").onclick = () => {
@@ -1743,6 +1804,49 @@ function renderWorkingList() {
   });
 }
 
+/* ============ Meeting Notes (weekly, all-studies) ============ */
+function renderTeamNotes() {
+  $title.textContent = "Meeting Notes";
+  const notes = (state.teamNotes || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const inputStyle = "border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none";
+  let html = `<div style="font-size:13px;color:var(--text2);line-height:1.5;margin:0 4px 14px 4px">Drop a link here each week after your team goes through every study on the tracker.</div>`;
+  html += `<div class="card">`;
+  html += notes.length ? notes.map(n => `
+      <div class="milestone-row">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14.5px;font-weight:600">${esc(n.label || "Meeting Notes")}</div>
+          ${n.date ? `<div style="font-size:12px;color:var(--text2)">${fmtDate(n.date)}</div>` : ""}
+        </div>
+        ${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:8px 4px">Open ↗</a>` : ""}
+        <button data-note-del="${n.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
+      </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No meeting notes logged yet.</div>`;
+  html += `
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <input id="note-label" placeholder="e.g. Weekly Research Meeting" style="flex:1;min-width:150px;${inputStyle}">
+      <input id="note-date" type="date" value="${esc(todayStr())}" style="${inputStyle};padding:9px 10px;font-size:14px;max-width:135px">
+    </div>
+    <div style="margin-top:8px">
+      <input id="note-link" placeholder="Paste link to the meeting notes…" style="width:100%;box-sizing:border-box;${inputStyle}">
+    </div>
+    <button id="note-add" class="btn" style="margin-top:10px;width:100%">Add Meeting Notes</button>
+  </div>`;
+  $main.innerHTML = html;
+  document.getElementById("note-add").onclick = () => {
+    const label = document.getElementById("note-label").value.trim();
+    const link = document.getElementById("note-link").value.trim();
+    const date = document.getElementById("note-date").value;
+    if (!link) { toast("Paste a link to the notes"); return; }
+    upsertTeamNote({ id: uid(), label, link, date });
+    toast("Meeting notes added");
+  };
+  $main.querySelectorAll("[data-note-del]").forEach(b => b.onclick = () => {
+    const n = notes.find(x => x.id === b.dataset.noteDel);
+    if (!n || !confirm(`Remove "${n.label || "these meeting notes"}"?`)) return;
+    removeTeamNote(n.id);
+    toast("Removed");
+  });
+}
+
 /* ============ Settings ============ */
 function renderSettings() {
   $title.textContent = "Settings";
@@ -1900,7 +2004,7 @@ function renderSettings() {
             }
           });
         } else {
-          state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [] }, data);
+          state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], teamNotes: [] }, data);
         }
         migrate(); saveLocal();
         Object.entries(files).forEach(([id, c]) => { try { localStorage.setItem("rt-file-" + id, c); } catch (e2) {} });
