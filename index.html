@@ -977,7 +977,15 @@ function deadlineItemHTML(m, dueWord, metaWord, stage) {
   }
   panel += `<div class="dl-sub">Linked Projects</div>`;
   panel += linked.length
-    ? `<div>${linked.map(s => `<span class="link-chip" data-open-study="${s.id}">${esc(s.title)}</span>`).join("")}</div>`
+    ? `<div>${linked.map(s => {
+        // For abstract deadlines, surface each project's submission status right next to it —
+        // "Not Submitted" (gray) doubles as the quick reminder of what still needs to go out.
+        const statusBadge = isGrant ? "" : (() => {
+          const info = abstractLinkInfo(s, m.id);
+          return `<span class="badge" style="background:${ABS_LINK_STATUS_COLORS[info.status] || "var(--text2)"};font-size:9px;padding:2px 6px;margin:3px 4px 0 0">${esc(info.status)}</span>`;
+        })();
+        return `${statusBadge}<span class="link-chip" data-open-study="${s.id}">${esc(s.title)}</span>`;
+      }).join("")}</div>`
     : `<div style="color:var(--text2)">None yet.</div>`;
   panel += `<div><button class="mini-btn" data-link-meeting="${m.id}">＋ Link a project</button>`;
   panel += m.link ? `<a class="mini-btn" href="${esc(m.link)}" target="_blank" rel="noopener" style="text-decoration:none">Open page ↗</a>` : "";
@@ -1037,10 +1045,6 @@ function dashboardHTML() {
       <div class="stat"><div class="num" style="color:${overdue.length ? "var(--red)" : "var(--green)"}">${overdue.length}</div><div class="lbl">Overdue</div></div>
       <div class="stat"><div class="num">${state.studies.filter(s => s.phase === "Published").length}</div><div class="lbl">Published</div></div>
     </div>`;
-
-  // Quick reminder: linked abstract deadlines still sitting at "Not Submitted" — surfaced up
-  // top so it's the first thing seen (and, on desktop, always visible in the sidebar).
-  html += needsAbstractSubmissionHTML();
 
   // Deadline boards (abstracts + grants), filtered by personal society subscriptions
   const sub = subs();
@@ -1341,29 +1345,6 @@ function setAbstractLinkField(s, meetingId, field, value) {
   s.abstractDeadlineInfo = s.abstractDeadlineInfo || {};
   s.abstractDeadlineInfo[meetingId] = Object.assign({ format: "", status: "Not Submitted", acceptedFormat: "" }, s.abstractDeadlineInfo[meetingId], { [field]: value });
   upsertStudy(s);
-}
-// Dashboard/sidebar quick-reminder card: every linked abstract deadline still sitting at
-// "Not Submitted", across all studies, so it's obvious at a glance what still needs to go out.
-function needsAbstractSubmissionHTML() {
-  const rows = [];
-  state.studies.forEach(s => {
-    meetingsForStudy(s.id).filter(m => (m.type || "abstract") !== "grant").forEach(m => {
-      if (abstractLinkInfo(s, m.id).status === "Not Submitted") rows.push({ s, m });
-    });
-  });
-  if (!rows.length) return "";
-  rows.sort((a, b) => (a.m.deadline || "9999").localeCompare(b.m.deadline || "9999"));
-  return `<div class="section-title">Needs Abstract Submission</div>
-  <div class="card" style="padding:6px 0">
-    ${rows.map(({ s, m }) => `
-    <div class="task-row" style="padding:8px 16px;cursor:pointer" data-open-study="${s.id}">
-      <span class="badge" style="background:${ABS_LINK_STATUS_COLORS["Not Submitted"]};font-size:10px;padding:3px 8px;flex:none">Not Submitted</span>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.title)}</div>
-        <div style="font-size:12px;color:var(--text2)">${esc(m.society)} — ${esc(m.name)}${m.deadline ? " · due " + fmtDate(m.deadline) : ""}</div>
-      </div>
-    </div>`).join("")}
-  </div>`;
 }
 // Row for a linked abstract deadline on a study's detail page — adds the poster/podium
 // question, a submitted/rejected/accepted status badge, and (once accepted) the granted format.
