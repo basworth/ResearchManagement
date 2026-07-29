@@ -414,8 +414,8 @@ const ABS_COLORS = { Planned: "var(--text2)", Submitted: "var(--orange)", Accept
 // study, distinct from the free-text abstracts list above): what format was submitted, whether
 // it was accepted/rejected, and — once accepted — which presentation format was granted.
 const ABS_SUBMIT_FORMATS = ["Poster", "Podium"];
-const ABS_LINK_STATUSES = ["Submitted", "Rejected", "Accepted"];
-const ABS_LINK_STATUS_COLORS = { Submitted: "var(--orange)", Rejected: "var(--red)", Accepted: "var(--green)" };
+const ABS_LINK_STATUSES = ["Not Submitted", "Submitted", "Accepted", "Rejected"];
+const ABS_LINK_STATUS_COLORS = { "Not Submitted": "var(--text2)", Submitted: "var(--orange)", Accepted: "var(--green)", Rejected: "var(--red)" };
 const ABS_ACCEPTED_FORMATS = ["E-Poster", "Poster", "Podium"];
 const ROSTER_ID = "00000000-0000-0000-0000-000000000001";
 const me = () => localStorage.getItem("rt-me") || "";
@@ -1038,6 +1038,10 @@ function dashboardHTML() {
       <div class="stat"><div class="num">${state.studies.filter(s => s.phase === "Published").length}</div><div class="lbl">Published</div></div>
     </div>`;
 
+  // Quick reminder: linked abstract deadlines still sitting at "Not Submitted" — surfaced up
+  // top so it's the first thing seen (and, on desktop, always visible in the sidebar).
+  html += needsAbstractSubmissionHTML();
+
   // Deadline boards (abstracts + grants), filtered by personal society subscriptions
   const sub = subs();
   const boardRows = (type, dueWord, metaWord) => {
@@ -1331,12 +1335,35 @@ function bindCollapsibleSections(root) {
 // Per-study submission tracking for a linked abstract deadline: what format was submitted
 // (poster/podium), the review status, and — once accepted — which format was granted.
 function abstractLinkInfo(s, meetingId) {
-  return (s.abstractDeadlineInfo && s.abstractDeadlineInfo[meetingId]) || { format: "", status: "Submitted", acceptedFormat: "" };
+  return (s.abstractDeadlineInfo && s.abstractDeadlineInfo[meetingId]) || { format: "", status: "Not Submitted", acceptedFormat: "" };
 }
 function setAbstractLinkField(s, meetingId, field, value) {
   s.abstractDeadlineInfo = s.abstractDeadlineInfo || {};
-  s.abstractDeadlineInfo[meetingId] = Object.assign({ format: "", status: "Submitted", acceptedFormat: "" }, s.abstractDeadlineInfo[meetingId], { [field]: value });
+  s.abstractDeadlineInfo[meetingId] = Object.assign({ format: "", status: "Not Submitted", acceptedFormat: "" }, s.abstractDeadlineInfo[meetingId], { [field]: value });
   upsertStudy(s);
+}
+// Dashboard/sidebar quick-reminder card: every linked abstract deadline still sitting at
+// "Not Submitted", across all studies, so it's obvious at a glance what still needs to go out.
+function needsAbstractSubmissionHTML() {
+  const rows = [];
+  state.studies.forEach(s => {
+    meetingsForStudy(s.id).filter(m => (m.type || "abstract") !== "grant").forEach(m => {
+      if (abstractLinkInfo(s, m.id).status === "Not Submitted") rows.push({ s, m });
+    });
+  });
+  if (!rows.length) return "";
+  rows.sort((a, b) => (a.m.deadline || "9999").localeCompare(b.m.deadline || "9999"));
+  return `<div class="section-title">Needs Abstract Submission</div>
+  <div class="card" style="padding:6px 0">
+    ${rows.map(({ s, m }) => `
+    <div class="task-row" style="padding:8px 16px;cursor:pointer" data-open-study="${s.id}">
+      <span class="badge" style="background:${ABS_LINK_STATUS_COLORS["Not Submitted"]};font-size:10px;padding:3px 8px;flex:none">Not Submitted</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(s.title)}</div>
+        <div style="font-size:12px;color:var(--text2)">${esc(m.society)} — ${esc(m.name)}${m.deadline ? " · due " + fmtDate(m.deadline) : ""}</div>
+      </div>
+    </div>`).join("")}
+  </div>`;
 }
 // Row for a linked abstract deadline on a study's detail page — adds the poster/podium
 // question, a submitted/rejected/accepted status badge, and (once accepted) the granted format.
