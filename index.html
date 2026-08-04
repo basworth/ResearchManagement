@@ -419,6 +419,26 @@ const ABS_LINK_STATUS_COLORS = { "Not Submitted": "var(--text2)", Submitted: "va
 const ABS_ACCEPTED_FORMATS = ["E-Poster", "Poster", "Podium"];
 const ROSTER_ID = "00000000-0000-0000-0000-000000000001";
 const me = () => localStorage.getItem("rt-me") || "";
+// Deterministic UUID-shaped id derived from a person's name, so every device that picks the
+// same name (identity is just typed, not a real login) converges on the same synced userPref
+// record instead of minting a fresh row each time. Not cryptographic — just stable + unique
+// enough for a small research team.
+function nameToUuid(name) {
+  const s = "userpref:" + (name || "").trim().toLowerCase();
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+  let seed = h >>> 0;
+  function next() {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0);
+  }
+  let hex = "";
+  while (hex.length < 32) hex += next().toString(16).padStart(8, "0");
+  hex = hex.slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
 
 // Orthopedic societies for the abstract-deadline board (full names for reference)
 const SOCIETIES = {
@@ -429,22 +449,49 @@ const SOCIETIES = {
   IPSG: "International Patellofemoral Study Group",
   ICRS: "International Cartilage Regeneration & Joint Preservation Society"
 };
-// Personal show/hide prefs (per device, not synced). Default: all shown.
+// Personal show/hide prefs. If an identity (me()) is set, these live in the shared, synced
+// state.userPrefs record for that person's name — so the same person sees the same board
+// filters on any device. With no identity set, falls back to the old per-device localStorage.
+function userPrefFor(name) {
+  const id = nameToUuid(name);
+  return (state.userPrefs || []).find(p => p.id === id);
+}
 function subs() {
+  const person = me();
+  if (person) {
+    const pref = userPrefFor(person);
+    if (pref && pref.subs) return Object.assign(Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true])), pref.subs);
+    return Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true]));
+  }
   try { return Object.assign(Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true])), JSON.parse(localStorage.getItem("rt-subs") || "{}")); }
   catch (e) { return Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true])); }
 }
 function setSub(soc, on) {
+  const person = me();
+  if (person) {
+    const id = nameToUuid(person);
+    state.userPrefs = state.userPrefs || [];
+    let pref = state.userPrefs.find(p => p.id === id);
+    if (!pref) { pref = { id, name: person, subs: {} }; state.userPrefs.push(pref); }
+    pref.name = person;
+    pref.subs = Object.assign({}, pref.subs, { [soc]: on });
+    saveLocal(); pushItem("userPref", pref);
+    return;
+  }
   const s = subs(); s[soc] = on; localStorage.setItem("rt-subs", JSON.stringify(s));
 }
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], meetings: [], teamNotes: [] };
+let state = { studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [] };
 let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
 let studyDesignFilter = "All designs";
+// Studies-list "who" filter: "mine" (default — only studies I'm involved in as PI, team
+// member, or task assignee; gracefully shows everything if no identity is set), "all", or
+// another exact roster name to peek at someone else's projects.
+let personFilter = "mine";
 let taskFilter = "Open";
 let detailStudyId = null;
 // Centralized "navigate into a study" entry point. Resets the collapsible-section state (see
@@ -460,7 +507,7 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
 function loadLocal() {
   try {
     const raw = localStorage.getItem("rt-data");
-    if (raw) state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], teamNotes: [] }, JSON.parse(raw));
+    if (raw) state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [] }, JSON.parse(raw));
     migrate();
   } catch (e) { console.warn("load failed", e); }
 }
@@ -543,6 +590,7 @@ function migrate() {
     if (!s.initiation) s.initiation = { sportsSubmission: false, irbApproved: false, caApproved: false, piqBuilt: false, ready: false };
   });
   if (!Array.isArray(state.teamNotes)) state.teamNotes = [];
+  if (!Array.isArray(state.userPrefs)) state.userPrefs = [];
   if (!Array.isArray(state.meetings)) state.meetings = [];
   state.meetings.forEach(m => {
     if (!m.type) m.type = "abstract";
@@ -619,6 +667,7 @@ async function pullAll() {
     state.tasks = data.filter(r => r.kind === "task").map(r => r.data);
     state.meetings = data.filter(r => r.kind === "meeting").map(r => r.data);
     state.teamNotes = data.filter(r => r.kind === "teamNote").map(r => r.data);
+    state.userPrefs = data.filter(r => r.kind === "userPref").map(r => r.data);
     const meta = data.find(r => r.kind === "meta");
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
     data.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; });
@@ -690,7 +739,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
     if (Array.isArray(data.names)) { state.roster = data.names; saveLocal(); render(); }
     return;
   }
-  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : null;
+  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : null;
   if (!arr) return;
   const i = arr.findIndex(x => x.id === id);
   if (i >= 0) arr[i] = data; else arr.push(data);
@@ -703,7 +752,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
 function applyRealtimeDelete(id) {
   if (!id) return;
   let hitOpenRecord = false;
-  ["studies", "tasks", "meetings", "teamNotes"].forEach(key => {
+  ["studies", "tasks", "meetings", "teamNotes", "userPrefs"].forEach(key => {
     const before = state[key].length;
     state[key] = state[key].filter(x => x.id !== id);
     if (state[key].length !== before && editingRef && editingRef.id === id) hitOpenRecord = true;
@@ -740,6 +789,7 @@ async function pushAllLocal() {
     ...state.tasks.map(t => ({ id: t.id, kind: "task", data: t, updated_at: now() })),
     ...state.meetings.map(m => ({ id: m.id, kind: "meeting", data: m, updated_at: now() })),
     ...state.teamNotes.map(n => ({ id: n.id, kind: "teamNote", data: n, updated_at: now() })),
+    ...(state.userPrefs || []).map(p => ({ id: p.id, kind: "userPref", data: p, updated_at: now() })),
     { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster }, updated_at: now() }
   ];
   await sb.from("items").upsert(rows);
@@ -866,6 +916,15 @@ function dueLabel(d) {
 }
 function studyById(id) { return state.studies.find(s => s.id === id); }
 function isActive(s) { return s.phase !== "Published" && s.phase !== "On Hold"; }
+// True if `name` is the PI, appears in the free-text Team field, or is assigned to any task
+// on this study. Used to power the Studies list "Mine" / other-researcher filter.
+function studyInvolvesPerson(s, name) {
+  const n = (name || "").trim().toLowerCase();
+  if (!n) return true;
+  if ((s.pi || "").toLowerCase().includes(n)) return true;
+  if ((s.team || "").toLowerCase().includes(n)) return true;
+  return state.tasks.some(t => t.studyId === s.id && (t.assignees || []).some(a => (a || "").trim().toLowerCase() === n));
+}
 
 // A simple line drawing of the joint being studied, chosen by the study's area.
 function studyArea(s) { const m = /Area:\s*(Cartilage|Knee|Shoulder)/i.exec(s.notes || ""); return m ? m[1].toLowerCase() : ""; }
@@ -1222,8 +1281,13 @@ function studyCardHTML(s) {
 function renderStudies() {
   $title.textContent = "Studies";
   const filters = ["Active", "All", "Published", "On Hold"];
-  // status-filtered base set (drives the phase dropdown options + counts)
+  const myName = me();
+  // Who-filter: defaults to "mine" (only studies I'm involved in as PI/team/task assignee).
+  // Gracefully falls back to showing everyone if no identity is set yet. Applied first, before
+  // the status/phase/design filters below, so their counts reflect the selected person.
   let base = state.studies.slice();
+  if (personFilter === "mine") { if (myName) base = base.filter(s => studyInvolvesPerson(s, myName)); }
+  else if (personFilter !== "all") base = base.filter(s => studyInvolvesPerson(s, personFilter));
   if (studyFilter === "Active") base = base.filter(isActive);
   else if (studyFilter !== "All") base = base.filter(s => s.phase === studyFilter);
   const phaseCount = {};
@@ -1242,6 +1306,15 @@ function renderStudies() {
 
   let html = `<div class="seg">` + filters.map(f =>
     `<button class="${f === studyFilter ? "active" : ""}" data-filter="${f}">${f}</button>`).join("") + `</div>`;
+  const otherNames = state.roster.filter(n => n.trim().toLowerCase() !== myName.trim().toLowerCase());
+  html += `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 10px 4px">
+      <span style="font-size:13px;font-weight:600;color:var(--text2)">Who</span>
+      <select id="person-filter" style="flex:1;-webkit-appearance:none;appearance:none;background:var(--card);border:none;border-radius:10px;padding:9px 30px 9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.06)">
+        <option value="mine" ${personFilter === "mine" ? "selected" : ""}>${myName ? "My Projects (" + esc(myName) + ")" : "My Projects"}</option>
+        <option value="all" ${personFilter === "all" ? "selected" : ""}>All Projects</option>
+        ${otherNames.map(n => `<option value="${esc(n)}" ${personFilter === n ? "selected" : ""}>${esc(n)}'s Projects</option>`).join("")}
+      </select>
+    </div>`;
   html += `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 10px 4px">
       <span style="font-size:13px;font-weight:600;color:var(--text2)">Phase</span>
       <select id="phase-filter" style="flex:1;-webkit-appearance:none;appearance:none;background:var(--card);border:none;border-radius:10px;padding:9px 30px 9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.06)">
@@ -1263,6 +1336,7 @@ function renderStudies() {
   }
   $main.innerHTML = html;
   $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { studyFilter = b.dataset.filter; studyPhaseFilter = "All phases"; studyDesignFilter = "All designs"; render(); });
+  document.getElementById("person-filter").onchange = (e) => { personFilter = e.target.value; studyPhaseFilter = "All phases"; studyDesignFilter = "All designs"; render(); };
   document.getElementById("phase-filter").onchange = (e) => { studyPhaseFilter = e.target.value; render(); };
   document.getElementById("design-filter").onchange = (e) => { studyDesignFilter = e.target.value; render(); };
   $main.querySelectorAll("[data-study]").forEach(el => el.onclick = () => { openStudy(el.dataset.study); render(); });
@@ -2056,6 +2130,9 @@ function renderSettings() {
   <div class="fgroup">
     <div class="frow"><label>Your name</label><input id="me-name" list="dl-people-set" placeholder="Used for 'Mine' filter &amp; uploads" value="${esc(me())}"></div>
   </div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-top:-4px">
+    Type your name to personalize this device — the Studies tab will default to showing just your projects, and your Society Subscriptions below sync across every device where you enter the same name. Everyone still shares the same underlying data either way.
+  </div>
   <datalist id="dl-people-set">${state.roster.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
   <div class="card">
     <div style="font-size:12px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin-bottom:10px">TEAM MEMBERS — used for task assignment</div>
@@ -2081,7 +2158,7 @@ function renderSettings() {
   ${cfg.url ? `<button class="btn danger" id="sb-off">Disconnect Sync</button>` : ""}
 
   <div class="section-title" id="societies-anchor">Society Subscriptions</div>
-  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">Toggle which societies appear on your dashboard deadline board. This is a personal view setting — it won't change what your teammates see.</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">Toggle which societies appear on your dashboard deadline board. This is a personal view setting — it won't change what your teammates see.${me() ? " Saved under your name, so it follows you to any device." : " No name entered above, so this is saved on this device only."}</div>
   <div class="fgroup">
     ${Object.entries(SOCIETIES).map(([k, full]) => `
       <div class="frow">
@@ -2119,7 +2196,9 @@ function renderSettings() {
 
   document.getElementById("me-name").onchange = (e) => {
     localStorage.setItem("rt-me", e.target.value.trim());
+    personFilter = "mine";
     toast("Saved");
+    render();
   };
   $main.querySelectorAll(".sub-toggle").forEach(c => c.onchange = () => {
     setSub(c.dataset.soc, c.checked);
@@ -2202,7 +2281,7 @@ function renderSettings() {
             }
           });
         } else {
-          state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], teamNotes: [] }, data);
+          state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [] }, data);
         }
         migrate(); saveLocal();
         Object.entries(files).forEach(([id, c]) => { try { localStorage.setItem("rt-file-" + id, c); } catch (e2) {} });
