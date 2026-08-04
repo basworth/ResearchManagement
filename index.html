@@ -650,6 +650,23 @@ function setSyncPill(on, label) {
   pill.classList.toggle("on", on);
   syncOnline = on;
 }
+// Races a promise against a timeout so a hung network request (Supabase unreachable, DNS
+// stuck, etc.) fails fast instead of leaving the pill stuck on "Connecting…" forever — which,
+// now that editing requires a live connection, would otherwise lock the app up indefinitely
+// with no feedback.
+function withTimeout(promise, ms, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error((label || "Request") + " timed out")), ms); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+let reconnectTimer = null;
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    if (!sb && syncConfig()) initSync();
+  }, 15000);
+}
 async function initSync() {
   const cfg = syncConfig();
   if (!cfg || !cfg.url || !cfg.key) { setSyncPill(false, ""); return; }
@@ -657,21 +674,22 @@ async function initSync() {
   unsubscribeRealtime();
   try {
     if (!window.supabase) {
-      await new Promise((res, rej) => {
+      await withTimeout(new Promise((res, rej) => {
         const s = document.createElement("script");
         s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";
         s.onload = res; s.onerror = rej;
         document.head.appendChild(s);
-      });
+      }), 12000, "Loading Team Sync library");
     }
     sb = window.supabase.createClient(cfg.url, cfg.key);
-    await pullAll();
+    await withTimeout(pullAll(), 12000, "Connecting to Team Sync");
     setSyncPill(true, "Synced");
     subscribeRealtime();
   } catch (e) {
     console.warn("sync init failed", e);
     sb = null;
     setSyncPill(false, "Offline");
+    scheduleReconnect();
   }
 }
 async function pullAll() {
@@ -819,7 +837,9 @@ async function pushAllLocal() {
 }
 // Refresh when app regains focus
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible" && sb) pullAll().catch(() => setSyncPill(false, "Offline"));
+  if (document.visibilityState !== "visible") return;
+  if (sb) withTimeout(pullAll(), 12000, "Refreshing Team Sync").catch(() => { sb = null; setSyncPill(false, "Offline"); scheduleReconnect(); });
+  else if (syncConfig()) initSync(); // never connected, or a previous attempt timed out — try again now
 });
 
 /* ============ Mutations ============ */
