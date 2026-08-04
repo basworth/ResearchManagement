@@ -617,6 +617,21 @@ function migrate() {
 /* ============ Optional Supabase sync ============ */
 let sb = null;
 let realtimeChannel = null;
+// True only when Team Sync is configured AND currently pushing successfully (pill shows
+// "Synced" or "Live" — realtime confirmation isn't required, just that saves are reaching the
+// shared database). Kept up to date by setSyncPill(), which every connect/push/pull success or
+// failure path already calls. Adding/editing/deleting studies, tasks, and deadlines is gated on
+// this so nothing gets typed in, "saved", and then silently lost while offline or before Team
+// Sync has ever been connected.
+let syncOnline = false;
+function canEditData() { return syncOnline; }
+// Call at the top of any study/task/deadline mutation or form-open. Returns true (and shows a
+// toast) if the action should be blocked; returns false if it's fine to proceed.
+function blockOfflineEdit(what) {
+  if (canEditData()) return false;
+  toast((what || "Changes") + " need Team Sync connected — you're offline right now.");
+  return true;
+}
 // Last-known server updated_at per record id (studies/tasks/meetings/roster), kept fresh by
 // pullAll() and by the realtime subscription. Used to detect "someone else changed this
 // since you opened it" before an edit is saved over the top of it.
@@ -629,10 +644,11 @@ function syncConfig() {
 }
 function setSyncPill(on, label) {
   const pill = document.getElementById("sync-pill");
-  if (!syncConfig()) { pill.style.display = "none"; return; }
+  if (!syncConfig()) { pill.style.display = "none"; syncOnline = false; return; }
   pill.style.display = "";
   pill.textContent = label;
   pill.classList.toggle("on", on);
+  syncOnline = on;
 }
 async function initSync() {
   const cfg = syncConfig();
@@ -807,32 +823,45 @@ document.addEventListener("visibilitychange", () => {
 });
 
 /* ============ Mutations ============ */
+// Every study/task/deadline mutator below checks blockOfflineEdit() FIRST, before touching
+// state — so a blocked call leaves the in-memory arrays completely untouched (no phantom edit
+// that looks saved but disappears on refresh). Sheet-based create/edit flows also gate at the
+// point the sheet opens/saves (see openStudyForm/openTaskForm/openMeetingForm/openLinkSheet/
+// openStudyLinkSheet) so users don't fill out a form only to be told "no" after hitting Save —
+// these mutator-level checks are the backstop for the smaller inline quick-edits (milestones,
+// initiation checklist, docs, done-toggles, etc.) that don't go through a sheet at all.
 function upsertStudy(s) {
+  if (blockOfflineEdit("Saving this study")) return;
   const i = state.studies.findIndex(x => x.id === s.id);
   if (i >= 0) state.studies[i] = s; else state.studies.push(s);
   saveLocal(); pushItem("study", s); render();
 }
 function removeStudy(id) {
+  if (blockOfflineEdit("Deleting a study")) return;
   state.studies = state.studies.filter(s => s.id !== id);
   const orphaned = state.tasks.filter(t => t.studyId === id).map(t => t.id);
   state.tasks = state.tasks.filter(t => t.studyId !== id);
   saveLocal(); deleteRemote(id); orphaned.forEach(deleteRemote); render();
 }
 function upsertTask(t) {
+  if (blockOfflineEdit("Saving this task")) return;
   const i = state.tasks.findIndex(x => x.id === t.id);
   if (i >= 0) state.tasks[i] = t; else state.tasks.push(t);
   saveLocal(); pushItem("task", t); render();
 }
 function removeTask(id) {
+  if (blockOfflineEdit("Deleting a task")) return;
   state.tasks = state.tasks.filter(t => t.id !== id);
   saveLocal(); deleteRemote(id); render();
 }
 function upsertMeeting(m) {
+  if (blockOfflineEdit("Saving this deadline")) return;
   const i = state.meetings.findIndex(x => x.id === m.id);
   if (i >= 0) state.meetings[i] = m; else state.meetings.push(m);
   saveLocal(); pushItem("meeting", m); render();
 }
 function removeMeeting(id) {
+  if (blockOfflineEdit("Deleting a deadline")) return;
   state.meetings = state.meetings.filter(m => m.id !== id);
   // Clean up any submission tasks that were auto-created for this deadline.
   const orphaned = state.tasks.filter(t => t.linkedMeetingId === id).map(t => t.id);
@@ -874,6 +903,7 @@ function syncSubmissionTask(m, studyId, linked) {
   }
 }
 function toggleStudyLink(meetingId, studyId) {
+  if (blockOfflineEdit("Linking a deadline")) return;
   const m = state.meetings.find(x => x.id === meetingId);
   if (!m) return;
   m.studyIds = m.studyIds || [];
@@ -1197,6 +1227,7 @@ function renderSidebar() {
 
 // Sheet to associate studies with a deadline (grant or abstract)
 function openLinkSheet(meetingId) {
+  if (blockOfflineEdit("Linking projects")) return;
   const m = state.meetings.find(x => x.id === meetingId);
   if (!m) return;
   m.studyIds = m.studyIds || [];
@@ -1227,6 +1258,7 @@ function openLinkSheet(meetingId) {
 
 // Sheet to associate deadlines (grants/abstracts) with a study, from the study's page
 function openStudyLinkSheet(studyId) {
+  if (blockOfflineEdit("Linking deadlines")) return;
   const list = state.meetings.slice().sort((a, b) =>
     (a.type || "").localeCompare(b.type || "") || a.society.localeCompare(b.society) || a.name.localeCompare(b.name));
   if (!list.length) {
@@ -1706,6 +1738,7 @@ function renderStudyDetail() {
   document.getElementById("back-btn").onclick = () => { detailStudyId = null; render(); };
   document.getElementById("edit-study-btn").onclick = () => openStudyForm(s);
   document.getElementById("del-study-btn").onclick = () => {
+    if (blockOfflineEdit("Deleting a study")) return;
     if (confirm(`Delete "${s.title}" and its tasks? This can't be undone.`)) { detailStudyId = null; removeStudy(s.id); toast("Study deleted"); }
   };
   document.getElementById("add-task-here").onclick = () => openTaskForm(null, s.id);
@@ -2337,6 +2370,7 @@ function selectHTML(id, options, selected) {
 }
 
 function openStudyForm(existing) {
+  if (blockOfflineEdit(existing ? "Editing a study" : "Adding a study")) return;
   const s = existing || { id: uid(), title: "", nickname: "", pi: "", team: "", design: "Prospective (Consented)", phase: "Concept", priority: "Medium", irb: "", irbStatus: "Not Submitted", start: todayStr(), notes: "", journal: "", submittedDate: "", journalTrackingId: "", revisionsReceivedDate: "", revisionsDeadline: "", milestones: [] };
   if (!s.grant) s.grant = { enabled: false, amount: "", source: "", awardDate: "", balance: "", expirationDate: "", balanceUpdatedDate: "" };
   editingRef = existing ? { kind: "study", id: s.id, baseline: remoteMeta[s.id] ? remoteMeta[s.id].updated_at : null } : null;
@@ -2454,6 +2488,7 @@ function openStudyForm(existing) {
 }
 
 function openTaskForm(existing, presetStudyId) {
+  if (blockOfflineEdit(existing ? "Editing a task" : "Adding a task")) return;
   const t = existing || { id: uid(), title: "", studyId: presetStudyId || "", due: "", assignees: [], notes: "", done: false };
   editingRef = existing ? { kind: "task", id: t.id, baseline: remoteMeta[t.id] ? remoteMeta[t.id].updated_at : null } : null;
   const studyOpts = [`<option value="">(none)</option>`]
@@ -2489,7 +2524,7 @@ function openTaskForm(existing, presetStudyId) {
       toast(existing ? "Task updated" : "Task added");
     });
   const del = document.getElementById("f-tdel");
-  if (del) del.onclick = () => { removeTask(t.id); closeSheet(); toast("Task deleted"); };
+  if (del) del.onclick = () => { if (blockOfflineEdit("Deleting a task")) return; removeTask(t.id); closeSheet(); toast("Task deleted"); };
   const gotoStudy = document.getElementById("f-tgoto-study");
   if (gotoStudy) gotoStudy.onclick = () => { openStudy(t.studyId); tab = "studies"; closeSheet(); render(); };
   const gotoMeeting = document.getElementById("f-tgoto-meeting");
@@ -2500,6 +2535,7 @@ function openTaskForm(existing, presetStudyId) {
 }
 
 function openMeetingForm(existing) {
+  if (blockOfflineEdit(existing ? "Editing a deadline" : "Adding a deadline")) return;
   const m = existing || { id: uid(), society: "AAOS", name: "", type: "abstract", location: "", dates: "", deadline: "", link: "", unconfirmed: false };
   editingRef = existing ? { kind: "meeting", id: m.id, baseline: remoteMeta[m.id] ? remoteMeta[m.id].updated_at : null } : null;
   const typeLabel = { abstract: "Abstract", grant: "Grant / Funding" };
@@ -2557,7 +2593,7 @@ function openMeetingForm(existing) {
     document.getElementById("f-mdeadline-lbl").textContent = e.target.value === "grant" ? "Application due" : "Deadline";
   });
   const md = document.getElementById("f-mdel");
-  if (md) md.onclick = () => { if (confirm(`Delete "${m.name}"?`)) { removeMeeting(m.id); closeSheet(); toast("Meeting deleted"); } };
+  if (md) md.onclick = () => { if (blockOfflineEdit("Deleting a deadline")) return; if (confirm(`Delete "${m.name}"?`)) { removeMeeting(m.id); closeSheet(); toast("Meeting deleted"); } };
 }
 
 /* ============ Sample data ============ */
