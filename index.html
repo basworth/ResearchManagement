@@ -1360,7 +1360,8 @@ function deadlineItemHTML(m, dueWord, metaWord, stage) {
     : `<div style="color:var(--text2)">None yet.</div>`;
   panel += `<div><button class="mini-btn" data-link-meeting="${m.id}">＋ Link a project</button>`;
   panel += m.link ? `<a class="mini-btn" href="${esc(m.link)}" target="_blank" rel="noopener" style="text-decoration:none">Open page ↗</a>` : "";
-  panel += `<button class="mini-btn" data-edit-meeting="${m.id}">Edit</button></div>`;
+  panel += `<button class="mini-btn" data-edit-meeting="${m.id}">Edit</button>`;
+  panel += `<button class="mini-btn" data-hide-meeting="${m.id}">${m.hidden ? "Unhide" : "Hide"}</button></div>`;
   return `
   <details class="dl">
     <summary>
@@ -1393,6 +1394,17 @@ function bindDeadlineRows(root) {
   });
   root.querySelectorAll("[data-link-meeting]").forEach(el => el.onclick = (e) => {
     e.preventDefault(); openLinkSheet(el.dataset.linkMeeting);
+  });
+  // One-tap hide for deadlines the team isn't pursuing. The record is kept (so the deadline feed
+  // won't re-suggest it) and can be brought back from Settings › Tracked Meetings.
+  root.querySelectorAll("[data-hide-meeting]").forEach(el => el.onclick = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (blockOfflineEdit("Hiding a deadline")) return;
+    const m = state.meetings.find(x => x.id === el.dataset.hideMeeting);
+    if (!m) return;
+    m.hidden = !m.hidden;
+    upsertMeeting(m);
+    toast(m.hidden ? "Hidden — bring it back from Settings › Tracked Meetings" : "Deadline unhidden");
   });
 }
 
@@ -2516,6 +2528,7 @@ function renderSettings() {
           <div style="font-size:14.5px;font-weight:600"><span class="badge" style="background:var(--indigo);font-size:10px;padding:2px 7px;margin-right:6px">${esc(m.society)}</span>${esc(m.name)}</div>
           <div style="font-size:12px;color:var(--text2);margin-top:2px">${(m.type || "abstract") === "grant" ? "Grant" : "Abstract"} · ${m.deadline ? "Due " + fmtDate(m.deadline) : "No deadline set"}${m.unconfirmed ? " · ⚠︎ unconfirmed" : ""}${m.hidden ? ` · <span style="color:var(--orange);font-weight:700">hidden</span>` : ""}</div>
         </div>
+        <button class="mini-btn" data-meeting-hide="${m.id}" style="margin-top:0;flex:0 0 auto">${m.hidden ? "Unhide" : "Hide"}</button>
         <span style="color:var(--text2);font-size:18px">›</span>
       </div>`).join("") : `<div style="color:var(--text2);font-size:14px;padding:8px 16px">No meetings tracked yet.</div>`}
   </div>
@@ -2548,9 +2561,20 @@ function renderSettings() {
   $main.querySelectorAll(".sub-toggle").forEach(c => c.onchange = () => {
     setSub(c.dataset.soc, c.checked);
   });
-  $main.querySelectorAll("[data-meeting-edit]").forEach(el => el.onclick = () => {
+  $main.querySelectorAll("[data-meeting-edit]").forEach(el => el.onclick = (e) => {
+    if (e.target.closest("[data-meeting-hide]")) return; // the inline Hide button handles itself
     const m = state.meetings.find(x => x.id === el.dataset.meetingEdit);
     if (m) openMeetingForm(m);
+  });
+  // Settings is the only place hidden deadlines still appear, so this is the way back.
+  $main.querySelectorAll("[data-meeting-hide]").forEach(el => el.onclick = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (blockOfflineEdit("Hiding a deadline")) return;
+    const m = state.meetings.find(x => x.id === el.dataset.meetingHide);
+    if (!m) return;
+    m.hidden = !m.hidden;
+    upsertMeeting(m);
+    toast(m.hidden ? "Hidden from the dashboard" : "Deadline unhidden");
   });
   document.getElementById("add-meeting-btn").onclick = () => openMeetingForm(null);
   document.getElementById("roster-add").onclick = () => {
