@@ -1619,10 +1619,10 @@ function openLinkSheet(meetingId, preselectIds) {
     <button class="btn secondary" id="link-new-study" style="margin-bottom:12px">+ New Project</button>
     <div class="fgroup" id="link-study-list">` +
     state.studies.slice().sort((a, b) => a.title.localeCompare(b.title)).map(s => `
-      <div class="frow link-row" style="gap:12px" data-search="${esc([s.title, s.nickname, s.pi, s.irb].filter(Boolean).join(" ").toLowerCase())}">
+      <label class="frow link-row" style="gap:12px;cursor:pointer" data-search="${esc([s.title, s.nickname, s.pi, s.irb].filter(Boolean).join(" ").toLowerCase())}">
         <input type="checkbox" class="link-study" data-sid="${s.id}" ${selected.has(s.id) ? "checked" : ""} style="flex:0;width:22px;height:22px">
-        <label style="flex:1;min-width:0;font-weight:600">${esc(s.title)}${s.nickname ? `<div style="font-weight:400;font-size:12px;color:var(--text2)">${esc(s.nickname)}</div>` : ""}</label>
-      </div>`).join("") + `</div>
+        <span style="flex:1;min-width:0;font-weight:600">${esc(s.title)}${s.nickname ? `<div style="font-weight:400;font-size:12px;color:var(--text2)">${esc(s.nickname)}</div>` : ""}</span>
+      </label>`).join("") + `</div>
     <div id="link-study-empty" style="display:none;color:var(--text2);font-size:14px;text-align:center;padding:20px 12px">No projects match your search.</div>`;
   openSheet("Link Projects", body, () => {
     const checked = [...document.querySelectorAll(".link-study")].filter(c => c.checked).map(c => c.dataset.sid);
@@ -1652,10 +1652,10 @@ function openStudyLinkSheet(studyId) {
   const body = `<div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">Link this project to grants or abstract deadlines.</div>
     ${sheetSearchHTML("link-mtg-search", "Search by society or meeting name")}
     <div class="fgroup" id="link-mtg-list">` + list.map(m => `
-      <div class="frow link-row" style="gap:12px" data-search="${esc([m.society, m.name, (m.type || "abstract") === "grant" ? "grant" : "abstract"].filter(Boolean).join(" ").toLowerCase())}">
+      <label class="frow link-row" style="gap:12px;cursor:pointer" data-search="${esc([m.society, m.name, (m.type || "abstract") === "grant" ? "grant" : "abstract"].filter(Boolean).join(" ").toLowerCase())}">
         <input type="checkbox" class="link-mtg" data-mid="${m.id}" ${(m.studyIds || []).includes(studyId) ? "checked" : ""} style="flex:0;width:22px;height:22px">
-        <label style="flex:1;min-width:0;font-weight:600;font-size:14px">${esc(m.society)} — ${esc(m.name)}<div style="font-weight:400;font-size:12px;color:var(--text2)">${(m.type||"abstract")==="grant"?"Grant":"Abstract"}${m.deadline?" · "+fmtDate(m.deadline):""}</div></label>
-      </div>`).join("") + `</div>
+        <span style="flex:1;min-width:0;font-weight:600;font-size:14px">${esc(m.society)} — ${esc(m.name)}<div style="font-weight:400;font-size:12px;color:var(--text2)">${(m.type||"abstract")==="grant"?"Grant":"Abstract"}${m.deadline?" · "+fmtDate(m.deadline):""}</div></span>
+      </label>`).join("") + `</div>
     <div id="link-mtg-empty" style="display:none;color:var(--text2);font-size:14px;text-align:center;padding:20px 12px">No deadlines match your search.</div>`;
   openSheet("Link Deadlines", body, () => {
     const checkedIds = new Set([...document.querySelectorAll(".link-mtg")].filter(c => c.checked).map(c => c.dataset.mid));
