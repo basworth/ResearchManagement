@@ -268,6 +268,23 @@
   }
   .seg button.active { background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
 
+  /* Text search box used on Studies and Worklist to filter by title/nickname/PI/IRB # */
+  .search-box { position: relative; margin: 0 4px 10px 4px; }
+  .search-box input {
+    width: 100%; box-sizing: border-box; background: var(--card); border: none;
+    border-radius: 10px; padding: 9px 34px 9px 32px; font-size: 15px; font-family: inherit;
+    color: var(--text); outline: none; box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+  }
+  .search-box .search-icon {
+    position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+    font-size: 14px; color: var(--text2); pointer-events: none;
+  }
+  .search-box .search-clear {
+    position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+    background: none; border: none; color: var(--text2); font-size: 15px;
+    cursor: pointer; padding: 6px; line-height: 1; font-family: inherit;
+  }
+
   .empty { text-align: center; color: var(--text2); padding: 48px 24px; font-size: 15px; line-height: 1.5; }
   .empty .big { font-size: 44px; margin-bottom: 10px; }
 
@@ -529,6 +546,7 @@ let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
 let studyDesignFilter = "All designs";
+let studySearchQuery = "";
 // Studies-list "who" filter: "mine" (default — only studies I'm involved in as PI, team
 // member, or task assignee; gracefully shows everything if no identity is set), "all", or
 // another exact roster name to peek at someone else's projects.
@@ -1104,6 +1122,43 @@ function studyInvolvesPerson(s, name) {
   if ((s.team || "").toLowerCase().includes(n)) return true;
   return state.tasks.some(t => t.studyId === s.id && (t.assignees || []).some(a => (a || "").trim().toLowerCase() === n));
 }
+// Free-text search across the fields someone would actually search by: title, nickname,
+// PI, IRB/ORA number, and the free-text team field. Used by both the Studies list and the
+// Worklist search boxes.
+function studyMatchesSearch(s, query) {
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return true;
+  return [s.title, s.nickname, s.pi, s.irb, s.team].some(v => (v || "").toLowerCase().includes(q));
+}
+// Renders a text search box (magnifying-glass icon + optional clear button). Paired with
+// bindSearchBox() below, which wires it up so re-rendering on every keystroke doesn't steal
+// focus or reset the cursor position — full-page render() calls replace $main.innerHTML
+// wholesale, so without this the field would lose focus after every character typed.
+function searchBoxHTML(id, value, placeholder) {
+  return `<div class="search-box">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="${id}" placeholder="${esc(placeholder)}" value="${esc(value)}" autocomplete="off">
+      ${value ? `<button type="button" class="search-clear" id="${id}-clear" aria-label="Clear search">✕</button>` : ""}
+    </div>`;
+}
+function bindSearchBox(id, setVal) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.oninput = (e) => {
+    setVal(e.target.value);
+    const pos = e.target.selectionStart;
+    render();
+    const fresh = document.getElementById(id);
+    if (fresh) { fresh.focus(); fresh.setSelectionRange(pos, pos); }
+  };
+  const clearBtn = document.getElementById(id + "-clear");
+  if (clearBtn) clearBtn.onclick = () => {
+    setVal("");
+    render();
+    const fresh = document.getElementById(id);
+    if (fresh) fresh.focus();
+  };
+}
 
 // A simple line drawing of the joint being studied, chosen by the study's area.
 function studyArea(s) { const m = /Area:\s*(Cartilage|Knee|Shoulder)/i.exec(s.notes || ""); return m ? m[1].toLowerCase() : ""; }
@@ -1471,6 +1526,7 @@ function renderStudies() {
   else if (personFilter !== "all") base = base.filter(s => studyInvolvesPerson(s, personFilter));
   if (studyFilter === "Active") base = base.filter(isActive);
   else if (studyFilter !== "All") base = base.filter(s => s.phase === studyFilter);
+  if (studySearchQuery) base = base.filter(s => studyMatchesSearch(s, studySearchQuery));
   const phaseCount = {};
   base.forEach(s => { phaseCount[s.phase] = (phaseCount[s.phase] || 0) + 1; });
   const presentPhases = PHASES.filter(p => phaseCount[p]);
@@ -1487,6 +1543,7 @@ function renderStudies() {
 
   let html = `<div class="seg">` + filters.map(f =>
     `<button class="${f === studyFilter ? "active" : ""}" data-filter="${f}">${f}</button>`).join("") + `</div>`;
+  html += searchBoxHTML("study-search", studySearchQuery, "Search by title, nickname, PI, or IRB #");
   const otherNames = state.roster.filter(n => n.trim().toLowerCase() !== myName.trim().toLowerCase());
   html += `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 10px 4px">
       <span style="font-size:13px;font-weight:600;color:var(--text2)">Who</span>
@@ -1511,12 +1568,15 @@ function renderStudies() {
       </select>
     </div>`;
   if (!list.length) {
-    html += `<div class="empty"><div class="big">⚗️</div>No studies match this filter.<br>Tap <b>+</b> to add one.</div>`;
+    html += studySearchQuery
+      ? `<div class="empty"><div class="big">🔍</div>No studies match "${esc(studySearchQuery)}".</div>`
+      : `<div class="empty"><div class="big">⚗️</div>No studies match this filter.<br>Tap <b>+</b> to add one.</div>`;
   } else {
     html += list.map(studyCardHTML).join("");
   }
   $main.innerHTML = html;
   $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { studyFilter = b.dataset.filter; studyPhaseFilter = "All phases"; studyDesignFilter = "All designs"; render(); });
+  bindSearchBox("study-search", (v) => { studySearchQuery = v; });
   document.getElementById("person-filter").onchange = (e) => { personFilter = e.target.value; studyPhaseFilter = "All phases"; studyDesignFilter = "All designs"; render(); };
   document.getElementById("phase-filter").onchange = (e) => { studyPhaseFilter = e.target.value; render(); };
   document.getElementById("design-filter").onchange = (e) => { studyDesignFilter = e.target.value; render(); };
@@ -2157,10 +2217,12 @@ function renderTasks() {
 /* ============ Working Study List (spreadsheet view) ============ */
 let worklistShowClosed = false;
 let worklistSort = { key: null, dir: 1 };
+let worklistSearchQuery = "";
 function renderWorkingList() {
   $title.textContent = "Working Study List";
   let studies = state.studies.slice();
   if (!worklistShowClosed) studies = studies.filter(isActive);
+  if (worklistSearchQuery) studies = studies.filter(s => studyMatchesSearch(s, worklistSearchQuery));
 
   const sortKeyFns = {
     irb: s => (s.irb || "").toLowerCase(),
@@ -2202,11 +2264,15 @@ function renderWorkingList() {
       <button class="${!worklistShowClosed ? "active" : ""}" data-wl="active">Active</button>
       <button class="${worklistShowClosed ? "active" : ""}" data-wl="all">All</button>
     </div>`;
+  html += searchBoxHTML("worklist-search", worklistSearchQuery, "Search by title, nickname, PI, or IRB #");
 
   if (!studies.length) {
-    html += `<div class="empty"><div class="big">▦</div>No ${worklistShowClosed ? "" : "active "}studies yet.<br>Tap <b>+</b> to add one.</div>`;
+    html += worklistSearchQuery
+      ? `<div class="empty"><div class="big">🔍</div>No studies match "${esc(worklistSearchQuery)}".</div>`
+      : `<div class="empty"><div class="big">▦</div>No ${worklistShowClosed ? "" : "active "}studies yet.<br>Tap <b>+</b> to add one.</div>`;
     $main.innerHTML = html;
     $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
+    bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
     return;
   }
 
@@ -2247,6 +2313,7 @@ function renderWorkingList() {
 
   $main.innerHTML = html;
   $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
+  bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
   $main.querySelectorAll("[data-sort]").forEach(th => th.onclick = () => {
     const key = th.dataset.sort;
     if (worklistSort.key === key) worklistSort.dir *= -1;
