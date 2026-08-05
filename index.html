@@ -311,9 +311,62 @@
     color: var(--blue); font-size: 12.5px; font-weight: 600; padding: 5px 10px; border-radius: 100px; cursor: pointer; margin: 3px 4px 0 0;
   }
   .mini-btn { border: none; background: var(--card); color: var(--blue); font-family: inherit; font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 9px; cursor: pointer; margin-top: 8px; margin-right: 8px; }
+
+  /* Login gate — the app requires a signed-in Team Sync account, so #app stays hidden and
+     #login-screen covers the viewport until auth succeeds. */
+  #app { display: none; }
+  body.authed #app { display: flex; }
+  body.authed #login-screen { display: none; }
+  .login-screen {
+    position: fixed; inset: 0; z-index: 500;
+    background: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px; overflow-y: auto;
+  }
+  .login-card { width: 100%; max-width: 380px; }
+  .login-card .brand-badge { width: 46px; height: 46px; border-radius: 14px; margin: 0 auto 14px auto; }
+  .login-card h1 { text-align: center; font-size: 21px; margin: 2px 0 22px 0; }
+  .login-card .brand-tag { text-align: center; font-size: 11px; }
+  #login-msg { display: none; font-size: 13.5px; border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; line-height: 1.4; }
+  #login-msg.error { display: block; background: color-mix(in srgb, var(--red) 12%, transparent); color: var(--red); }
+  #login-msg.info { display: block; background: color-mix(in srgb, var(--blue) 12%, transparent); color: var(--blue); }
+  .link-btn {
+    display: block; width: 100%; border: none; background: none; cursor: pointer;
+    color: var(--blue); font-size: 14px; font-weight: 600; font-family: inherit;
+    padding: 6px; text-align: center;
+  }
 </style>
 </head>
 <body>
+<div id="login-screen" class="login-screen">
+  <div class="login-card">
+    <div class="brand-badge" aria-hidden="true">
+      <svg width="20" height="20" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+        <line x1="14" y1="35" x2="27" y2="13" stroke="#fff" stroke-width="8" stroke-linecap="round"/>
+        <line x1="24" y1="35" x2="35" y2="19" stroke="#fff" stroke-width="8" stroke-linecap="round"/>
+        <circle cx="35" cy="30" r="6" fill="#fff"/>
+      </svg>
+    </div>
+    <div class="brand-tag">Midwest Orthopaedics at Rush</div>
+    <h1>Research Tracker</h1>
+    <div id="login-msg"></div>
+    <div id="login-fields">
+      <div class="fgroup">
+        <div class="frow"><label>Email</label><input id="login-email" type="email" autocomplete="username" placeholder="you@rushortho.com"></div>
+        <div class="frow"><label>Password</label><input id="login-password" type="password" autocomplete="current-password" placeholder="••••••••"></div>
+      </div>
+      <button class="btn" id="login-submit">Sign In</button>
+      <button class="link-btn" id="login-forgot">Forgot password?</button>
+    </div>
+    <div id="login-recovery" style="display:none">
+      <div style="font-size:13.5px;color:var(--text2);margin-bottom:12px">Enter a new password for your account.</div>
+      <div class="fgroup">
+        <div class="frow"><label>New password</label><input id="recovery-password" type="password" autocomplete="new-password" placeholder="••••••••"></div>
+      </div>
+      <button class="btn" id="recovery-submit">Set Password</button>
+    </div>
+  </div>
+</div>
 <div id="app">
   <header class="topbar">
     <div class="brand-lockup">
@@ -418,26 +471,26 @@ const ABS_LINK_STATUSES = ["Not Submitted", "Submitted", "Accepted", "Rejected"]
 const ABS_LINK_STATUS_COLORS = { "Not Submitted": "var(--text2)", Submitted: "var(--orange)", Accepted: "var(--green)", Rejected: "var(--red)" };
 const ABS_ACCEPTED_FORMATS = ["E-Poster", "Poster", "Podium"];
 const ROSTER_ID = "00000000-0000-0000-0000-000000000001";
-const me = () => localStorage.getItem("rt-me") || "";
-// Deterministic UUID-shaped id derived from a person's name, so every device that picks the
-// same name (identity is just typed, not a real login) converges on the same synced userPref
-// record instead of minting a fresh row each time. Not cryptographic — just stable + unique
-// enough for a small research team.
-function nameToUuid(name) {
-  const s = "userpref:" + (name || "").trim().toLowerCase();
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
-  let seed = h >>> 0;
-  function next() {
-    seed = (seed + 0x6D2B79F5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0);
-  }
-  let hex = "";
-  while (hex.length < 32) hex += next().toString(16).padStart(8, "0");
-  hex = hex.slice(0, 32);
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+// The signed-in Supabase Auth user, set by handleAuthChange(). { id, email } or null when
+// signed out / not yet checked. This — not a typed name — is now the source of truth for
+// "who am I"; a per-user display name (state.profiles) maps it to a human-readable name.
+let currentUser = null;
+function profileFor(userId) { return (state.profiles || []).find(p => p.id === userId); }
+// Display name for the current account — used for the "Mine" studies filter, uploads, etc.
+// Empty string until the person sets one (see maybePromptDisplayName()).
+function me() {
+  if (!currentUser) return "";
+  const p = profileFor(currentUser.id);
+  return p ? p.name : "";
+}
+function upsertProfile(name) {
+  if (!currentUser) return;
+  state.profiles = state.profiles || [];
+  let p = profileFor(currentUser.id);
+  if (!p) { p = { id: currentUser.id, email: currentUser.email, name: "" }; state.profiles.push(p); }
+  p.email = currentUser.email;
+  p.name = name;
+  saveLocal(); pushItem("profile", p);
 }
 
 // Orthopedic societies for the abstract-deadline board (full names for reference)
@@ -449,41 +502,29 @@ const SOCIETIES = {
   IPSG: "International Patellofemoral Study Group",
   ICRS: "International Cartilage Regeneration & Joint Preservation Society"
 };
-// Personal show/hide prefs. If an identity (me()) is set, these live in the shared, synced
-// state.userPrefs record for that person's name — so the same person sees the same board
-// filters on any device. With no identity set, falls back to the old per-device localStorage.
-function userPrefFor(name) {
-  const id = nameToUuid(name);
-  return (state.userPrefs || []).find(p => p.id === id);
-}
+// Personal show/hide prefs, keyed by the signed-in account's stable auth id — so the same
+// login sees the same board filters on any device.
 function subs() {
-  const person = me();
-  if (person) {
-    const pref = userPrefFor(person);
+  if (currentUser) {
+    const pref = (state.userPrefs || []).find(p => p.id === currentUser.id);
     if (pref && pref.subs) return Object.assign(Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true])), pref.subs);
     return Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true]));
   }
-  try { return Object.assign(Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true])), JSON.parse(localStorage.getItem("rt-subs") || "{}")); }
-  catch (e) { return Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true])); }
+  return Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true]));
 }
 function setSub(soc, on) {
-  const person = me();
-  if (person) {
-    const id = nameToUuid(person);
-    state.userPrefs = state.userPrefs || [];
-    let pref = state.userPrefs.find(p => p.id === id);
-    if (!pref) { pref = { id, name: person, subs: {} }; state.userPrefs.push(pref); }
-    pref.name = person;
-    pref.subs = Object.assign({}, pref.subs, { [soc]: on });
-    saveLocal(); pushItem("userPref", pref);
-    return;
-  }
-  const s = subs(); s[soc] = on; localStorage.setItem("rt-subs", JSON.stringify(s));
+  if (!currentUser) return;
+  state.userPrefs = state.userPrefs || [];
+  let pref = state.userPrefs.find(p => p.id === currentUser.id);
+  if (!pref) { pref = { id: currentUser.id, name: me(), subs: {} }; state.userPrefs.push(pref); }
+  pref.name = me();
+  pref.subs = Object.assign({}, pref.subs, { [soc]: on });
+  saveLocal(); pushItem("userPref", pref);
 }
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [] };
+let state = { studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [], profiles: [] };
 let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
@@ -507,7 +548,7 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
 function loadLocal() {
   try {
     const raw = localStorage.getItem("rt-data");
-    if (raw) state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [] }, JSON.parse(raw));
+    if (raw) state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [], profiles: [] }, JSON.parse(raw));
     migrate();
   } catch (e) { console.warn("load failed", e); }
 }
@@ -591,6 +632,7 @@ function migrate() {
   });
   if (!Array.isArray(state.teamNotes)) state.teamNotes = [];
   if (!Array.isArray(state.userPrefs)) state.userPrefs = [];
+  if (!Array.isArray(state.profiles)) state.profiles = [];
   if (!Array.isArray(state.meetings)) state.meetings = [];
   state.meetings.forEach(m => {
     if (!m.type) m.type = "abstract";
@@ -614,7 +656,12 @@ function migrate() {
   }
 }
 
-/* ============ Optional Supabase sync ============ */
+/* ============ Supabase sync (required — gated behind login) ============ */
+// The project URL + anon key are baked in (no more per-device paste step). This is safe to
+// publish because the database's row-level-security policy requires the `authenticated` role —
+// the anon key alone no longer grants any access, only a signed-in account does.
+const SUPABASE_URL = "https://wqgiqiqatdmoxpjbzxoj.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndxZ2lxaXFhdGRtb3hwamJ6eG9qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM1MDY3MzAsImV4cCI6MjA5OTA4MjczMH0.8e0yLOvtafSBZLJa9AmLX7CKC7_8cBqPyujk2VZKb3E";
 let sb = null;
 let realtimeChannel = null;
 // True only when Team Sync is configured AND currently pushing successfully (pill shows
@@ -639,12 +686,8 @@ let remoteMeta = {};
 // { kind, id, baseline } for whichever record is currently open in an edit sheet, so we can
 // warn instead of silently clobbering a concurrent edit. Cleared whenever the sheet closes.
 let editingRef = null;
-function syncConfig() {
-  try { return JSON.parse(localStorage.getItem("rt-sync") || "null"); } catch (e) { return null; }
-}
 function setSyncPill(on, label) {
   const pill = document.getElementById("sync-pill");
-  if (!syncConfig()) { pill.style.display = "none"; syncOnline = false; return; }
   pill.style.display = "";
   pill.textContent = label;
   pill.classList.toggle("on", on);
@@ -659,38 +702,122 @@ function withTimeout(promise, ms, label) {
   const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error((label || "Request") + " timed out")), ms); });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
+function loadSupabaseLib() {
+  if (window.supabase) return Promise.resolve();
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";
+    s.onload = res; s.onerror = rej;
+    document.head.appendChild(s);
+  });
+}
 let reconnectTimer = null;
+// If already signed in, a dropped connection only needs pullAll() retried. If we never
+// finished the initial auth/session check (or it failed), retry the whole boot sequence.
 function scheduleReconnect() {
   if (reconnectTimer) return;
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
-    if (!sb && syncConfig()) initSync();
+    if (currentUser) {
+      withTimeout(pullAll(), 12000, "Reconnecting to Team Sync")
+        .then(() => { setSyncPill(true, "Synced"); subscribeRealtime(); })
+        .catch(() => { setSyncPill(false, "Offline"); scheduleReconnect(); });
+    } else {
+      bootApp();
+    }
   }, 15000);
 }
-async function initSync() {
-  const cfg = syncConfig();
-  if (!cfg || !cfg.url || !cfg.key) { setSyncPill(false, ""); return; }
-  setSyncPill(false, "Connecting…");
-  unsubscribeRealtime();
+function setLoginMsg(text, kind) {
+  const el = document.getElementById("login-msg");
+  if (!text) { el.className = ""; el.textContent = ""; return; }
+  el.className = kind || "error";
+  el.textContent = text;
+}
+function showLoginScreen(msg) {
+  document.body.classList.remove("authed");
+  setLoginMsg(msg || "");
+}
+function hideLoginScreen() {
+  document.body.classList.add("authed");
+  setLoginMsg("");
+}
+// Runs once at page load: connects the Supabase client and checks for an existing session.
+// Login itself (and all subsequent sign-in/out/recovery events) is handled by
+// handleAuthChange() via onAuthStateChange, so this only needs to do the FIRST check.
+async function bootApp() {
   try {
-    if (!window.supabase) {
-      await withTimeout(new Promise((res, rej) => {
-        const s = document.createElement("script");
-        s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";
-        s.onload = res; s.onerror = rej;
-        document.head.appendChild(s);
-      }), 12000, "Loading Team Sync library");
+    await withTimeout(loadSupabaseLib(), 12000, "Loading Team Sync library");
+    if (!sb) {
+      sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      sb.auth.onAuthStateChange((event, session) => {
+        if (event === "INITIAL_SESSION") return; // covered by the explicit getSession() below
+        handleAuthChange(event, session);
+      });
     }
-    sb = window.supabase.createClient(cfg.url, cfg.key);
-    await withTimeout(pullAll(), 12000, "Connecting to Team Sync");
-    setSyncPill(true, "Synced");
-    subscribeRealtime();
+    const { data, error } = await withTimeout(sb.auth.getSession(), 12000, "Checking session");
+    if (error) throw error;
+    if (data && data.session) await handleAuthChange("SIGNED_IN", data.session);
+    else showLoginScreen();
   } catch (e) {
-    console.warn("sync init failed", e);
-    sb = null;
-    setSyncPill(false, "Offline");
+    console.warn("boot failed", e);
+    showLoginScreen("Could not reach the server. Check your connection — this page will keep retrying automatically.");
     scheduleReconnect();
   }
+}
+// Central handler for every auth transition: initial sign-in, later sign-in, sign-out, and
+// password-recovery links. Fully owns showing/hiding the login screen and (re)loading data.
+async function handleAuthChange(event, session) {
+  if (event === "PASSWORD_RECOVERY") {
+    document.getElementById("login-fields").style.display = "none";
+    document.getElementById("login-recovery").style.display = "block";
+    setLoginMsg("");
+    return;
+  }
+  if (session && session.user) {
+    currentUser = { id: session.user.id, email: session.user.email };
+    hideLoginScreen();
+    setSyncPill(false, "Connecting…");
+    unsubscribeRealtime();
+    try {
+      await withTimeout(pullAll(), 12000, "Connecting to Team Sync");
+      setSyncPill(true, "Synced");
+      subscribeRealtime();
+      maybePromptDisplayName();
+    } catch (e) {
+      console.warn("pull after sign-in failed", e);
+      setSyncPill(false, "Offline");
+      scheduleReconnect();
+    }
+  } else {
+    currentUser = null;
+    unsubscribeRealtime();
+    // Clear the local cache on sign-out so a shared computer doesn't keep showing data after
+    // the account that pulled it down has signed out.
+    localStorage.removeItem("rt-data");
+    state = { studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [], profiles: [] };
+    showLoginScreen();
+  }
+}
+// First time a given account signs in, ask what to call them — matching their existing roster
+// name (if they have one) means their existing task assignments and study PI/team involvement
+// keep working immediately, with nothing to re-assign.
+function maybePromptDisplayName() {
+  if (!currentUser || profileFor(currentUser.id)) return;
+  openSheet("Welcome — what's your name?", `
+    <div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">
+      This is used for the "Mine" filter and task assignments. If you're already in the team roster below, use that exact same name so your existing tasks and studies link up automatically instead of needing to be re-assigned.
+    </div>
+    <div class="fgroup">
+      <div class="frow"><label>Your name</label><input id="f-profile-name" list="dl-people-profile" placeholder="e.g. Adam Yanke"></div>
+    </div>
+    <datalist id="dl-people-profile">${state.roster.map(n => `<option value="${esc(n)}">`).join("")}</datalist>`,
+    () => {
+      const name = document.getElementById("f-profile-name").value.trim();
+      if (!name) { toast("Enter your name"); return false; }
+      upsertProfile(name);
+      personFilter = "mine";
+      render();
+    });
 }
 async function pullAll() {
   if (!sb) return;
@@ -702,6 +829,7 @@ async function pullAll() {
     state.meetings = data.filter(r => r.kind === "meeting").map(r => r.data);
     state.teamNotes = data.filter(r => r.kind === "teamNote").map(r => r.data);
     state.userPrefs = data.filter(r => r.kind === "userPref").map(r => r.data);
+    state.profiles = data.filter(r => r.kind === "profile").map(r => r.data);
     const meta = data.find(r => r.kind === "meta");
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
     data.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; });
@@ -773,7 +901,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
     if (Array.isArray(data.names)) { state.roster = data.names; saveLocal(); render(); }
     return;
   }
-  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : null;
+  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : null;
   if (!arr) return;
   const i = arr.findIndex(x => x.id === id);
   if (i >= 0) arr[i] = data; else arr.push(data);
@@ -786,7 +914,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
 function applyRealtimeDelete(id) {
   if (!id) return;
   let hitOpenRecord = false;
-  ["studies", "tasks", "meetings", "teamNotes", "userPrefs"].forEach(key => {
+  ["studies", "tasks", "meetings", "teamNotes", "userPrefs", "profiles"].forEach(key => {
     const before = state[key].length;
     state[key] = state[key].filter(x => x.id !== id);
     if (state[key].length !== before && editingRef && editingRef.id === id) hitOpenRecord = true;
@@ -824,6 +952,7 @@ async function pushAllLocal() {
     ...state.meetings.map(m => ({ id: m.id, kind: "meeting", data: m, updated_at: now() })),
     ...state.teamNotes.map(n => ({ id: n.id, kind: "teamNote", data: n, updated_at: now() })),
     ...(state.userPrefs || []).map(p => ({ id: p.id, kind: "userPref", data: p, updated_at: now() })),
+    ...(state.profiles || []).map(p => ({ id: p.id, kind: "profile", data: p, updated_at: now() })),
     { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster }, updated_at: now() }
   ];
   await sb.from("items").upsert(rows);
@@ -838,8 +967,8 @@ async function pushAllLocal() {
 // Refresh when app regains focus
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
-  if (sb) withTimeout(pullAll(), 12000, "Refreshing Team Sync").catch(() => { sb = null; setSyncPill(false, "Offline"); scheduleReconnect(); });
-  else if (syncConfig()) initSync(); // never connected, or a previous attempt timed out — try again now
+  if (currentUser && sb) withTimeout(pullAll(), 12000, "Refreshing Team Sync").catch(() => { setSyncPill(false, "Offline"); scheduleReconnect(); });
+  else if (!currentUser) bootApp(); // never finished the initial session check, or it timed out — try again now
 });
 
 /* ============ Mutations ============ */
@@ -2175,18 +2304,22 @@ function renderTeamNotes() {
 /* ============ Settings ============ */
 function renderSettings() {
   $title.textContent = "Settings";
-  const cfg = syncConfig() || {};
   const currentSubs = subs();
   const allMeetings = state.meetings.slice().sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
   $main.innerHTML = `
-  <div class="section-title">You &amp; Your Team</div>
+  <div class="section-title">Account</div>
+  <div class="card" style="font-size:14px;line-height:1.55">
+    Signed in as <b>${esc(currentUser ? currentUser.email : "")}</b>
+  </div>
   <div class="fgroup">
-    <div class="frow"><label>Your name</label><input id="me-name" list="dl-people-set" placeholder="Used for 'Mine' filter &amp; uploads" value="${esc(me())}"></div>
+    <div class="frow"><label>Display name</label><input id="me-name" list="dl-people-set" placeholder="Used for 'Mine' filter &amp; uploads" value="${esc(me())}"></div>
   </div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-top:-4px">
-    Type your name to personalize this device — the Studies tab will default to showing just your projects, and your Society Subscriptions below sync across every device where you enter the same name. Everyone still shares the same underlying data either way.
+    The Studies tab defaults to showing just your projects, and your Society Subscriptions below sync across every device you log into.
   </div>
   <datalist id="dl-people-set">${state.roster.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
+  <button class="btn danger" id="sign-out-btn">Sign Out</button>
+
   <div class="card">
     <div style="font-size:12px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin-bottom:10px">TEAM MEMBERS — used for task assignment</div>
     <div class="chip-row">
@@ -2197,18 +2330,6 @@ function renderSettings() {
       <button id="roster-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:15px;cursor:pointer">Add</button>
     </div>
   </div>
-
-  <div class="section-title">Team Sync (optional)</div>
-  <div class="card" style="font-size:14px;line-height:1.55;color:var(--text2)">
-    Connect a free Supabase project so your whole team shares the same data.
-    Setup instructions are in the <b>SETUP-GUIDE</b> file that came with this app.
-  </div>
-  <div class="fgroup">
-    <div class="frow"><label>URL</label><input id="sb-url" placeholder="https://xxxx.supabase.co" value="${esc(cfg.url || "")}" autocapitalize="off" autocorrect="off"></div>
-    <div class="frow"><label>API Key</label><input id="sb-key" placeholder="anon public key" value="${esc(cfg.key || "")}" autocapitalize="off" autocorrect="off"></div>
-  </div>
-  <button class="btn" id="sb-save">${cfg.url ? "Update Sync Settings" : "Connect Team Sync"}</button>
-  ${cfg.url ? `<button class="btn danger" id="sb-off">Disconnect Sync</button>` : ""}
 
   <div class="section-title" id="societies-anchor">Society Subscriptions</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">Toggle which societies appear on your dashboard deadline board. This is a personal view setting — it won't change what your teammates see.${me() ? " Saved under your name, so it follows you to any device." : " No name entered above, so this is saved on this device only."}</div>
@@ -2243,15 +2364,19 @@ function renderSettings() {
   <div class="section-title">About</div>
   <div class="card" style="font-size:13.5px;color:var(--text2);line-height:1.55">
     Research Tracker v1.0 · ${state.studies.length} studies, ${state.tasks.length} tasks stored.
-    Data lives on this device${syncConfig() ? " and syncs to your team workspace" : ""}.
+    Data syncs to your team's shared workspace.
     Tip: in Safari tap Share → <b>Add to Home Screen</b> to use this as an app.
   </div>`;
 
   document.getElementById("me-name").onchange = (e) => {
-    localStorage.setItem("rt-me", e.target.value.trim());
+    upsertProfile(e.target.value.trim());
     personFilter = "mine";
     toast("Saved");
     render();
+  };
+  document.getElementById("sign-out-btn").onclick = async () => {
+    if (!confirm("Sign out of Team Sync on this device?")) return;
+    try { await sb.auth.signOut(); } catch (e) { console.warn(e); }
   };
   $main.querySelectorAll(".sub-toggle").forEach(c => c.onchange = () => {
     setSub(c.dataset.soc, c.checked);
@@ -2272,29 +2397,6 @@ function renderSettings() {
     state.roster = state.roster.filter(x => x !== b.dataset.rosterDel);
     saveLocal(); pushRoster(); render();
   });
-
-  document.getElementById("sb-save").onclick = async () => {
-    const url = document.getElementById("sb-url").value.trim().replace(/\/+$/, "");
-    const key = document.getElementById("sb-key").value.trim();
-    if (!url || !key) { toast("Enter both URL and key"); return; }
-    localStorage.setItem("rt-sync", JSON.stringify({ url, key }));
-    toast("Connecting…");
-    await initSync();
-    if (sb) {
-      // seed workspace with local data if remote is empty
-      const { data } = await sb.from("items").select("id").limit(1);
-      if (data && data.length === 0 && (state.studies.length || state.tasks.length)) {
-        await pushAllLocal();
-        toast("Connected — local data uploaded");
-      } else { toast("Connected"); }
-      render();
-    } else { toast("Could not connect — check values"); }
-  };
-  const off = document.getElementById("sb-off");
-  if (off) off.onclick = () => {
-    unsubscribeRealtime();
-    localStorage.removeItem("rt-sync"); sb = null; setSyncPill(false, ""); render(); toast("Sync disconnected");
-  };
 
   document.getElementById("export-btn").onclick = () => {
     const files = {};
@@ -2334,7 +2436,7 @@ function renderSettings() {
             }
           });
         } else {
-          state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [] }, data);
+          state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [], profiles: [] }, data);
         }
         migrate(); saveLocal();
         Object.entries(files).forEach(([id, c]) => { try { localStorage.setItem("rt-file-" + id, c); } catch (e2) {} });
@@ -2803,6 +2905,59 @@ document.getElementById("add-btn").onclick = () => {
   }
 };
 
+// Login screen handlers — bound once; the login screen markup is static (not re-rendered by
+// the main render() loop), unlike the rest of the app.
+function bindLoginScreen() {
+  const submitBtn = document.getElementById("login-submit");
+  const doSignIn = async () => {
+    if (!sb) { setLoginMsg("Still connecting — try again in a moment."); return; }
+    const email = document.getElementById("login-email").value.trim();
+    const password = document.getElementById("login-password").value;
+    if (!email || !password) { setLoginMsg("Enter your email and password."); return; }
+    setLoginMsg("");
+    submitBtn.disabled = true; submitBtn.textContent = "Signing in…";
+    try {
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) throw error;
+      // Success is handled by handleAuthChange() via the auth-state listener.
+    } catch (e) {
+      setLoginMsg(e.message || "Sign in failed.");
+    } finally {
+      submitBtn.disabled = false; submitBtn.textContent = "Sign In";
+    }
+  };
+  submitBtn.onclick = doSignIn;
+  document.getElementById("login-password").addEventListener("keydown", (e) => { if (e.key === "Enter") doSignIn(); });
+  document.getElementById("login-forgot").onclick = async () => {
+    if (!sb) { setLoginMsg("Still connecting — try again in a moment."); return; }
+    const email = document.getElementById("login-email").value.trim();
+    if (!email) { setLoginMsg("Enter your email above first, then tap Forgot password."); return; }
+    setLoginMsg("");
+    try {
+      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+      if (error) throw error;
+      setLoginMsg("Check your email for a password reset link.", "info");
+    } catch (e) {
+      setLoginMsg(e.message || "Could not send reset email.");
+    }
+  };
+  document.getElementById("recovery-submit").onclick = async () => {
+    if (!sb) return;
+    const password = document.getElementById("recovery-password").value;
+    if (!password || password.length < 6) { setLoginMsg("Password must be at least 6 characters."); return; }
+    setLoginMsg("");
+    try {
+      const { error } = await sb.auth.updateUser({ password });
+      if (error) throw error;
+      document.getElementById("login-recovery").style.display = "none";
+      document.getElementById("login-fields").style.display = "block";
+      toast("Password updated");
+    } catch (e) {
+      setLoginMsg(e.message || "Could not update password.");
+    }
+  };
+}
+
 loadLocal();
 // On first ever launch, seed the meeting board so deadlines show without needing sample data.
 if (!localStorage.getItem("rt-seeded")) {
@@ -2812,7 +2967,8 @@ if (!localStorage.getItem("rt-seeded")) {
 // On desktop the dashboard lives in the sidebar, so start on the Worklist instead of duplicating it in the main pane.
 if (tab === "dashboard" && desktopMQ.matches) tab = "worklist";
 render();
-initSync();
+bindLoginScreen();
+bootApp();
 fetchDeadlineFeed();
 </script>
 </body>
