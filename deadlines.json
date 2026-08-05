@@ -1,6 +1,6 @@
 {
   "_comment": "Abstract-deadline feed for Research Tracker. The biweekly scheduled task rewrites this file after checking each society. The app fetches it on load and merges any entry whose verifiedOn is newer. 'key' must stay stable so updates match the right meeting. Set unconfirmed=false only when a date is verified from the society's official call for abstracts.",
-  "updatedOn": "2026-08-03",
+  "updatedOn": "2026-08-05",
   "meetings": [
     {
       "key": "AAOS|2027 Annual Meeting",
@@ -373,6 +373,51 @@
       "funded": [],
       "unconfirmed": true,
       "verifiedOn": "2026-06-04"
+    },
+    {
+      "key": "NIH|Parent R01 (Investigator-Initiated)",
+      "society": "NIH",
+      "type": "grant",
+      "name": "NIH Research Project Grant (Parent R01)",
+      "deadline": "2026-10-05",
+      "dates": "Standard NIH due dates, 3 cycles/year — new applications: Feb 5, Jun 5, Oct 5; renewal/resubmission/revision: Mar 5, Jul 5, Nov 5. Next new-application deadline Oct 5, 2026 (renewal/resubmission Nov 5, 2026). Two companion FOAs: PA-25-305 (clinical trial required) and PA-25-301 (clinical trial not allowed); both expire 1/8/2028. NIAMS (musculoskeletal/orthopaedic) is a participating institute.",
+      "location": "",
+      "link": "https://grants.nih.gov/grants/guide/parent_announcements.htm",
+      "aim": "Broad, unsolicited investigator-initiated research support across NIH's mission — the standard mechanism for an independent MSK/orthopaedic research program, funded through whichever institute (e.g., NIAMS) is relevant to the science.",
+      "criteria": "No topic restriction. Standard NIH eligibility — domestic and foreign higher-ed, nonprofit, for-profit, and government organizations; any PI with the expertise/resources to lead the work. No hard budget cap, but detailed (non-modular) budgets are required above $500,000 direct costs/year and need prior IC approval. Confirm your target institute (e.g., NIAMS) is listed as a participating organization before submitting. Apply via NIH ASSIST or Grants.gov Workspace.",
+      "funded": [],
+      "unconfirmed": false,
+      "verifiedOn": "2026-08-05T16:35"
+    },
+    {
+      "key": "NIH|Parent R21 (Exploratory/Developmental)",
+      "society": "NIH",
+      "type": "grant",
+      "name": "NIH Exploratory/Developmental Research Project Grant (Parent R21)",
+      "deadline": "2026-10-16",
+      "dates": "Standard NIH due dates, 3 cycles/year — new applications: Feb 16, Jun 16, Oct 16; renewal/resubmission/revision: Mar 16, Jul 16, Nov 16. Next new-application deadline Oct 16, 2026 (renewal/resubmission Nov 16, 2026). Two companion FOAs: PA-25-306 (clinical trial required) and PA-25-304 (clinical trial not allowed); both expire 1/8/2028. NIAMS (musculoskeletal/orthopaedic) is a participating institute.",
+      "location": "",
+      "link": "https://grants.nih.gov/grants/guide/parent_announcements.htm",
+      "aim": "Supports early-stage, high-risk/high-reward exploratory or developmental research (e.g., pilot or proof-of-concept MSK/orthopaedic studies) that doesn't yet have the preliminary data needed for an R01.",
+      "criteria": "Combined direct costs may not exceed $275,000 over the project period, with no more than $200,000 in any single year; project period capped at 2 years. Standard NIH eligibility (same organization types as the parent R01). Confirm your target institute (e.g., NIAMS) is listed as a participating organization before submitting.",
+      "funded": [],
+      "unconfirmed": false,
+      "verifiedOn": "2026-08-05T16:35"
+    },
+    {
+      "key": "NIAMS|Clinical Observational Studies in MSK Rheumatic Skin Disease (R01)",
+      "society": "NIAMS",
+      "type": "grant",
+      "name": "NIAMS Clinical Observational (CO) Studies in Musculoskeletal, Rheumatic, and Skin Diseases (R01)",
+      "deadline": "2026-11-02",
+      "dates": "PAR-24-280. Final application cycle before the FOA expires — new/resubmission due Nov 2, 2026 (earlier 2026 cycles were Mar 4 and Jul 2). Expiration date Nov 3, 2026, unless NIAMS reissues the PAR.",
+      "location": "",
+      "link": "https://grants.nih.gov/grants/guide/pa-files/PAR-24-280.html",
+      "aim": "Funds non-interventional clinical observational studies (not clinical trials) in musculoskeletal, rheumatic, or skin disease/conditions to generate the data (outcome measures, biomarkers, disease-progression timing, recruitment feasibility) needed to design a future clinical study.",
+      "criteria": "R01; direct costs capped at $475,000 over up to 4 years, no more than $250,000 in any single year. New and resubmission applications only. Only observational (non-interventional) studies are responsive — basic/animal research, disease-mechanism studies, any NIH-defined clinical trial, and early-stage biomarker discovery are non-responsive and returned without review. U.S. domestic organizations only (foreign components allowed within a U.S. award; foreign organizations cannot apply directly). NIAMS has a dedicated Orthopaedics scientific contact (Chuck Washabaugh, PhD, washabac@mail.nih.gov).",
+      "funded": [],
+      "unconfirmed": false,
+      "verifiedOn": "2026-08-05T16:35"
     }
   ]
 }
