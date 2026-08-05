@@ -1141,6 +1141,36 @@ function searchBoxHTML(id, value, placeholder) {
       ${value ? `<button type="button" class="search-clear" id="${id}-clear" aria-label="Clear search">✕</button>` : ""}
     </div>`;
 }
+// Search box for use *inside* a bottom sheet. Unlike bindSearchBox() above, this never calls
+// render() — it just shows/hides rows in place, which is essential here because the rows are
+// checkboxes: re-rendering would wipe the user's in-progress selections. Hidden rows stay in the
+// DOM and stay checked, so narrowing the list can never silently unlink something.
+function sheetSearchHTML(id, placeholder) {
+  return `<div class="search-box">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="${id}" placeholder="${esc(placeholder)}" autocomplete="off">
+      <button type="button" class="search-clear" id="${id}-clear" style="display:none" aria-label="Clear search">✕</button>
+    </div>`;
+}
+function bindSheetSearch(id, rowSelector, emptyId) {
+  const input = document.getElementById(id);
+  const clearBtn = document.getElementById(id + "-clear");
+  if (!input) return;
+  const apply = () => {
+    const q = input.value.trim().toLowerCase();
+    clearBtn.style.display = q ? "" : "none";
+    let shown = 0;
+    document.querySelectorAll(rowSelector).forEach(row => {
+      const hit = !q || (row.dataset.search || "").includes(q);
+      row.style.display = hit ? "" : "none";
+      if (hit) shown++;
+    });
+    const empty = document.getElementById(emptyId);
+    if (empty) empty.style.display = shown ? "none" : "";
+  };
+  input.oninput = apply;
+  clearBtn.onclick = () => { input.value = ""; apply(); input.focus(); };
+}
 function bindSearchBox(id, setVal) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -1430,23 +1460,40 @@ function renderSidebar() {
 }
 
 // Sheet to associate studies with a deadline (grant or abstract)
-function openLinkSheet(meetingId) {
+// `preselectIds` re-opens the sheet with a specific set of boxes ticked. It's used when the user
+// detours through "+ New Project" mid-selection: we stash what they'd already checked, let them
+// create the study, then come back with those boxes still ticked plus the new study added.
+function openLinkSheet(meetingId, preselectIds) {
   if (blockOfflineEdit("Linking projects")) return;
   const m = state.meetings.find(x => x.id === meetingId);
   if (!m) return;
   m.studyIds = m.studyIds || [];
+  const selected = new Set(preselectIds || m.studyIds);
+  // Jumps to the study form, then returns here with the newly-created study pre-checked.
+  const newProjectHandler = () => {
+    const pending = [...document.querySelectorAll(".link-study")].filter(c => c.checked).map(c => c.dataset.sid);
+    closeSheet();
+    setTimeout(() => openStudyForm(null, (newId) => {
+      setTimeout(() => openLinkSheet(meetingId, pending.concat(newId)), 350);
+    }), 350);
+  };
   if (!state.studies.length) {
-    openSheet("Link a Project", `<div style="color:var(--text2);font-size:14px;padding:8px 2px">No studies yet. Add a study first, then link it here.</div>`, () => true);
+    openSheet("Link a Project", `<div style="color:var(--text2);font-size:14px;padding:8px 2px 14px 2px">No projects yet — create one to link it to this deadline.</div>
+      <button class="btn secondary" id="link-new-study">+ New Project</button>`, () => true);
     document.getElementById("sheet-save").style.visibility = "hidden";
+    document.getElementById("link-new-study").onclick = newProjectHandler;
     return;
   }
   const body = `<div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">Select the projects associated with <b>${esc(m.society)} — ${esc(m.name)}</b>.</div>
-    <div class="fgroup">` +
+    ${sheetSearchHTML("link-study-search", "Search by title, nickname, PI, or IRB #")}
+    <button class="btn secondary" id="link-new-study" style="margin-bottom:12px">+ New Project</button>
+    <div class="fgroup" id="link-study-list">` +
     state.studies.slice().sort((a, b) => a.title.localeCompare(b.title)).map(s => `
-      <div class="frow" style="gap:12px">
-        <input type="checkbox" class="link-study" data-sid="${s.id}" ${m.studyIds.includes(s.id) ? "checked" : ""} style="flex:0;width:22px;height:22px">
-        <label style="flex:1;min-width:0;font-weight:600">${esc(s.title)}</label>
-      </div>`).join("") + `</div>`;
+      <div class="frow link-row" style="gap:12px" data-search="${esc([s.title, s.nickname, s.pi, s.irb].filter(Boolean).join(" ").toLowerCase())}">
+        <input type="checkbox" class="link-study" data-sid="${s.id}" ${selected.has(s.id) ? "checked" : ""} style="flex:0;width:22px;height:22px">
+        <label style="flex:1;min-width:0;font-weight:600">${esc(s.title)}${s.nickname ? `<div style="font-weight:400;font-size:12px;color:var(--text2)">${esc(s.nickname)}</div>` : ""}</label>
+      </div>`).join("") + `</div>
+    <div id="link-study-empty" style="display:none;color:var(--text2);font-size:14px;text-align:center;padding:20px 12px">No projects match your search.</div>`;
   openSheet("Link Projects", body, () => {
     const checked = [...document.querySelectorAll(".link-study")].filter(c => c.checked).map(c => c.dataset.sid);
     const before = new Set(m.studyIds), after = new Set(checked);
@@ -1458,6 +1505,8 @@ function openLinkSheet(meetingId) {
     saveLocal(); pushItem("meeting", m); render();
     toast("Projects linked");
   });
+  bindSheetSearch("link-study-search", "#link-study-list .link-row", "link-study-empty");
+  document.getElementById("link-new-study").onclick = newProjectHandler;
 }
 
 // Sheet to associate deadlines (grants/abstracts) with a study, from the study's page
@@ -1471,11 +1520,13 @@ function openStudyLinkSheet(studyId) {
     return;
   }
   const body = `<div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">Link this project to grants or abstract deadlines.</div>
-    <div class="fgroup">` + list.map(m => `
-      <div class="frow" style="gap:12px">
+    ${sheetSearchHTML("link-mtg-search", "Search by society or meeting name")}
+    <div class="fgroup" id="link-mtg-list">` + list.map(m => `
+      <div class="frow link-row" style="gap:12px" data-search="${esc([m.society, m.name, (m.type || "abstract") === "grant" ? "grant" : "abstract"].filter(Boolean).join(" ").toLowerCase())}">
         <input type="checkbox" class="link-mtg" data-mid="${m.id}" ${(m.studyIds || []).includes(studyId) ? "checked" : ""} style="flex:0;width:22px;height:22px">
         <label style="flex:1;min-width:0;font-weight:600;font-size:14px">${esc(m.society)} — ${esc(m.name)}<div style="font-weight:400;font-size:12px;color:var(--text2)">${(m.type||"abstract")==="grant"?"Grant":"Abstract"}${m.deadline?" · "+fmtDate(m.deadline):""}</div></label>
-      </div>`).join("") + `</div>`;
+      </div>`).join("") + `</div>
+    <div id="link-mtg-empty" style="display:none;color:var(--text2);font-size:14px;text-align:center;padding:20px 12px">No deadlines match your search.</div>`;
   openSheet("Link Deadlines", body, () => {
     const checkedIds = new Set([...document.querySelectorAll(".link-mtg")].filter(c => c.checked).map(c => c.dataset.mid));
     const changed = [];
@@ -1488,6 +1539,7 @@ function openStudyLinkSheet(studyId) {
     saveLocal(); changed.forEach(m => pushItem("meeting", m)); render();
     toast("Deadlines linked");
   });
+  bindSheetSearch("link-mtg-search", "#link-mtg-list .link-row", "link-mtg-empty");
 }
 
 function studyCardHTML(s) {
@@ -2558,7 +2610,10 @@ function selectHTML(id, options, selected) {
   return `<select id="${id}">` + options.map(o => `<option ${o === selected ? "selected" : ""}>${esc(o)}</option>`).join("") + `</select>`;
 }
 
-function openStudyForm(existing) {
+// `onCreated(newStudyId)` fires only for brand-new studies, after the save succeeds. It lets a
+// caller (e.g. the Link Projects sheet) hand off to the study form and then pick up where it
+// left off with the new study in hand.
+function openStudyForm(existing, onCreated) {
   if (blockOfflineEdit(existing ? "Editing a study" : "Adding a study")) return;
   const s = existing || { id: uid(), title: "", nickname: "", pi: "", team: "", design: "Prospective (Consented)", phase: "Concept", priority: "Medium", irb: "", irbStatus: "Not Submitted", start: todayStr(), notes: "", journal: "", submittedDate: "", journalTrackingId: "", revisionsReceivedDate: "", revisionsDeadline: "", milestones: [] };
   if (!s.grant) s.grant = { enabled: false, amount: "", source: "", awardDate: "", balance: "", expirationDate: "", balanceUpdatedDate: "" };
@@ -2655,6 +2710,7 @@ function openStudyForm(existing) {
       delete s.type;
       upsertStudy(s);
       toast(existing ? "Study updated" : "Study added");
+      if (!existing && onCreated) onCreated(s.id);
     });
   // When design changes, swap the phase list to that track
   document.getElementById("f-design").onchange = (e) => {
