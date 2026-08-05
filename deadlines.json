@@ -1,6 +1,6 @@
 {
   "_comment": "Abstract-deadline feed for Research Tracker. The biweekly scheduled task rewrites this file after checking each society. The app fetches it on load and merges any entry whose verifiedOn is newer. 'key' must stay stable so updates match the right meeting. Set unconfirmed=false only when a date is verified from the society's official call for abstracts.",
-  "updatedOn": "2026-07-13",
+  "updatedOn": "2026-08-03",
   "meetings": [
     {
       "key": "AAOS|2027 Annual Meeting",
@@ -11,7 +11,7 @@
       "location": "Las Vegas, NV",
       "link": "https://www.aaos.org/annual/explore-the-program/abstracts-applications/",
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "AAOS|Orthopaedic Video Theater (OVT)",
@@ -23,7 +23,19 @@
       "location": "Las Vegas, NV",
       "link": "https://www.aaos.org/annual/explore-the-program/abstracts-applications/",
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
+    },
+    {
+      "key": "AAOS|OrthoDome Video Submission",
+      "society": "AAOS",
+      "type": "abstract",
+      "name": "OrthoDome® Video Submission",
+      "deadline": "2026-08-31",
+      "dates": "OrthoDome video applications due August 31, 2026; non-CME, 7–12 min surgical technique videos narrated live at the 2027 Annual Meeting",
+      "location": "Las Vegas, NV",
+      "link": "https://www.aaos.org/annual/explore-the-program/abstracts-applications/",
+      "unconfirmed": false,
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "AANA|2027 Annual Meeting",
@@ -34,7 +46,7 @@
       "location": "Hollywood, FL",
       "link": "https://rise.aana.org/aanaimis/AnnualMeeting/Default.aspx",
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "ICRS|8th ICRS Summit (Porto)",
@@ -45,7 +57,7 @@
       "location": "Porto, Portugal",
       "link": "https://cartilage.org/8th-icrs-summit-porto-2026/",
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "ICRS|19th World Congress",
@@ -56,7 +68,7 @@
       "location": "Rotterdam, NL",
       "link": "https://cartilage.org/events/19worldcongress/",
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "AOSSM|2026 Annual Meeting",
@@ -67,7 +79,7 @@
       "location": "",
       "link": "https://www.sportsmed.org/education/abstract-and-instructional-course-submissions",
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "IPSG|2026 Annual Meeting",
@@ -93,7 +105,7 @@
       "criteria": "$20,000 award. Application deadline 7/1/2026 (no LOI). See the OREF RFA for eligibility and proposal requirements; apply via proposalCENTRAL.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "OREF|Mentored Clinician Scientist Grant",
@@ -108,7 +120,7 @@
       "criteria": "$20,000. Applicant must have been awarded an NIH 'K' (career development) award to apply. Application deadline 6/24/2026 (no LOI).",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "OREF|Resident Research Project Grant",
@@ -123,7 +135,7 @@
       "criteria": "$5,000. For orthopaedic residents. LOI due 4/22/2026; application deadline 6/24/2026.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45",
+      "verifiedOn": "2026-08-03T13:45",
       "loiDeadline": "2026-04-22"
     },
     {
@@ -139,7 +151,7 @@
       "criteria": "$20,000. For orthopaedic residents in clinician-scientist training. LOI due 4/22/2026; application deadline 6/24/2026. See OREF RFA on proposalCENTRAL.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45",
+      "verifiedOn": "2026-08-03T13:45",
       "loiDeadline": "2026-04-22"
     },
     {
@@ -155,7 +167,71 @@
       "criteria": "Honorary award (joint with ORS). Nomination-based; application deadline 9/11/2026.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
+    },
+    {
+      "key": "OREF|Career Development Grant",
+      "society": "OREF",
+      "type": "grant",
+      "name": "OREF Career Development Grant",
+      "deadline": "2026-10-15",
+      "dates": "$300,000 over three years · new 2027 Round 1 program · RFA released 7/15/2026",
+      "location": "",
+      "link": "https://www.oref.org/for-researchers/funding-opportunities/grant-details/oref-career-development-grant",
+      "aim": "Encourages investigators to commit to scientific research that may be basic, translational, clinical, and/or health sciences.",
+      "criteria": "$300,000 over three years. An orthopaedic surgeon must serve as PI, co-investigator, or MPI, licensed to practice and working in a U.S. institution; a PhD may serve as co-PI/MPI if holding a faculty appointment in a U.S. orthopaedic department. LOI due 8/13/2026; application deadline 10/15/2026. Full eligibility on the RFA via proposalCENTRAL.",
+      "funded": [],
+      "unconfirmed": false,
+      "verifiedOn": "2026-08-03T13:45",
+      "loiDeadline": "2026-08-13"
+    },
+    {
+      "key": "OREF|John W. Brown Early-Stage Investigator Grant",
+      "society": "OREF",
+      "type": "grant",
+      "name": "OREF/John W. Brown Early-Stage Investigator Enabling Technologies in Musculoskeletal Care Research Grant",
+      "deadline": "2026-10-15",
+      "dates": "$100,000 · new 2027 Round 1 program · RFA released 7/15/2026",
+      "location": "",
+      "link": "https://www.oref.org/for-researchers/funding-opportunities/grant-details/oref-john-w-brown-early-stage-investigator-enabling-technologies-in-musculoskeletal-care-research-grant",
+      "aim": "Solicits investigator-initiated research on enabling technologies in musculoskeletal health care; honors former Stryker CEO John W. Brown. Preference for innovative technologies with expected clinical benefit.",
+      "criteria": "$100,000. PI must be an early-stage investigator (completed terminal research degree or post-graduate clinical training within the past 10 years, no prior successful NIH R01-equivalent as PI). An orthopaedic surgeon must be part of the project as PI, co-PI, co-I, or MPI. LOI due 8/13/2026; application deadline 10/15/2026.",
+      "funded": [],
+      "unconfirmed": false,
+      "verifiedOn": "2026-08-03T13:45",
+      "loiDeadline": "2026-08-13"
+    },
+    {
+      "key": "OREF|New Investigator Grant",
+      "society": "OREF",
+      "type": "grant",
+      "name": "OREF New Investigator Grant",
+      "deadline": "2026-10-15",
+      "dates": "$50,000 · new 2027 Round 1 program · RFA released 7/15/2026",
+      "location": "",
+      "link": "https://www.oref.org/for-researchers/funding-opportunities/grant-details/oref-new-investigator--grant",
+      "aim": "Advances the scientific training of the next generation of orthopaedic clinician scientists via seed and start-up funding.",
+      "criteria": "$50,000. PI must be an orthopaedic surgeon licensed and working in a U.S. institution; residents, fellows, and surgeons who completed formal training within the last 4 years may apply. LOI due 8/13/2026; application deadline 10/15/2026.",
+      "funded": [],
+      "unconfirmed": false,
+      "verifiedOn": "2026-08-03T13:45",
+      "loiDeadline": "2026-08-13"
+    },
+    {
+      "key": "OREF|Multimodal Musculoskeletal Perioperative Pain Management Grant",
+      "society": "OREF",
+      "type": "grant",
+      "name": "OREF Multimodal Musculoskeletal Perioperative Pain Management Grant",
+      "deadline": "2026-10-15",
+      "dates": "$45,000 · in collaboration with the American Association of Nurse Anesthetists (AANA) Foundation — not to be confused with the Arthroscopy Association of North America · new 2027 Round 1 program · RFA released 7/15/2026",
+      "location": "",
+      "link": "https://www.oref.org/for-researchers/funding-opportunities/grant-details/pain-management",
+      "aim": "Funds investigator-initiated research on perioperative musculoskeletal pain management, including opioid-sparing multimodal techniques and regional anesthesia approaches.",
+      "criteria": "$45,000. PI or co-PI must be a Certified Registered Nurse Anesthetist (CRNA) in good standing with NBCRNA, optionally with a collaborating PhD and/or MD; a PhD may serve as PI if a CRNA serves as co-PI. LOI due 8/13/2026; application deadline 10/15/2026.",
+      "funded": [],
+      "unconfirmed": false,
+      "verifiedOn": "2026-08-03T13:45",
+      "loiDeadline": "2026-08-13"
     },
     {
       "key": "AOSSM|AF Hip Osteoarthritis Grant",
@@ -174,7 +250,7 @@
         "Mechanical Loading Effects in OA Progression Following ACL Reconstruction — Camila B. Carballo, PT, PhD (2019)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45",
+      "verifiedOn": "2026-08-03T13:45",
       "loiDeadline": "2026-04-17"
     },
     {
@@ -194,7 +270,7 @@
         "Evaluating the Efficacy of Erector Spinae Block in Routine Hip Arthroscopy — Benjamin Coobs, MD (2022)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "AOSSM|JRF Ortho Allograft Grant",
@@ -213,7 +289,7 @@
         "Nonorthotopic osteochondral allograft transplantation to the femoral head — Christopher Nagelli, PhD (2023)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "AOSSM|Arnoczky Young Investigator Grant",
@@ -232,7 +308,7 @@
         "Sex Differences in FAIS Hip Synovium Leading to Differences in Outcomes — Stephanie Wong, MD (2023, Basic)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "AOSSM|Playmaker Grant Lab",
@@ -251,7 +327,7 @@
         "Valgus Force on the UCL During Batter's Swing and Hitting Motion — Bradley A. Lezak, MD (2025)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "AOSSM|MAST Research Initiative Grant",
@@ -266,7 +342,7 @@
       "criteria": "New for 2026. $150,000 total funding pool. Joint initiative among AOSSM, the Arthroscopy Association of North America (AANA), and the Society of Military Orthopaedic Surgeons (SOMOS) for research pertaining to the military population or general population. Apply via Proposal Central by 8/7/2026.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "AANA|Research Grant",
@@ -281,7 +357,7 @@
       "criteria": "Funding pool up to $200,000: one project at $100,000 (preference for a multicenter trial), plus $50,000 and $25,000 seed/pilot awards. 2026 submission site is currently closed; future timelines TBA.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-07-13T18:45"
+      "verifiedOn": "2026-08-03T13:45"
     },
     {
       "key": "AAOS|OREF Clinical Gaps Research Grant",
