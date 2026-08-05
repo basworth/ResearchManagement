@@ -541,7 +541,7 @@ function setSub(soc, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [], profiles: [] };
+let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [] };
 let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
@@ -672,6 +672,8 @@ function migrate() {
   // Team used to be free text ("Chen, Lee (fellow)"). Convert to an array of canonical names so
   // the Studies/Worklist "Mine" filter can match people reliably instead of by substring luck.
   state.studies.forEach(s => { s.team = namesFromField(s.team); });
+  if (!state.rosterDegrees || typeof state.rosterDegrees !== "object" || Array.isArray(state.rosterDegrees)) state.rosterDegrees = {};
+  state.studies.forEach(s => { if (s.authors != null && !Array.isArray(s.authors)) s.authors = []; });
   if (!Array.isArray(state.roster)) state.roster = [];
   // The roster is derived from the data itself, so every device computes the same list without
   // needing an extra write. Union of: existing roster + study PIs + study teams + task assignees.
@@ -822,7 +824,7 @@ async function handleAuthChange(event, session) {
     // Clear the local cache on sign-out so a shared computer doesn't keep showing data after
     // the account that pulled it down has signed out.
     localStorage.removeItem("rt-data");
-    state = { studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [], profiles: [] };
+    state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [] };
     showLoginScreen();
   }
 }
@@ -860,13 +862,14 @@ async function pullAll() {
     state.profiles = data.filter(r => r.kind === "profile").map(r => r.data);
     const meta = data.find(r => r.kind === "meta");
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
+    if (meta && meta.data.degrees && typeof meta.data.degrees === "object") state.rosterDegrees = meta.data.degrees;
     data.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; });
     migrate();
     saveLocal();
     render();
   }
 }
-function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster }); }
+function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {} }); }
 async function pushItem(kind, obj) {
   if (!sb) return;
   try {
@@ -1156,6 +1159,36 @@ function canonName(n) {
   if (direct) return direct;
   const stripped = stripDegrees(raw);
   return NAME_ALIASES[stripped.toLowerCase()] || stripped;
+}
+// Degrees are stored per person (not baked into the name) so author lists can render the
+// manuscript form — "Adam Yanke, MD, PhD" — while the app keeps matching on the plain name.
+const DEGREE_OPTIONS = ["BA", "BS", "MS", "MPH", "MBA", "MD", "DO", "PhD", "MBBS", "PharmD",
+  "DPT", "MPT", "RN", "NP", "PA-C", "JD", "ScD", "MHA", "ATC"];
+function degreesFor(name) {
+  const d = (state.rosterDegrees || {})[canonName(name)];
+  return Array.isArray(d) ? d : [];
+}
+function setDegreesFor(name, degrees) {
+  state.rosterDegrees = state.rosterDegrees || {};
+  const key = canonName(name);
+  if (degrees && degrees.length) state.rosterDegrees[key] = degrees.slice();
+  else delete state.rosterDegrees[key];
+  saveLocal(); pushRoster();
+}
+// "Adam Yanke, MD, PhD" — the form you'd paste into a manuscript.
+function authorName(name) {
+  const n = canonName(name);
+  const d = degreesFor(n);
+  return d.length ? `${n}, ${d.join(", ")}` : n;
+}
+// Proposed author list for a study. Seeded from the team (PI last, as senior author) until
+// someone reorders it, at which point the explicit order is saved on the study.
+function authorsFor(s) {
+  if (Array.isArray(s.authors) && s.authors.length) return s.authors.map(canonName);
+  const seeded = (s.team || []).map(canonName).filter(Boolean);
+  const pi = canonName(s.pi);
+  if (pi && !seeded.includes(pi)) seeded.push(pi);
+  return seeded;
 }
 // Accepts either an array (new format) or a comma-separated string (legacy free text) and
 // returns a de-duplicated array of canonical names.
@@ -1880,6 +1913,84 @@ function linkFieldRow(label, id, value) {
     ${value ? `<a href="${esc(value)}" target="_blank" rel="noopener" style="flex:none;color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:9px 2px">Open ↗</a>` : ""}
   </div>`;
 }
+function authorsBodyHTML(s) {
+  const authors = authorsFor(s);
+  const custom = Array.isArray(s.authors) && s.authors.length;
+  const addable = state.roster.filter(n => !authors.includes(canonName(n)));
+  return `
+    <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-bottom:10px">
+      ${custom
+        ? `Custom order saved. First author at the top, senior author last.`
+        : `Auto-filled from the project team (PI last, as senior author). Reorder to save your own list.`}
+    </div>
+    ${authors.length ? authors.map((n, i) => `
+      <div class="task-row" style="padding:7px 0;gap:8px">
+        <span style="min-width:20px;font-size:12px;color:var(--text2);font-weight:700">${i + 1}</span>
+        <div style="flex:1;min-width:0;font-size:14.5px">${esc(authorName(n))}${degreesFor(n).length ? "" : ` <span style="font-size:11.5px;color:var(--orange)">no degrees set</span>`}</div>
+        <button class="mini-btn" data-author-up="${i}" style="margin-top:0;flex:0 0 auto"${i === 0 ? " disabled" : ""}>↑</button>
+        <button class="mini-btn" data-author-down="${i}" style="margin-top:0;flex:0 0 auto"${i === authors.length - 1 ? " disabled" : ""}>↓</button>
+        <span data-author-del="${i}" style="cursor:pointer;font-weight:800;color:var(--red);padding:0 4px">×</span>
+      </div>`).join("")
+      : `<div style="color:var(--text2);font-size:14px">No authors yet — add people to the project team, or pick someone below.</div>`}
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+      <select id="author-add" style="flex:1;-webkit-appearance:none;appearance:none;background:var(--bg);border:none;border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+        <option value="">Add an author…</option>
+        ${addable.map(n => `<option value="${esc(n)}">${esc(authorName(n))}</option>`).join("")}
+      </select>
+    </div>
+    <button class="btn secondary" id="authors-copy" style="margin-top:10px">Copy author list</button>
+    ${custom ? `<button class="btn secondary" id="authors-reset" style="margin-top:8px">Reset to project team</button>` : ""}`;
+}
+function bindAuthorsSection(root, s) {
+  const save = (list, msg) => {
+    s.authors = list.map(canonName);
+    upsertStudy(s);
+    if (msg) toast(msg);
+  };
+  root.querySelectorAll("[data-author-up]").forEach(b => b.onclick = () => {
+    const i = +b.dataset.authorUp, list = authorsFor(s);
+    if (i <= 0) return;
+    [list[i - 1], list[i]] = [list[i], list[i - 1]];
+    save(list, `${list[i - 1]} moved up`);
+  });
+  root.querySelectorAll("[data-author-down]").forEach(b => b.onclick = () => {
+    const i = +b.dataset.authorDown, list = authorsFor(s);
+    if (i >= list.length - 1) return;
+    [list[i + 1], list[i]] = [list[i], list[i + 1]];
+    save(list, `${list[i + 1]} moved down`);
+  });
+  root.querySelectorAll("[data-author-del]").forEach(b => b.onclick = () => {
+    const i = +b.dataset.authorDel, list = authorsFor(s);
+    const gone = list[i];
+    list.splice(i, 1);
+    save(list, `${gone} removed from the author list`);
+  });
+  const add = root.querySelector("#author-add");
+  if (add) add.onchange = (e) => {
+    if (!e.target.value) return;
+    const list = authorsFor(s);
+    list.push(canonName(e.target.value));
+    save(list, `${canonName(e.target.value)} added as an author`);
+  };
+  const copy = root.querySelector("#authors-copy");
+  if (copy) copy.onclick = async () => {
+    const text = authorsFor(s).map(authorName).join(", ");
+    if (!text) { toast("No authors to copy"); return; }
+    try {
+      await navigator.clipboard.writeText(text);
+      toast("Author list copied");
+    } catch (e) {
+      // Clipboard API needs a secure context / permission — fall back to a selectable prompt.
+      window.prompt("Copy the author list:", text);
+    }
+  };
+  const reset = root.querySelector("#authors-reset");
+  if (reset) reset.onclick = () => {
+    delete s.authors;
+    upsertStudy(s);
+    toast("Author list reset to the project team");
+  };
+}
 function bindLinkFieldRow(root, id, s, key) {
   const el = root.querySelector("#" + id);
   if (!el) return;
@@ -1967,6 +2078,8 @@ function renderStudyDetail() {
   ${collapsibleSection("enrollment", "Enrollment", enrollmentBodyHTML(s))}
   ${s.grant && s.grant.enabled ? collapsibleSection("grant", "Grant & Award Funding", grantBodyHTML(s)) : ""}
   ${s.phase === "Initiation" ? collapsibleSection("initiation", "Initiation Checklist", initiationBodyHTML(s)) : ""}
+
+  ${collapsibleSection("authors", "Proposed Authors", authorsBodyHTML(s))}
 
   ${collapsibleSection("workingDocs", "Working Documents", `
     ${linkFieldRow("Working Abstract", "wd-abstract", s.workingAbstractLink)}
@@ -2323,6 +2436,7 @@ function renderStudyDetail() {
     toast("Abstract removed from history");
   });
 
+  bindAuthorsSection($main, s);
   bindTaskRows();
   bindCollapsibleSections($main);
 }
@@ -2565,10 +2679,17 @@ function renderSettings() {
   <button class="btn danger" id="sign-out-btn">Sign Out</button>
 
   <div class="card">
-    <div style="font-size:12px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin-bottom:10px">TEAM MEMBERS — used for task assignment</div>
-    <div class="chip-row">
-      ${state.roster.length ? state.roster.map(n => `<span class="badge outline" style="font-size:13px;padding:6px 12px">${esc(n)}<span data-roster-del="${esc(n)}" style="cursor:pointer;font-weight:800;margin-left:6px;color:var(--red)">×</span></span>`).join("") : `<span style="color:var(--text2);font-size:14px">No members yet.</span>`}
-    </div>
+    <div style="font-size:12px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin-bottom:4px">TEAM MEMBERS — used for task assignment &amp; author lists</div>
+    <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-bottom:10px">Tap <b>Degrees</b> to set someone's credentials — they're kept out of the name itself and only appear on author lists.</div>
+    ${state.roster.length ? state.roster.map(n => `
+      <div class="task-row" style="padding:8px 0;gap:10px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14.5px;font-weight:600">${esc(n)}</div>
+          ${degreesFor(n).length ? `<div style="font-size:12px;color:var(--text2);margin-top:2px">${esc(degreesFor(n).join(", "))}</div>` : ""}
+        </div>
+        <button class="mini-btn" data-degrees-for="${esc(n)}" style="margin-top:0;flex:0 0 auto">Degrees</button>
+        <span data-roster-del="${esc(n)}" style="cursor:pointer;font-weight:800;color:var(--red);padding:0 4px">×</span>
+      </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No members yet.</div>`}
     <div style="display:flex;gap:8px;margin-top:12px">
       <input id="roster-name" placeholder="Add team member" style="flex:1;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
       <button id="roster-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:15px;cursor:pointer">Add</button>
@@ -2650,6 +2771,7 @@ function renderSettings() {
     state.roster.push(n); state.roster.sort();
     saveLocal(); pushRoster(); render(); toast(n + " added");
   };
+  $main.querySelectorAll("[data-degrees-for]").forEach(b => b.onclick = () => openDegreesSheet(b.dataset.degreesFor));
   $main.querySelectorAll("[data-roster-del]").forEach(b => b.onclick = () => {
     const gone = b.dataset.rosterDel;
     state.roster = state.roster.filter(x => x !== gone);
@@ -2765,6 +2887,45 @@ function teamPickerRowsHTML(selectedNames) {
       <span style="flex:1;min-width:0;font-size:15px">${esc(n)}</span>
     </label>`).join("");
 }
+// Multi-select degree picker for one roster member. Anyone signed in can set these, so degrees
+// exist for people who haven't made an account yet and author lists work right away.
+function openDegreesSheet(name) {
+  if (blockOfflineEdit("Editing degrees")) return;
+  const person = canonName(name);
+  const current = degreesFor(person);
+  const extra = current.filter(d => !DEGREE_OPTIONS.includes(d));
+  openSheet(`${person}'s Degrees`, `
+    <div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">Tick every degree that should appear after their name on an author list. Order follows the list below.</div>
+    <div class="fgroup">
+      ${DEGREE_OPTIONS.concat(extra).map(d => `
+        <label class="frow" style="gap:12px;cursor:pointer">
+          <input type="checkbox" class="degree-pick" data-degree="${esc(d)}" ${current.includes(d) ? "checked" : ""} style="flex:0;width:20px;height:20px">
+          <span style="flex:1;font-size:15px">${esc(d)}</span>
+        </label>`).join("")}
+    </div>
+    <div class="fgroup">
+      <div class="frow"><label>Other</label><input id="f-degree-other" placeholder="e.g. MSc — comma-separated"></div>
+    </div>
+    <div style="font-size:13px;color:var(--text2);margin:0 2px">Preview: <b id="degree-preview">${esc(authorName(person))}</b></div>`,
+    () => {
+      const picked = [...document.querySelectorAll(".degree-pick")].filter(c => c.checked).map(c => c.dataset.degree);
+      const other = document.getElementById("f-degree-other").value.split(",").map(x => x.trim()).filter(Boolean);
+      const all = [...new Set(picked.concat(other))];
+      setDegreesFor(person, all);
+      render();
+      toast(all.length ? `${person}, ${all.join(", ")}` : `Degrees cleared for ${person}`);
+    });
+  // Live preview so it's obvious what the author list will read like.
+  const refresh = () => {
+    const picked = [...document.querySelectorAll(".degree-pick")].filter(c => c.checked).map(c => c.dataset.degree);
+    const other = document.getElementById("f-degree-other").value.split(",").map(x => x.trim()).filter(Boolean);
+    const all = [...new Set(picked.concat(other))];
+    document.getElementById("degree-preview").textContent = all.length ? `${person}, ${all.join(", ")}` : person;
+  };
+  document.querySelectorAll(".degree-pick").forEach(c => c.onchange = refresh);
+  document.getElementById("f-degree-other").oninput = refresh;
+}
+
 function openStudyForm(existing, onCreated) {
   if (blockOfflineEdit(existing ? "Editing a study" : "Adding a study")) return;
   const s = existing || { id: uid(), title: "", nickname: "", pi: "", team: "", design: "Prospective (Consented)", phase: "Concept", priority: "Medium", irb: "", irbStatus: "Not Submitted", start: todayStr(), notes: "", journal: "", submittedDate: "", journalTrackingId: "", revisionsReceivedDate: "", revisionsDeadline: "", milestones: [] };
