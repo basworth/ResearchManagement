@@ -551,7 +551,7 @@ let studySearchQuery = "";
 // member, or task assignee; gracefully shows everything if no identity is set), "all", or
 // another exact roster name to peek at someone else's projects.
 let personFilter = "mine";
-let taskFilter = "Open";
+let taskFilter = "Mine";
 let detailStudyId = null;
 // Centralized "navigate into a study" entry point. Resets the collapsible-section state (see
 // sectionStateForStudy / studySectionState below) so every fresh open recomputes open/closed
@@ -666,12 +666,22 @@ function migrate() {
     if (!Array.isArray(t.assignees)) t.assignees = t.assignee ? [t.assignee] : [];
     delete t.assignee;
   });
+  // Deadlines the team has decided not to pursue: kept on file (so the feed refresh doesn't keep
+  // re-suggesting them) but hidden from the dashboard boards.
+  state.meetings.forEach(m => { if (typeof m.hidden !== "boolean") m.hidden = false; });
+  // Team used to be free text ("Chen, Lee (fellow)"). Convert to an array of canonical names so
+  // the Studies/Worklist "Mine" filter can match people reliably instead of by substring luck.
+  state.studies.forEach(s => { s.team = namesFromField(s.team); });
   if (!Array.isArray(state.roster)) state.roster = [];
-  if (!state.roster.length) {
-    const names = new Set();
-    state.tasks.forEach(t => (t.assignees || []).forEach(a => { if (a) names.add(a); }));
-    state.roster = [...names].sort();
-  }
+  // The roster is derived from the data itself, so every device computes the same list without
+  // needing an extra write. Union of: existing roster + study PIs + study teams + task assignees.
+  const names = new Set(state.roster.map(canonName).filter(Boolean));
+  state.studies.forEach(s => {
+    namesFromField(s.pi).forEach(n => names.add(n));
+    (s.team || []).forEach(n => names.add(n));
+  });
+  state.tasks.forEach(t => (t.assignees || []).forEach(a => { const n = canonName(a); if (n) names.add(n); }));
+  state.roster = [...names].sort((a, b) => a.localeCompare(b));
 }
 
 /* ============ Supabase sync (required — gated behind login) ============ */
@@ -1111,6 +1121,34 @@ function dueLabel(d) {
   }
   return "Due " + fmtDate(d);
 }
+// Years of free-text entry left the same person spelled several ways across studies ("Zach",
+// "Zach O", "Zachary Oppenheim BS"). These map every known variant onto one canonical name so a
+// person's whole back catalogue links to their account when they pick their name at login.
+// Keys are lowercased; anything not listed passes through unchanged.
+const NAME_ALIASES = {
+  "yanke": "Adam Yanke", "adam b. yanke md phd": "Adam Yanke", "adam yanke md phd": "Adam Yanke",
+  "cat": "Catherine Yuh",
+  "tj": "TJ Turinske", "tj t": "TJ Turinske",
+  "will": "William Lee", "will l": "William Lee",
+  "divesh": "Divesh Sachdev", "divesh sachdev bs": "Divesh Sachdev",
+  "kofi": "Kofi Acheampong", "kofi acheampong bs": "Kofi Acheampong",
+  "zach": "Zachary Oppenheim", "zach o": "Zachary Oppenheim", "zachary oppenheim bs": "Zachary Oppenheim",
+  "jay": "Jay A", "jay a": "Jay A",
+  "lesly honore bs": "Lesly Honore",
+  "jakob ackerman md": "Jakob Ackerman"
+};
+function canonName(n) {
+  const raw = (n || "").trim();
+  return NAME_ALIASES[raw.toLowerCase()] || raw;
+}
+// Accepts either an array (new format) or a comma-separated string (legacy free text) and
+// returns a de-duplicated array of canonical names.
+function namesFromField(v) {
+  const list = Array.isArray(v) ? v : String(v || "").split(",");
+  const out = [];
+  list.forEach(x => { const n = canonName(x); if (n && !out.includes(n)) out.push(n); });
+  return out;
+}
 function studyById(id) { return state.studies.find(s => s.id === id); }
 function isActive(s) { return s.phase !== "Published" && s.phase !== "On Hold"; }
 // True if `name` is the PI, appears in the free-text Team field, or is assigned to any task
@@ -1118,9 +1156,18 @@ function isActive(s) { return s.phase !== "Published" && s.phase !== "On Hold"; 
 function studyInvolvesPerson(s, name) {
   const n = (name || "").trim().toLowerCase();
   if (!n) return true;
+  // Preferred path: exact match on canonical names, so "Yanke" on an old study still resolves to
+  // "Adam Yanke". The substring checks below stay as a fallback for anything the alias map
+  // doesn't cover (e.g. a team entry written as "Chen (postdoc)").
+  const canon = canonName(name).toLowerCase();
+  const people = namesFromField(s.pi).concat(s.team || []).map(x => x.toLowerCase());
+  if (people.includes(canon)) return true;
   if ((s.pi || "").toLowerCase().includes(n)) return true;
-  if ((s.team || "").toLowerCase().includes(n)) return true;
-  return state.tasks.some(t => t.studyId === s.id && (t.assignees || []).some(a => (a || "").trim().toLowerCase() === n));
+  if ((Array.isArray(s.team) ? s.team.join(", ") : (s.team || "")).toLowerCase().includes(n)) return true;
+  return state.tasks.some(t => t.studyId === s.id && (t.assignees || []).some(a => {
+    const A = (a || "").trim().toLowerCase();
+    return A === n || canonName(a).toLowerCase() === canon;
+  }));
 }
 // Free-text search across the fields someone would actually search by: title, nickname,
 // PI, IRB/ORA number, and the free-text team field. Used by both the Studies list and the
@@ -1128,7 +1175,8 @@ function studyInvolvesPerson(s, name) {
 function studyMatchesSearch(s, query) {
   const q = (query || "").trim().toLowerCase();
   if (!q) return true;
-  return [s.title, s.nickname, s.pi, s.irb, s.team].some(v => (v || "").toLowerCase().includes(q));
+  const team = Array.isArray(s.team) ? s.team.join(", ") : (s.team || "");
+  return [s.title, s.nickname, s.pi, s.irb, team].some(v => (v || "").toLowerCase().includes(q));
 }
 // Renders a text search box (magnifying-glass icon + optional clear button). Paired with
 // bindSearchBox() below, which wires it up so re-rendering on every keystroke doesn't steal
@@ -1376,7 +1424,7 @@ function dashboardHTML() {
     // main application/abstract deadline. They're listed individually but visibly linked.
     const entries = [];
     state.meetings
-      .filter(m => (m.type || "abstract") === type && sub[m.society] !== false)
+      .filter(m => (m.type || "abstract") === type && sub[m.society] !== false && !m.hidden)
       .forEach(m => {
         if (m.loiDeadline && daysUntil(m.loiDeadline) >= 0) entries.push({ m, stage: "loi", date: m.loiDeadline });
         if (m.deadline && daysUntil(m.deadline) >= 0) entries.push({ m, stage: "main", date: m.deadline });
@@ -1835,7 +1883,7 @@ function renderStudyDetail() {
     ${isActive(s) ? `<div class="phase-stepper">${stepperPhases.map((p, i) => `<span class="${i <= stepperPhases.indexOf(s.phase) ? "on" : ""}"></span>`).join("")}</div>` : ""}
     <div class="meta" style="font-size:13.5px;color:var(--text2);margin-top:8px;line-height:1.6">
       ${s.pi ? `<b>PI:</b> ${esc(s.pi)}<br>` : ""}
-      ${s.team ? `<b>Team:</b> ${esc(s.team)}<br>` : ""}
+      ${(s.team || []).length ? `<b>Team:</b> ${esc((s.team || []).join(", "))}<br>` : ""}
       <b>Design:</b> ${esc(s.design || "—")} · <b>Priority:</b> <span style="color:${PRIORITY_COLORS[s.priority] || "inherit"}">${esc(s.priority || "Medium")}</span>
       ${s.journal ? `<br><b>Journal:</b> ${esc(s.journal)}` : ""}
       ${s.submittedDate ? `<br><b>Submitted on:</b> ${fmtDate(s.submittedDate)}` : ""}
@@ -2466,7 +2514,7 @@ function renderSettings() {
       <div class="task-row" style="padding:9px 16px;cursor:pointer" data-meeting-edit="${m.id}">
         <div style="flex:1;min-width:0">
           <div style="font-size:14.5px;font-weight:600"><span class="badge" style="background:var(--indigo);font-size:10px;padding:2px 7px;margin-right:6px">${esc(m.society)}</span>${esc(m.name)}</div>
-          <div style="font-size:12px;color:var(--text2);margin-top:2px">${(m.type || "abstract") === "grant" ? "Grant" : "Abstract"} · ${m.deadline ? "Due " + fmtDate(m.deadline) : "No deadline set"}${m.unconfirmed ? " · ⚠︎ unconfirmed" : ""}</div>
+          <div style="font-size:12px;color:var(--text2);margin-top:2px">${(m.type || "abstract") === "grant" ? "Grant" : "Abstract"} · ${m.deadline ? "Due " + fmtDate(m.deadline) : "No deadline set"}${m.unconfirmed ? " · ⚠︎ unconfirmed" : ""}${m.hidden ? ` · <span style="color:var(--orange);font-weight:700">hidden</span>` : ""}</div>
         </div>
         <span style="color:var(--text2);font-size:18px">›</span>
       </div>`).join("") : `<div style="color:var(--text2);font-size:14px;padding:8px 16px">No meetings tracked yet.</div>`}
@@ -2613,6 +2661,18 @@ function selectHTML(id, options, selected) {
 // `onCreated(newStudyId)` fires only for brand-new studies, after the save succeeds. It lets a
 // caller (e.g. the Link Projects sheet) hand off to the study form and then pick up where it
 // left off with the new study in hand.
+// Checkbox rows for the study form's Team picker. Anyone already on the study is shown (and
+// ticked) even if they somehow aren't in the roster, so an edit can never silently drop someone.
+function teamPickerRowsHTML(selectedNames) {
+  const picked = (selectedNames || []).map(canonName);
+  const all = [...new Set(state.roster.concat(picked))].sort((a, b) => a.localeCompare(b));
+  if (!all.length) return `<div style="color:var(--text2);font-size:13.5px;padding:12px 10px">No people on file yet — add someone below.</div>`;
+  return all.map(n => `
+    <label class="frow team-row" style="gap:12px;cursor:pointer" data-search="${esc(n.toLowerCase())}">
+      <input type="checkbox" class="f-team-pick" data-name="${esc(n)}" ${picked.includes(n) ? "checked" : ""} style="flex:0;width:20px;height:20px">
+      <span style="flex:1;min-width:0;font-size:15px">${esc(n)}</span>
+    </label>`).join("");
+}
 function openStudyForm(existing, onCreated) {
   if (blockOfflineEdit(existing ? "Editing a study" : "Adding a study")) return;
   const s = existing || { id: uid(), title: "", nickname: "", pi: "", team: "", design: "Prospective (Consented)", phase: "Concept", priority: "Medium", irb: "", irbStatus: "Not Submitted", start: todayStr(), notes: "", journal: "", submittedDate: "", journalTrackingId: "", revisionsReceivedDate: "", revisionsDeadline: "", milestones: [] };
@@ -2626,9 +2686,23 @@ function openStudyForm(existing, onCreated) {
       <div class="frow"><label>Title</label><input id="f-title" placeholder="IRB study name / title" value="${esc(s.title)}"></div>
       <div class="frow"><label>Nickname</label><input id="f-nickname" placeholder="Short name (e.g. ACL Registry)" value="${esc(s.nickname || "")}"></div>
       <div class="frow"><label>PI</label><input id="f-pi" list="dl-pis" placeholder="Principal investigator" value="${esc(s.pi)}"></div>
-      <div class="frow"><label>Team</label><input id="f-team" placeholder="Co-Is, coordinators…" value="${esc(s.team || "")}"></div>
     </div>
     <datalist id="dl-pis">${PIS.map(p => `<option value="${esc(p)}">`).join("")}</datalist>
+    <div class="fgroup">
+      <div class="frow" style="display:block">
+        <label style="display:block;margin-bottom:8px">Team</label>
+        <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-bottom:10px">Tick everyone working on this project — it shows up under their "My Projects" filter.</div>
+        ${sheetSearchHTML("f-team-search", "Search people…")}
+        <div id="f-team-list" style="max-height:200px;overflow-y:auto;background:var(--bg);border-radius:10px;padding:2px 0">
+          ${teamPickerRowsHTML(s.team || [])}
+        </div>
+        <div id="f-team-empty" style="display:none;color:var(--text2);font-size:13.5px;text-align:center;padding:16px 8px">No one matches that search.</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+          <input id="f-team-new" placeholder="Add someone not listed" style="flex:1">
+          <button type="button" class="mini-btn" id="f-team-add" style="margin-top:0;flex:0 0 auto">Add</button>
+        </div>
+      </div>
+    </div>
     <div class="fgroup">
       <div class="frow"><label>Design</label>${selectHTML("f-design", DESIGNS, s.design)}</div>
       <div class="frow"><label>Phase</label>${selectHTML("f-phase", TRACK_PHASES[s.design] || TRACK_PHASES[DESIGNS[0]], s.phase)}</div>
@@ -2682,7 +2756,7 @@ function openStudyForm(existing, onCreated) {
         title,
         nickname: document.getElementById("f-nickname").value.trim(),
         pi: document.getElementById("f-pi").value.trim(),
-        team: document.getElementById("f-team").value.trim(),
+        team: [...document.querySelectorAll(".f-team-pick")].filter(c => c.checked).map(c => c.dataset.name),
         design: document.getElementById("f-design").value,
         phase: document.getElementById("f-phase").value,
         priority: document.getElementById("f-priority").value,
@@ -2712,6 +2786,27 @@ function openStudyForm(existing, onCreated) {
       toast(existing ? "Study updated" : "Study added");
       if (!existing && onCreated) onCreated(s.id);
     });
+  bindSheetSearch("f-team-search", "#f-team-list .team-row", "f-team-empty");
+  // Adding someone new: append them ticked, add to the roster, and clear the search so the new
+  // row is definitely visible rather than filtered out by a stale query.
+  const addTeamMember = () => {
+    const input = document.getElementById("f-team-new");
+    const name = canonName(input.value);
+    if (!name) return;
+    if (!state.roster.includes(name)) { state.roster.push(name); state.roster.sort((a, b) => a.localeCompare(b)); pushRoster(); }
+    const picked = [...document.querySelectorAll(".f-team-pick")].filter(c => c.checked).map(c => c.dataset.name);
+    if (!picked.includes(name)) picked.push(name);
+    document.getElementById("f-team-list").innerHTML = teamPickerRowsHTML(picked);
+    const search = document.getElementById("f-team-search");
+    search.value = "";
+    search.dispatchEvent(new Event("input"));
+    input.value = "";
+    toast(name + " added");
+  };
+  document.getElementById("f-team-add").onclick = addTeamMember;
+  document.getElementById("f-team-new").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); addTeamMember(); }
+  });
   // When design changes, swap the phase list to that track
   document.getElementById("f-design").onchange = (e) => {
     const phases = TRACK_PHASES[e.target.value];
@@ -2795,7 +2890,9 @@ function openMeetingForm(existing) {
       <div class="frow"><label>Location</label><input id="f-mloc" placeholder="City" value="${esc(m.location || "")}"></div>
       <div class="frow"><label>Link</label><input id="f-mlink" placeholder="Call-for-abstracts / grant URL" value="${esc(m.link || "")}" autocapitalize="off" autocorrect="off"></div>
       <div class="frow"><label>Unconfirmed</label><input type="checkbox" id="f-municonf" ${m.unconfirmed ? "checked" : ""} style="flex:0;width:22px;height:22px"></div>
+      <div class="frow"><label>Not submitting</label><input type="checkbox" id="f-mhidden" ${m.hidden ? "checked" : ""} style="flex:0;width:22px;height:22px"></div>
     </div>
+    <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:-6px 4px 12px 4px">Tick <b>Not submitting</b> to hide this from the dashboard deadline boards. It stays on file (so the deadline feed won't keep re-adding it) and you can un-hide it any time from Settings → Tracked Meetings.</div>
     <div id="grant-fields" style="display:${(m.type || "abstract") === "grant" ? "block" : "none"}">
       <div class="fgroup">
         <div class="frow"><textarea id="f-maim" placeholder="Aim — one sentence describing the grant's purpose">${esc(m.aim || "")}</textarea></div>
@@ -2826,6 +2923,7 @@ function openMeetingForm(existing) {
         location: document.getElementById("f-mloc").value.trim(),
         link: document.getElementById("f-mlink").value.trim(),
         unconfirmed: document.getElementById("f-municonf").checked,
+        hidden: document.getElementById("f-mhidden").checked,
         aim: document.getElementById("f-maim").value.trim(),
         criteria: document.getElementById("f-mcrit").value.trim(),
         funded: document.getElementById("f-mfunded").value.split("\n").map(x => x.trim()).filter(Boolean)
@@ -2953,7 +3051,14 @@ async function fetchDeadlineFeed() {
 
 /* ============ Wiring ============ */
 document.querySelectorAll("nav.tabbar button").forEach(b => {
-  b.onclick = () => { tab = b.dataset.tab; if (tab !== "studies") detailStudyId = null; render(); };
+  b.onclick = () => {
+    tab = b.dataset.tab;
+    // Tapping a tab is a "take me to the top of this section" gesture: always leave the study
+    // detail view (even when tapping Studies from inside a project) and reset Tasks to "Mine".
+    detailStudyId = null;
+    if (tab === "tasks") taskFilter = "Mine";
+    render();
+  };
 });
 // Desktop-only collapsible + resizable dashboard sidebar
 const SIDEBAR_MIN_WIDTH = 220, SIDEBAR_MAX_WIDTH = 560;
