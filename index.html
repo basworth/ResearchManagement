@@ -268,6 +268,16 @@
   }
   .seg button.active { background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
 
+  /* Checkbox rows in the link sheets. The generic ".frow input" rule above sets flex:1 and
+     background:none, which on Safari/iOS can render a checkbox invisible and shrink it oddly —
+     so restore the native control explicitly and give it a fixed size. */
+  .link-row input[type="checkbox"], .team-row input[type="checkbox"] {
+    -webkit-appearance: checkbox; appearance: checkbox;
+    flex: 0 0 auto; width: 22px; height: 22px; min-width: 22px;
+    accent-color: var(--blue); background: initial; margin: 0;
+  }
+  .link-row:active { background: color-mix(in srgb, var(--blue) 8%, transparent); }
+
   /* Text search box used on Studies and Worklist to filter by title/nickname/PI/IRB # */
   .search-box { position: relative; margin: 0 4px 10px 4px; }
   .search-box input {
@@ -1269,6 +1279,19 @@ function sheetSearchHTML(id, placeholder) {
       <button type="button" class="search-clear" id="${id}-clear" style="display:none" aria-label="Clear search">✕</button>
     </div>`;
 }
+// Makes an entire checkbox row tappable. Done in JS rather than by wrapping the row in a <label>
+// because label-for behaviour varies across mobile browsers; this works the same everywhere.
+// Taps that land on the checkbox itself are left alone so the row doesn't toggle twice.
+function bindRowCheckboxes(rowSelector) {
+  document.querySelectorAll(rowSelector).forEach(row => {
+    row.onclick = (e) => {
+      const box = row.querySelector('input[type="checkbox"]');
+      if (!box || e.target === box) return;
+      box.checked = !box.checked;
+      box.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+  });
+}
 function bindSheetSearch(id, rowSelector, emptyId) {
   const input = document.getElementById(id);
   const clearBtn = document.getElementById(id + "-clear");
@@ -1619,10 +1642,10 @@ function openLinkSheet(meetingId, preselectIds) {
     <button class="btn secondary" id="link-new-study" style="margin-bottom:12px">+ New Project</button>
     <div class="fgroup" id="link-study-list">` +
     state.studies.slice().sort((a, b) => a.title.localeCompare(b.title)).map(s => `
-      <label class="frow link-row" style="gap:12px;cursor:pointer" data-search="${esc([s.title, s.nickname, s.pi, s.irb].filter(Boolean).join(" ").toLowerCase())}">
-        <input type="checkbox" class="link-study" data-sid="${s.id}" ${selected.has(s.id) ? "checked" : ""} style="flex:0;width:22px;height:22px">
+      <div class="frow link-row" style="gap:12px;cursor:pointer" data-search="${esc([s.title, s.nickname, s.pi, s.irb].filter(Boolean).join(" ").toLowerCase())}">
+        <input type="checkbox" class="link-study" data-sid="${s.id}" ${selected.has(s.id) ? "checked" : ""}>
         <span style="flex:1;min-width:0;font-weight:600">${esc(s.title)}${s.nickname ? `<div style="font-weight:400;font-size:12px;color:var(--text2)">${esc(s.nickname)}</div>` : ""}</span>
-      </label>`).join("") + `</div>
+      </div>`).join("") + `</div>
     <div id="link-study-empty" style="display:none;color:var(--text2);font-size:14px;text-align:center;padding:20px 12px">No projects match your search.</div>`;
   openSheet("Link Projects", body, () => {
     const checked = [...document.querySelectorAll(".link-study")].filter(c => c.checked).map(c => c.dataset.sid);
@@ -1636,6 +1659,7 @@ function openLinkSheet(meetingId, preselectIds) {
     toast("Projects linked");
   });
   bindSheetSearch("link-study-search", "#link-study-list .link-row", "link-study-empty");
+  bindRowCheckboxes("#link-study-list .link-row");
   document.getElementById("link-new-study").onclick = newProjectHandler;
 }
 
@@ -1652,10 +1676,10 @@ function openStudyLinkSheet(studyId) {
   const body = `<div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">Link this project to grants or abstract deadlines.</div>
     ${sheetSearchHTML("link-mtg-search", "Search by society or meeting name")}
     <div class="fgroup" id="link-mtg-list">` + list.map(m => `
-      <label class="frow link-row" style="gap:12px;cursor:pointer" data-search="${esc([m.society, m.name, (m.type || "abstract") === "grant" ? "grant" : "abstract"].filter(Boolean).join(" ").toLowerCase())}">
-        <input type="checkbox" class="link-mtg" data-mid="${m.id}" ${(m.studyIds || []).includes(studyId) ? "checked" : ""} style="flex:0;width:22px;height:22px">
+      <div class="frow link-row" style="gap:12px;cursor:pointer" data-search="${esc([m.society, m.name, (m.type || "abstract") === "grant" ? "grant" : "abstract"].filter(Boolean).join(" ").toLowerCase())}">
+        <input type="checkbox" class="link-mtg" data-mid="${m.id}" ${(m.studyIds || []).includes(studyId) ? "checked" : ""}>
         <span style="flex:1;min-width:0;font-weight:600;font-size:14px">${esc(m.society)} — ${esc(m.name)}<div style="font-weight:400;font-size:12px;color:var(--text2)">${(m.type||"abstract")==="grant"?"Grant":"Abstract"}${m.deadline?" · "+fmtDate(m.deadline):""}</div></span>
-      </label>`).join("") + `</div>
+      </div>`).join("") + `</div>
     <div id="link-mtg-empty" style="display:none;color:var(--text2);font-size:14px;text-align:center;padding:20px 12px">No deadlines match your search.</div>`;
   openSheet("Link Deadlines", body, () => {
     const checkedIds = new Set([...document.querySelectorAll(".link-mtg")].filter(c => c.checked).map(c => c.dataset.mid));
@@ -1670,6 +1694,7 @@ function openStudyLinkSheet(studyId) {
     toast("Deadlines linked");
   });
   bindSheetSearch("link-mtg-search", "#link-mtg-list .link-row", "link-mtg-empty");
+  bindRowCheckboxes("#link-mtg-list .link-row");
 }
 
 function studyCardHTML(s) {
