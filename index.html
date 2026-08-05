@@ -1128,18 +1128,34 @@ function dueLabel(d) {
 const NAME_ALIASES = {
   "yanke": "Adam Yanke", "adam b. yanke md phd": "Adam Yanke", "adam yanke md phd": "Adam Yanke",
   "cat": "Catherine Yuh",
-  "tj": "TJ Turinske", "tj t": "TJ Turinske",
+  "tj": "Thomas Turinske", "tj t": "Thomas Turinske", "tj turinske": "Thomas Turinske",
   "will": "William Lee", "will l": "William Lee",
   "divesh": "Divesh Sachdev", "divesh sachdev bs": "Divesh Sachdev",
   "kofi": "Kofi Acheampong", "kofi acheampong bs": "Kofi Acheampong",
   "zach": "Zachary Oppenheim", "zach o": "Zachary Oppenheim", "zachary oppenheim bs": "Zachary Oppenheim",
-  "jay": "Jay A", "jay a": "Jay A",
+  "jay": "Jay Amin", "jay a": "Jay Amin", "jay amin": "Jay Amin",
+  "dan": "Daniel Shinn", "daniel shinn": "Daniel Shinn",
   "lesly honore bs": "Lesly Honore",
   "jakob ackerman md": "Jakob Ackerman"
 };
+// Degrees don't belong in the stored name — they're captured separately for author lists. Stripping
+// them here also merges pairs that were only different because one copy carried credentials
+// (e.g. "Kofi" / "Kofi Acheampong BS").
+const DEGREE_TOKENS = ["ba", "bs", "bsc", "ma", "ms", "msc", "mba", "md", "do", "phd", "mph", "msph",
+  "mha", "dpt", "mpt", "rn", "np", "pa", "pac", "mbbs", "scd", "edd", "jd", "pharmd", "atc", "crna", "facs", "faaos"];
+function stripDegrees(n) {
+  const parts = String(n || "").trim().replace(/,/g, " ").split(/\s+/).filter(Boolean);
+  // Never strip a single-word name — "Do" as a surname shouldn't vanish.
+  while (parts.length > 1 && DEGREE_TOKENS.includes(parts[parts.length - 1].toLowerCase().replace(/[.\-]/g, ""))) parts.pop();
+  return parts.join(" ");
+}
 function canonName(n) {
   const raw = (n || "").trim();
-  return NAME_ALIASES[raw.toLowerCase()] || raw;
+  if (!raw) return "";
+  const direct = NAME_ALIASES[raw.toLowerCase()];
+  if (direct) return direct;
+  const stripped = stripDegrees(raw);
+  return NAME_ALIASES[stripped.toLowerCase()] || stripped;
 }
 // Accepts either an array (new format) or a comma-separated string (legacy free text) and
 // returns a de-duplicated array of canonical names.
@@ -1148,6 +1164,26 @@ function namesFromField(v) {
   const out = [];
   list.forEach(x => { const n = canonName(x); if (n && !out.includes(n)) out.push(n); });
   return out;
+}
+// Admins see and edit every project without needing to be named on it. Everyone else only sees
+// projects they're actually on (as PI, team member, or task assignee).
+// NOTE: this is a UI-level restriction. The database still lets any signed-in account read the
+// shared table, so treat it as "keeps people focused on their own work", not as a security
+// boundary against a determined user.
+const ADMIN_NAMES = ["Adam Yanke", "William Lee", "Thomas Turinske"];
+function isAdmin() { return ADMIN_NAMES.includes(canonName(me())); }
+// The set of studies the signed-in person is allowed to see anywhere in the app.
+function visibleStudies() {
+  if (isAdmin()) return state.studies.slice();
+  const myName = me();
+  if (!myName) return state.studies.slice(); // no identity yet — don't hide everything and confuse them
+  return state.studies.filter(s => studyInvolvesPerson(s, myName));
+}
+function canSeeStudy(s) {
+  if (!s) return false;
+  if (isAdmin()) return true;
+  const myName = me();
+  return !myName || studyInvolvesPerson(s, myName);
 }
 function studyById(id) { return state.studies.find(s => s.id === id); }
 function isActive(s) { return s.phase !== "Published" && s.phase !== "On Hold"; }
@@ -1409,7 +1445,8 @@ function bindDeadlineRows(root) {
 }
 
 function dashboardHTML() {
-  const active = state.studies.filter(isActive);
+  const mine = visibleStudies();
+  const active = mine.filter(isActive);
   const openTasks = state.tasks.filter(t => !t.done);
   const overdue = openTasks.filter(t => t.due && t.due < todayStr());
   const soonEnd = new Date(); soonEnd.setDate(soonEnd.getDate() + 14);
@@ -1426,7 +1463,7 @@ function dashboardHTML() {
       <div class="stat"><div class="num">${active.length}</div><div class="lbl">Active Studies</div></div>
       <div class="stat"><div class="num">${openTasks.length}</div><div class="lbl">Open Tasks</div></div>
       <div class="stat"><div class="num" style="color:${overdue.length ? "var(--red)" : "var(--green)"}">${overdue.length}</div><div class="lbl">Overdue</div></div>
-      <div class="stat"><div class="num">${state.studies.filter(s => s.phase === "Published").length}</div><div class="lbl">Published</div></div>
+      <div class="stat"><div class="num">${mine.filter(s => s.phase === "Published").length}</div><div class="lbl">Published</div></div>
     </div>`;
 
   // Deadline boards (abstracts + grants), filtered by personal society subscriptions
@@ -1633,7 +1670,8 @@ function renderStudies() {
   // Who-filter: defaults to "mine" (only studies I'm involved in as PI/team/task assignee).
   // Gracefully falls back to showing everyone if no identity is set yet. Applied first, before
   // the status/phase/design filters below, so their counts reflect the selected person.
-  let base = state.studies.slice();
+  // Start from what this person is allowed to see at all, then apply the Who filter on top.
+  let base = visibleStudies();
   if (personFilter === "mine") { if (myName) base = base.filter(s => studyInvolvesPerson(s, myName)); }
   else if (personFilter !== "all") base = base.filter(s => studyInvolvesPerson(s, personFilter));
   if (studyFilter === "Active") base = base.filter(isActive);
@@ -1657,7 +1695,10 @@ function renderStudies() {
     `<button class="${f === studyFilter ? "active" : ""}" data-filter="${f}">${f}</button>`).join("") + `</div>`;
   html += searchBoxHTML("study-search", studySearchQuery, "Search by title, nickname, PI, or IRB #");
   const otherNames = state.roster.filter(n => n.trim().toLowerCase() !== myName.trim().toLowerCase());
-  html += `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 10px 4px">
+  // Only admins can look beyond their own projects, so the Who picker is theirs alone. Everyone
+  // else is already scoped by visibleStudies() and would just see "All" == "Mine".
+  if (isAdmin()) {
+    html += `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 10px 4px">
       <span style="font-size:13px;font-weight:600;color:var(--text2)">Who</span>
       <select id="person-filter" style="flex:1;-webkit-appearance:none;appearance:none;background:var(--card);border:none;border-radius:10px;padding:9px 30px 9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.06)">
         <option value="mine" ${personFilter === "mine" ? "selected" : ""}>${myName ? "My Projects (" + esc(myName) + ")" : "My Projects"}</option>
@@ -1665,6 +1706,7 @@ function renderStudies() {
         ${otherNames.map(n => `<option value="${esc(n)}" ${personFilter === n ? "selected" : ""}>${esc(n)}'s Projects</option>`).join("")}
       </select>
     </div>`;
+  }
   html += `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 10px 4px">
       <span style="font-size:13px;font-weight:600;color:var(--text2)">Phase</span>
       <select id="phase-filter" style="flex:1;-webkit-appearance:none;appearance:none;background:var(--card);border:none;border-radius:10px;padding:9px 30px 9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.06)">
@@ -1689,7 +1731,8 @@ function renderStudies() {
   $main.innerHTML = html;
   $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { studyFilter = b.dataset.filter; studyPhaseFilter = "All phases"; studyDesignFilter = "All designs"; render(); });
   bindSearchBox("study-search", (v) => { studySearchQuery = v; });
-  document.getElementById("person-filter").onchange = (e) => { personFilter = e.target.value; studyPhaseFilter = "All phases"; studyDesignFilter = "All designs"; render(); };
+  const personSel = document.getElementById("person-filter"); // admins only
+  if (personSel) personSel.onchange = (e) => { personFilter = e.target.value; studyPhaseFilter = "All phases"; studyDesignFilter = "All designs"; render(); };
   document.getElementById("phase-filter").onchange = (e) => { studyPhaseFilter = e.target.value; render(); };
   document.getElementById("design-filter").onchange = (e) => { studyDesignFilter = e.target.value; render(); };
   $main.querySelectorAll("[data-study]").forEach(el => el.onclick = () => { openStudy(el.dataset.study); render(); });
@@ -1851,6 +1894,13 @@ function bindLinkFieldRow(root, id, s, key) {
 function renderStudyDetail() {
   const s = studyById(detailStudyId);
   if (!s) { detailStudyId = null; renderStudies(); return; }
+  // Guard the direct route in (jump-from-task, deep link) as well as the list.
+  if (!canSeeStudy(s)) {
+    detailStudyId = null;
+    toast("That project isn't shared with you");
+    renderStudies();
+    return;
+  }
   $title.textContent = "Study";
   const stepperPhases = phasesFor(s).filter(p => p !== "Published" && p !== "On Hold");
   const tasks = state.tasks.filter(t => t.studyId === s.id).sort((a, b) => (a.done - b.done) || (a.due || "9999").localeCompare(b.due || "9999"));
@@ -2347,7 +2397,7 @@ let worklistSort = { key: null, dir: 1 };
 let worklistSearchQuery = "";
 function renderWorkingList() {
   $title.textContent = "Working Study List";
-  let studies = state.studies.slice();
+  let studies = visibleStudies();
   if (!worklistShowClosed) studies = studies.filter(isActive);
   if (worklistSearchQuery) studies = studies.filter(s => studyMatchesSearch(s, worklistSearchQuery));
 
@@ -2503,7 +2553,7 @@ function renderSettings() {
   $main.innerHTML = `
   <div class="section-title">Account</div>
   <div class="card" style="font-size:14px;line-height:1.55">
-    Signed in as <b>${esc(currentUser ? currentUser.email : "")}</b>
+    Signed in as <b>${esc(currentUser ? currentUser.email : "")}</b>${isAdmin() ? `<div style="font-size:12.5px;color:var(--text2);margin-top:4px">Admin — you can see and edit every project, whether or not you're named on it.</div>` : ""}
   </div>
   <div class="fgroup">
     <div class="frow"><label>Display name</label><input id="me-name" list="dl-people-set" placeholder="Used for 'Mine' filter &amp; uploads" value="${esc(me())}"></div>
