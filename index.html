@@ -1840,7 +1840,12 @@ function linkFieldRow(label, id, value) {
 function bindLinkFieldRow(root, id, s, key) {
   const el = root.querySelector("#" + id);
   if (!el) return;
-  el.onchange = (e) => { s[key] = e.target.value.trim(); upsertStudy(s); };
+  el.onchange = (e) => {
+    const val = e.target.value.trim();
+    s[key] = val;
+    upsertStudy(s);
+    toast(val ? "Link saved" : "Link cleared");
+  };
 }
 
 function renderStudyDetail() {
@@ -2072,7 +2077,9 @@ function renderStudyDetail() {
       s.phase = nextAfterInit(s);
       upsertStudy(s); toast("Study moved to " + s.phase);
     } else {
+      const INIT_LABELS = { sportsSubmission: "Sports submission", irbApproved: "IRB approval", caApproved: "CA approval", piqBuilt: "PIQ", ready: "Ready to enroll" };
       upsertStudy(s);
+      toast((INIT_LABELS[k] || "Step") + (s.initiation[k] ? " checked off" : " unchecked"));
     }
   });
   // Abstract deadlines: link existing via dropdown, or add a custom one (type fixed to "abstract")
@@ -2112,6 +2119,7 @@ function renderStudyDetail() {
   $main.querySelectorAll("[data-abs-format]").forEach(el => el.onchange = (e) => {
     e.stopPropagation();
     setAbstractLinkField(s, el.dataset.absFormat, "format", e.target.value);
+    toast(e.target.value ? "Submitting as " + e.target.value : "Format cleared");
   });
   $main.querySelectorAll("[data-abs-link-status]").forEach(b => b.onclick = (e) => {
     e.stopPropagation();
@@ -2119,10 +2127,13 @@ function renderStudyDetail() {
     const current = abstractLinkInfo(s, meetingId).status;
     const next = ABS_LINK_STATUSES[(ABS_LINK_STATUSES.indexOf(current) + 1) % ABS_LINK_STATUSES.length];
     setAbstractLinkField(s, meetingId, "status", next);
+    const mtg = state.meetings.find(x => x.id === meetingId);
+    toast(`${mtg ? mtg.name + " — " : ""}${next}`);
   });
   $main.querySelectorAll("[data-abs-accepted-format]").forEach(el => el.onchange = (e) => {
     e.stopPropagation();
     setAbstractLinkField(s, el.dataset.absAcceptedFormat, "acceptedFormat", e.target.value);
+    toast(e.target.value ? "Accepted as " + e.target.value : "Accepted format cleared");
   });
   document.getElementById("ms-add").onclick = () => {
     const name = document.getElementById("ms-name").value.trim();
@@ -2135,11 +2146,13 @@ function renderStudyDetail() {
   $main.querySelectorAll("[data-ms]").forEach(b => b.onclick = () => {
     const m = milestones[+b.dataset.ms];
     m.done = !m.done; upsertStudy(s);
+    toast(m.done ? `"${m.name}" done` : `"${m.name}" reopened`);
   });
   $main.querySelectorAll("[data-ms-del]").forEach(b => b.onclick = () => {
     const m = milestones[+b.dataset.msDel];
     s.milestones = (s.milestones || []).filter(x => x !== m);
     upsertStudy(s);
+    toast("Milestone removed");
   });
 
   // Documents
@@ -2250,12 +2263,14 @@ function renderStudyDetail() {
     if (!a) return;
     a.status = ABS_STATUSES[(ABS_STATUSES.indexOf(a.status) + 1) % ABS_STATUSES.length];
     upsertStudy(s);
+    toast(`${a.meeting} — ${a.status}`);
   });
   $main.querySelectorAll("[data-abs-del]").forEach(b => b.onclick = () => {
     const a = (s.abstracts || []).find(x => x.id === b.dataset.absDel);
     if (!a || !confirm(`Remove "${a.meeting}" from abstract history?`)) return;
     s.abstracts = s.abstracts.filter(x => x.id !== a.id);
     upsertStudy(s);
+    toast("Abstract removed from history");
   });
 
   bindTaskRows();
@@ -2284,7 +2299,7 @@ function bindTaskRows(root) {
   root.querySelectorAll("[data-toggle]").forEach(b => b.onclick = (e) => {
     e.stopPropagation();
     const t = state.tasks.find(x => x.id === b.dataset.toggle);
-    if (t) { t.done = !t.done; upsertTask(t); }
+    if (t) { t.done = !t.done; upsertTask(t); toast(t.done ? `Done: ${t.title}` : `Reopened: ${t.title}`); }
   });
   root.querySelectorAll("[data-goto-study]").forEach(el => el.onclick = (e) => {
     e.stopPropagation();
@@ -2560,6 +2575,7 @@ function renderSettings() {
   };
   $main.querySelectorAll(".sub-toggle").forEach(c => c.onchange = () => {
     setSub(c.dataset.soc, c.checked);
+    toast(c.checked ? `${c.dataset.soc} deadlines shown on your dashboard` : `${c.dataset.soc} hidden from your dashboard`);
   });
   $main.querySelectorAll("[data-meeting-edit]").forEach(el => el.onclick = (e) => {
     if (e.target.closest("[data-meeting-hide]")) return; // the inline Hide button handles itself
@@ -2585,8 +2601,10 @@ function renderSettings() {
     saveLocal(); pushRoster(); render(); toast(n + " added");
   };
   $main.querySelectorAll("[data-roster-del]").forEach(b => b.onclick = () => {
-    state.roster = state.roster.filter(x => x !== b.dataset.rosterDel);
+    const gone = b.dataset.rosterDel;
+    state.roster = state.roster.filter(x => x !== gone);
     saveLocal(); pushRoster(); render();
+    toast(gone + " removed from the team list");
   });
 
   document.getElementById("export-btn").onclick = () => {
