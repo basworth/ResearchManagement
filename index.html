@@ -268,15 +268,16 @@
   }
   .seg button.active { background: var(--card); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
 
-  /* Checkbox rows in the link sheets. The generic ".frow input" rule above sets flex:1 and
-     background:none, which on Safari/iOS can render a checkbox invisible and shrink it oddly —
-     so restore the native control explicitly and give it a fixed size. */
-  .link-row input[type="checkbox"], .team-row input[type="checkbox"] {
+  /* EVERY checkbox in the app. The generic ".frow input" rule above sets flex:1 and
+     background:none, and killing a checkbox's background makes it render INVISIBLE on Safari
+     (Mac and iOS) — the control is still there and still clickable, so it looks like a dead row.
+     This restores the native control everywhere; keep new checkboxes inside .frow so they inherit it. */
+  input[type="checkbox"] {
     -webkit-appearance: checkbox; appearance: checkbox;
     flex: 0 0 auto; width: 22px; height: 22px; min-width: 22px;
     accent-color: var(--blue); background: initial; margin: 0;
   }
-  .link-row:active { background: color-mix(in srgb, var(--blue) 8%, transparent); }
+  .link-row:active, .team-row:active, .degree-row:active { background: color-mix(in srgb, var(--blue) 8%, transparent); }
 
   /* Text search box used on Studies and Worklist to filter by title/nickname/PI/IRB # */
   .search-box { position: relative; margin: 0 4px 10px 4px; }
@@ -2909,10 +2910,10 @@ function teamPickerRowsHTML(selectedNames) {
   const all = [...new Set(state.roster.concat(picked))].sort((a, b) => a.localeCompare(b));
   if (!all.length) return `<div style="color:var(--text2);font-size:13.5px;padding:12px 10px">No people on file yet — add someone below.</div>`;
   return all.map(n => `
-    <label class="frow team-row" style="gap:12px;cursor:pointer" data-search="${esc(n.toLowerCase())}">
-      <input type="checkbox" class="f-team-pick" data-name="${esc(n)}" ${picked.includes(n) ? "checked" : ""} style="flex:0;width:20px;height:20px">
+    <div class="frow team-row" style="gap:12px;cursor:pointer" data-search="${esc(n.toLowerCase())}">
+      <input type="checkbox" class="f-team-pick" data-name="${esc(n)}" ${picked.includes(n) ? "checked" : ""}>
       <span style="flex:1;min-width:0;font-size:15px">${esc(n)}</span>
-    </label>`).join("");
+    </div>`).join("");
 }
 // Multi-select degree picker for one roster member. Anyone signed in can set these, so degrees
 // exist for people who haven't made an account yet and author lists work right away.
@@ -2925,10 +2926,10 @@ function openDegreesSheet(name) {
     <div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">Tick every degree that should appear after their name on an author list. Order follows the list below.</div>
     <div class="fgroup">
       ${DEGREE_OPTIONS.concat(extra).map(d => `
-        <label class="frow" style="gap:12px;cursor:pointer">
-          <input type="checkbox" class="degree-pick" data-degree="${esc(d)}" ${current.includes(d) ? "checked" : ""} style="flex:0;width:20px;height:20px">
+        <div class="frow degree-row" style="gap:12px;cursor:pointer">
+          <input type="checkbox" class="degree-pick" data-degree="${esc(d)}" ${current.includes(d) ? "checked" : ""}>
           <span style="flex:1;font-size:15px">${esc(d)}</span>
-        </label>`).join("")}
+        </div>`).join("")}
     </div>
     <div class="fgroup">
       <div class="frow"><label>Other</label><input id="f-degree-other" placeholder="e.g. MSc — comma-separated"></div>
@@ -2949,6 +2950,7 @@ function openDegreesSheet(name) {
     const all = [...new Set(picked.concat(other))];
     document.getElementById("degree-preview").textContent = all.length ? `${person}, ${all.join(", ")}` : person;
   };
+  bindRowCheckboxes(".degree-row");
   document.querySelectorAll(".degree-pick").forEach(c => c.onchange = refresh);
   document.getElementById("f-degree-other").oninput = refresh;
 }
@@ -3067,6 +3069,7 @@ function openStudyForm(existing, onCreated) {
       if (!existing && onCreated) onCreated(s.id);
     });
   bindSheetSearch("f-team-search", "#f-team-list .team-row", "f-team-empty");
+  bindRowCheckboxes("#f-team-list .team-row");
   // Adding someone new: append them ticked, add to the roster, and clear the search so the new
   // row is definitely visible rather than filtered out by a stale query.
   const addTeamMember = () => {
@@ -3077,6 +3080,7 @@ function openStudyForm(existing, onCreated) {
     const picked = [...document.querySelectorAll(".f-team-pick")].filter(c => c.checked).map(c => c.dataset.name);
     if (!picked.includes(name)) picked.push(name);
     document.getElementById("f-team-list").innerHTML = teamPickerRowsHTML(picked);
+    bindRowCheckboxes("#f-team-list .team-row");
     const search = document.getElementById("f-team-search");
     search.value = "";
     search.dispatchEvent(new Event("input"));
