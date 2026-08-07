@@ -631,6 +631,17 @@ function migrate() {
     s.docs = s.docs || [];
     s.abstracts = s.abstracts || [];
     s.meetingNotes = s.meetingNotes || [];
+    // Notes moved out of the edit form into their own section, and from one free-text blob
+    // into dated entries. The Array.isArray guard is what makes this run exactly once per
+    // study — without it, a study whose legacy `s.notes` blob is still present would seed a
+    // duplicate entry on every single load. `s.notes` itself is left in place (vestigial but
+    // harmless) so an older backup still round-trips and studyArea() keeps finding its tag.
+    if (!Array.isArray(s.noteEntries)) {
+      s.noteEntries = [];
+      const legacy = (s.notes || "").trim();
+      if (legacy) s.noteEntries.push({ id: uid(), text: legacy, date: todayStr(), archivedOn: "" });
+    }
+    s.noteEntries.forEach(n => { if (typeof n.archivedOn !== "string") n.archivedOn = ""; });
     if (s.projectOverviewLink == null) s.projectOverviewLink = "";
     if (s.journal == null) s.journal = "";
     if (s.submittedDate == null) s.submittedDate = "";
@@ -1334,7 +1345,12 @@ function bindSearchBox(id, setVal) {
 }
 
 // A simple line drawing of the joint being studied, chosen by the study's area.
-function studyArea(s) { const m = /Area:\s*(Cartilage|Knee|Shoulder)/i.exec(s.notes || ""); return m ? m[1].toLowerCase() : ""; }
+// The "Area:" tag can sit in the legacy notes blob or in any note entry (archived or not),
+// so scan both — otherwise a study loses its emblem the moment its notes get archived.
+function studyNoteText(s) {
+  return [(s.notes || "")].concat((s.noteEntries || []).map(n => n.text || "")).join("\n");
+}
+function studyArea(s) { const m = /Area:\s*(Cartilage|Knee|Shoulder)/i.exec(studyNoteText(s)); return m ? m[1].toLowerCase() : ""; }
 function jointArtPaths(area, tint, accent) {
   if (area === "shoulder") {
     // ball-and-socket: humeral head in glenoid, humerus shaft
@@ -1816,6 +1832,75 @@ function enrollmentBodyHTML(s) {
 }
 function enrollmentHasContent(s) { return s.enrollTarget !== "" || s.enrollCurrent !== ""; }
 
+// ---------- Study notes ----------
+// Notes are dated entries with an archive lane rather than one free-text blob. "Archive"
+// never deletes: it stamps entries with the date they were cleared and files them under a
+// collapsed group, so the live list stays short without losing the history of what was
+// cleared and when. Which archive groups are expanded is view state only (openNoteArchives),
+// reset whenever a different study is opened — same lifecycle as studySectionState.
+let openNoteArchives = {};
+const NOTE_ICON_BTN = "border:none;background:none;color:var(--text2);cursor:pointer;padding:5px 7px;line-height:1;font-size:16px";
+
+function noteRowHTML(n, actions) {
+  return `
+    <div class="milestone-row" style="align-items:flex-start">
+      <div style="flex:1;min-width:0">
+        ${n.date ? `<div style="font-size:12px;color:var(--text2);font-weight:600">${fmtDate(n.date)}</div>` : ""}
+        <div style="font-size:14.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word">${esc(n.text || "")}</div>
+      </div>
+      ${actions}
+    </div>`;
+}
+
+function notesBodyHTML(s, inputStyle) {
+  const all = s.noteEntries || [];
+  const live = all.filter(n => !n.archivedOn).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  const archived = all.filter(n => n.archivedOn);
+  const groups = {};
+  archived.forEach(n => { (groups[n.archivedOn] = groups[n.archivedOn] || []).push(n); });
+  const groupDates = Object.keys(groups).sort((a, b) => b.localeCompare(a));
+
+  return `
+    ${live.length ? live.map(n => noteRowHTML(n, `
+      <button data-note-arch="${n.id}" title="Archive this note" style="${NOTE_ICON_BTN}">↓</button>
+      <button data-note-del="${n.id}" title="Delete this note" style="${NOTE_ICON_BTN};font-size:19px">×</button>
+    `)).join("") : `<div style="color:var(--text2);font-size:14px">No notes yet. Jot down anything worth remembering about this study — notes stay here until you archive them.</div>`}
+
+    <div style="margin-top:12px">
+      <textarea id="note-text" rows="2" placeholder="Add a note…" style="width:100%;box-sizing:border-box;resize:vertical;${inputStyle}"></textarea>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+      <input id="note-date" type="date" value="${todayStr()}" style="${inputStyle};padding:9px 10px;font-size:14px;max-width:135px">
+      <button id="note-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:9px 16px;font-weight:700;font-size:15px;cursor:pointer">Add</button>
+      <div style="flex:1"></div>
+      ${live.length ? `<button id="note-archive-all" style="border:none;background:var(--bg);color:var(--blue);font-family:inherit;font-size:13px;font-weight:700;padding:8px 12px;border-radius:9px;cursor:pointer">Archive all (${live.length})</button>` : ""}
+    </div>
+
+    ${groupDates.length ? `
+      <div style="margin-top:16px;border-top:0.5px solid var(--line);padding-top:8px">
+        <div style="font-size:11.5px;color:var(--text2);font-weight:700;letter-spacing:.05em;text-transform:uppercase">Archived</div>
+        ${groupDates.map(d => {
+          const open = !!openNoteArchives[d];
+          const rows = groups[d].slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+          return `
+          <div data-note-group="${d}" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:9px 0;user-select:none">
+            <span data-note-group-chev style="font-size:11px;color:var(--text2);display:inline-block;transition:transform .2s;transform:rotate(${open ? 90 : 0}deg)">▸</span>
+            <span style="font-size:14px;font-weight:600">${fmtDate(d)}</span>
+            <span style="font-size:13px;color:var(--text2)">· ${rows.length} note${rows.length === 1 ? "" : "s"}</span>
+          </div>
+          <div data-note-group-body="${d}" style="${open ? "" : "display:none"};padding-left:19px">
+            ${rows.map(n => noteRowHTML(n, `
+              <button data-note-unarch="${n.id}" title="Bring this note back" style="${NOTE_ICON_BTN}">↑</button>
+              <button data-note-del="${n.id}" title="Delete this note" style="${NOTE_ICON_BTN};font-size:19px">×</button>
+            `)).join("")}
+          </div>`;
+        }).join("")}
+      </div>` : ""}`;
+}
+// Only the live notes count toward auto-expanding the section — a study whose notes are all
+// archived should open collapsed, since that's the whole point of archiving them.
+function notesHasContent(s) { return (s.noteEntries || []).some(n => !n.archivedOn); }
+
 function grantBodyHTML(s) {
   const g = s.grant || {};
   return `
@@ -2058,7 +2143,9 @@ function renderStudyDetail() {
   // manual expand/collapse choices aren't clobbered.
   if (sectionStateForStudy !== s.id) {
     const workingDocsHasContent = !!(s.workingAbstractLink || s.projectOverviewLink || s.workingManuscriptLink || s.dataCollectionSheetLink || s.dataProcessDocLink || s.trackingSheetLink);
+    openNoteArchives = {};
     studySectionState = {
+      notes: notesHasContent(s),
       enrollment: enrollmentHasContent(s),
       grant: grantHasContent(s),
       initiation: s.phase === "Initiation",
@@ -2099,10 +2186,10 @@ function renderStudyDetail() {
       ${s.irb ? `<br><b>IRB #:</b> ${esc(s.irb)}` : ""}
       ${s.start ? `<br><b>Started:</b> ${fmtDate(s.start)}` : ""}
     </div>
-    ${s.notes ? `<div style="font-size:14px;margin-top:10px;line-height:1.5;white-space:pre-wrap">${esc(s.notes)}</div>` : ""}
     ${s.phase === "Submitted" ? `<div style="font-size:12px;color:var(--orange);line-height:1.4;margin-top:10px">⚠︎ Make sure the Title above matches the manuscript title exactly as submitted to the journal.</div>` : ""}
   </div>
   <button class="btn secondary" id="edit-study-btn">Edit Study</button>
+  ${collapsibleSection("notes", "Notes", notesBodyHTML(s, inputStyle))}
   ${collapsibleSection("enrollment", "Enrollment", enrollmentBodyHTML(s))}
   ${s.grant && s.grant.enabled ? collapsibleSection("grant", "Grant & Award Funding", grantBodyHTML(s)) : ""}
   ${s.phase === "Initiation" ? collapsibleSection("initiation", "Initiation Checklist", initiationBodyHTML(s)) : ""}
@@ -2420,6 +2507,66 @@ function renderStudyDetail() {
   bindLinkFieldRow($main, "wd-sheet", s, "dataCollectionSheetLink");
   bindLinkFieldRow($main, "wd-process", s, "dataProcessDocLink");
   bindLinkFieldRow($main, "wd-tracking", s, "trackingSheetLink");
+
+  // Study notes. Each handler gates on blockOfflineEdit BEFORE mutating `s` — upsertStudy
+  // gates too, but by then the in-memory study would already be dirty with a change that
+  // never got saved.
+  const noteAddBtn = document.getElementById("note-add");
+  if (noteAddBtn) noteAddBtn.onclick = () => {
+    const text = document.getElementById("note-text").value.trim();
+    if (!text) { toast("Type something first"); return; }
+    if (blockOfflineEdit("Adding a note")) return;
+    s.noteEntries = s.noteEntries || [];
+    s.noteEntries.push({ id: uid(), text, date: document.getElementById("note-date").value || todayStr(), archivedOn: "" });
+    studySectionState.notes = true;
+    upsertStudy(s);
+    toast("Note added");
+  };
+  $main.querySelectorAll("[data-note-arch]").forEach(b => b.onclick = () => {
+    const n = (s.noteEntries || []).find(x => x.id === b.dataset.noteArch);
+    if (!n || blockOfflineEdit("Archiving a note")) return;
+    const stamp = todayStr();
+    n.archivedOn = stamp;
+    openNoteArchives[stamp] = true;   // leave the group open so it's obvious where it went
+    upsertStudy(s);
+    toast("Archived — it's under Archived · " + fmtDate(stamp) + " below");
+  });
+  const noteArchiveAll = document.getElementById("note-archive-all");
+  if (noteArchiveAll) noteArchiveAll.onclick = () => {
+    if (blockOfflineEdit("Archiving notes")) return;
+    const clearing = (s.noteEntries || []).filter(x => !x.archivedOn);
+    if (!clearing.length) return;
+    const stamp = todayStr();
+    clearing.forEach(x => x.archivedOn = stamp);
+    openNoteArchives[stamp] = false;  // collapsed — clearing the desk is the whole point
+    upsertStudy(s);
+    toast(clearing.length + " note" + (clearing.length === 1 ? "" : "s") + " archived — tap Archived · " + fmtDate(stamp) + " to read them again");
+  };
+  $main.querySelectorAll("[data-note-unarch]").forEach(b => b.onclick = () => {
+    const n = (s.noteEntries || []).find(x => x.id === b.dataset.noteUnarch);
+    if (!n || blockOfflineEdit("Restoring a note")) return;
+    n.archivedOn = "";
+    upsertStudy(s);
+    toast("Note moved back up to the live list");
+  });
+  $main.querySelectorAll("[data-note-del]").forEach(b => b.onclick = () => {
+    const n = (s.noteEntries || []).find(x => x.id === b.dataset.noteDel);
+    if (!n) return;
+    if (!confirm("Delete this note for good? Archiving keeps it — deleting doesn't.")) return;
+    if (blockOfflineEdit("Deleting a note")) return;
+    s.noteEntries = s.noteEntries.filter(x => x.id !== n.id);
+    upsertStudy(s);
+    toast("Note deleted");
+  });
+  // Expanding an archive group is view state only, so no sync gate and no re-render.
+  $main.querySelectorAll("[data-note-group]").forEach(el => el.onclick = () => {
+    const d = el.dataset.noteGroup;
+    openNoteArchives[d] = !openNoteArchives[d];
+    const body = $main.querySelector(`[data-note-group-body="${d}"]`);
+    if (body) body.style.display = openNoteArchives[d] ? "" : "none";
+    const chev = el.querySelector("[data-note-group-chev]");
+    if (chev) chev.style.transform = `rotate(${openNoteArchives[d] ? 90 : 0}deg)`;
+  });
 
   // Meeting notes (repeatable list, linked to this study)
   document.getElementById("mnote-add").onclick = () => {
@@ -3024,9 +3171,6 @@ function openStudyForm(existing, onCreated) {
         <div class="frow"><label>Expiration date (if applicable)</label><input id="f-grant-expiration" type="date" value="${esc(g.expirationDate || "")}"></div>
         <div class="frow"><label>Balance last updated</label><input id="f-grant-balance-updated" type="date" value="${esc(g.balanceUpdatedDate || "")}"></div>
       </div>
-    </div>
-    <div class="fgroup">
-      <div class="frow"><textarea id="f-notes" placeholder="Notes…">${esc(s.notes || "")}</textarea></div>
     </div>`,
     () => {
       const title = document.getElementById("f-title").value.trim();
@@ -3045,7 +3189,8 @@ function openStudyForm(existing, onCreated) {
         irb: document.getElementById("f-irb").value.trim(),
         irbStatus: document.getElementById("f-irbstatus").value,
         start: document.getElementById("f-start").value,
-        notes: document.getElementById("f-notes").value.trim(),
+        // `notes` is deliberately absent: notes now live in s.noteEntries, edited inline in
+        // the study page's Notes section. The old blob is left untouched on existing records.
         journal: document.getElementById("f-journal").value.trim(),
         submittedDate: document.getElementById("f-submitted-date").value,
         journalTrackingId: document.getElementById("f-tracking-id").value.trim(),
