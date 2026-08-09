@@ -1,6 +1,6 @@
 {
   "_comment": "Abstract-deadline feed for Research Tracker. The biweekly scheduled task rewrites this file after checking each society. The app fetches it on load and merges any entry whose verifiedOn is newer. 'key' must stay stable so updates match the right meeting. Set unconfirmed=false only when a date is verified from the society's official call for abstracts.",
-  "updatedOn": "2026-08-05",
+  "updatedOn": "2026-08-09",
   "meetings": [
     {
       "key": "AAOS|2027 Annual Meeting",
@@ -48,6 +48,78 @@
       "unconfirmed": false,
       "verifiedOn": "2026-08-03T13:45"
     },
+    {
+            "key": "ISHA|18th ISHA Annual Scientific Meeting",
+            "society": "ISHA",
+            "type": "abstract",
+            "name": "18th ISHA Annual Scientific Meeting",
+            "deadline": "",
+            "dates": "Bruges, Belgium, 8-10 Oct 2026 (pre-conference day 7 Oct). Abstract and award-application window closed (opened 1 Jan, closed 13 Apr 2026). ISHA - The Hip Preservation Society's flagship international hip arthroscopy/preservation congress; host country rotates each year (has been held in North America in past cycles).",
+            "location": "Bruges, Belgium",
+            "link": "https://www.ishasoc.net/conference",
+            "unconfirmed": false,
+            "verifiedOn": "2026-08-09T17:05"
+    },
+        {
+                "key": "ESSKA|22nd ESSKA Congress",
+                "society": "ESSKA",
+                "type": "abstract",
+                "name": "22nd ESSKA Congress",
+                "deadline": "",
+                "dates": "Prague, Czech Republic, 20-22 May 2026. Abstract submission closed 22 Sept 2025; congress has concluded. ESSKA (European Society for Sports Traumatology, Knee Surgery and Arthroscopy - publisher of the KSSTA journal) holds its congress biennially; next edition (~2028) not yet announced.",
+                "location": "Prague, Czech Republic",
+                "link": "https://www.esska.org/page/ESSKACongress",
+                "unconfirmed": false,
+                "verifiedOn": "2026-08-09T17:05"
+        },
+        {
+                "key": "ICSES|ICSES 2026",
+                "society": "ICSES",
+                "type": "abstract",
+                "name": "International Congress on Shoulder and Elbow Surgery (ICSES) 2026",
+                "deadline": "",
+                "dates": "Vancouver, BC, Canada, 22-25 Sept 2026 (ASES International Day 22 Sept). Abstract submission closed 19 Jan 2026; acceptance notifications sent 30 Apr 2026; manuscript deadline for podium presenters 12 Aug 2026. Triennial global shoulder and elbow congress jointly hosted by international shoulder societies including ASES; ~2,000 attendees from 60+ countries expected.",
+                "location": "Vancouver, BC, Canada",
+                "link": "https://icses2026.org/",
+                "unconfirmed": false,
+                "verifiedOn": "2026-08-09T17:05"
+        },
+        {
+                "key": "SECEC|SECEC-ESSSE Congress 2026",
+                "society": "SECEC/ESSSE",
+                "type": "abstract",
+                "name": "SECEC-ESSSE Congress 2026",
+                "deadline": "",
+                "dates": "Barcelona, Spain, 2-4 Sept 2026. Abstract submission window 17 Dec 2025 - 11 Feb 2026 (closed); acceptance notifications 29 Apr 2026. Europe's leading shoulder and elbow congress (Societe Europeenne pour la Chirurgie de l'Epaule et du Coude / European Society for Surgery of the Shoulder and the Elbow).",
+                "location": "Barcelona, Spain",
+                "link": "https://congress.secec.eu/submissions/abstract-submissions",
+                "unconfirmed": false,
+                "verifiedOn": "2026-08-09T17:05"
+        },
+        {
+                "key": "ASES|2027 Annual Meeting",
+                "society": "ASES",
+                "type": "abstract",
+                "name": "ASES 2027 Annual Meeting",
+                "deadline": "",
+                "dates": "National Harbor, MD (Gaylord National Resort and Convention Center), 13-16 Oct 2027. Abstract submission window not yet announced. (ASES also participates in ICSES 2026 in Vancouver - see separate entry - and runs an ASES Winter Summit Open Meeting 16-19 Feb 2027 in Hollywood, FL, which is not an abstract-driven scientific meeting.)",
+                "location": "National Harbor, MD",
+                "link": "https://ases-assn.org/meetings/",
+                "unconfirmed": true,
+                "verifiedOn": "2026-08-09T17:05"
+        },
+        {
+                "key": "ISAKOS|2027 Congress",
+                "society": "ISAKOS",
+                "type": "abstract",
+                "name": "2027 ISAKOS Congress",
+                "deadline": "2026-08-04",
+                "dates": "Sydney, Australia, 30 May - 2 June 2027. Abstract submission closed 4 Aug 2026, 11:59pm PDT; acceptance/rejection notifications by 30 Dec 2026. International Society of Arthroscopy, Knee Surgery and Orthopaedic Sports Medicine's biennial world congress.",
+                "location": "Sydney, Australia",
+                "link": "https://isakos-congress.com/abstract-submission/",
+                "unconfirmed": false,
+                "verifiedOn": "2026-08-09T17:05"
+        },
     {
       "key": "ICRS|8th ICRS Summit (Porto)",
       "society": "ICRS",
