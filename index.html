@@ -593,7 +593,7 @@ function setSub(soc, on) {
   if (!pref) { pref = { id: currentUser.id, name: me(), subs: {} }; state.userPrefs.push(pref); }
   pref.name = me();
   pref.subs = Object.assign({}, pref.subs, { [soc]: on });
-  saveLocal(); pushItem("userPref", pref);
+  saveLocal(); pushItem("userPref", pref, prefRowId(currentUser.id));
 }
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
@@ -961,15 +961,18 @@ async function pullAll() {
   }
 }
 function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {} }); }
-async function pushItem(kind, obj) {
+// rowIdOverride exists for records whose natural key would collide with another kind's row —
+// see prefRowId(). Everything else stores itself under its own obj.id.
+async function pushItem(kind, obj, rowIdOverride) {
   if (!sb) return;
   try {
     const updatedAt = new Date().toISOString();
-    const { error } = await sb.from("items").upsert({ id: obj.id, kind, data: obj, updated_at: updatedAt });
+    const rowId = rowIdOverride || obj.id;
+    const { error } = await sb.from("items").upsert({ id: rowId, kind, data: obj, updated_at: updatedAt });
     if (error) throw error;
     // Advance our own baseline immediately so the save we just made isn't flagged as stale.
-    remoteMeta[obj.id] = { kind, updated_at: updatedAt };
-    if (editingRef && editingRef.id === obj.id) editingRef.baseline = updatedAt;
+    remoteMeta[rowId] = { kind, updated_at: updatedAt };
+    if (editingRef && editingRef.id === rowId) editingRef.baseline = updatedAt;
     setSyncPill(true, realtimeConfirmed ? "Live" : "Synced");
   } catch (e) { console.warn("push failed", e); setSyncPill(false, "Offline"); }
 }
@@ -1025,7 +1028,11 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
   }
   const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : null;
   if (!arr) return;
-  const i = arr.findIndex(x => x.id === id);
+  // Match on the payload's own id, not the row id: for userPref the two differ (see
+  // prefRowId), and matching on the row id would never find the existing entry — so every
+  // realtime update would append a duplicate instead of replacing.
+  const localKey = (data && data.id) || id;
+  const i = arr.findIndex(x => x.id === localKey);
   if (i >= 0) arr[i] = data; else arr.push(data);
   saveLocal();
   if (editingRef && editingRef.kind === kind && editingRef.id === id) {
@@ -1038,7 +1045,9 @@ function applyRealtimeDelete(id) {
   let hitOpenRecord = false;
   ["studies", "tasks", "meetings", "teamNotes", "userPrefs", "profiles"].forEach(key => {
     const before = state[key].length;
-    state[key] = state[key].filter(x => x.id !== id);
+    // userPref rows live under a derived row id, so also check that mapping — otherwise a
+    // deleted preferences row would linger in local state forever.
+    state[key] = state[key].filter(x => key === "userPrefs" ? (x.id !== id && prefRowId(x.id) !== id) : x.id !== id);
     if (state[key].length !== before && editingRef && editingRef.id === id) hitOpenRecord = true;
   });
   delete remoteMeta[id];
@@ -1073,7 +1082,10 @@ async function pushAllLocal() {
     ...state.tasks.map(t => ({ id: t.id, kind: "task", data: t, updated_at: now() })),
     ...state.meetings.map(m => ({ id: m.id, kind: "meeting", data: m, updated_at: now() })),
     ...state.teamNotes.map(n => ({ id: n.id, kind: "teamNote", data: n, updated_at: now() })),
-    ...(state.userPrefs || []).map(p => ({ id: p.id, kind: "userPref", data: p, updated_at: now() })),
+    // prefRowId, not p.id — p.id is the auth user id, which the profile row below already
+    // owns. Two rows sharing an id in one upsert is a hard Postgres error, so this whole
+    // batch used to fail for anyone who had ever set a subscription.
+    ...(state.userPrefs || []).map(p => ({ id: prefRowId(p.id), kind: "userPref", data: p, updated_at: now() })),
     ...(state.profiles || []).map(p => ({ id: p.id, kind: "profile", data: p, updated_at: now() })),
     { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster }, updated_at: now() }
   ];
