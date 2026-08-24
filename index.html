@@ -1755,6 +1755,14 @@ function bindDeadlineRows(root) {
   });
   // One-tap hide for deadlines the team isn't pursuing. The record is kept (so the deadline feed
   // won't re-suggest it) and can be brought back from Settings › Tracked Meetings.
+  const pastToggle = root.querySelector("[data-past-toggle]");
+  if (pastToggle) pastToggle.onclick = () => {
+    pastOpen = !pastOpen;
+    const body = root.querySelector("[data-past-body]");
+    if (body) body.style.display = pastOpen ? "" : "none";
+    const chev = pastToggle.querySelector("[data-past-chev]");
+    if (chev) chev.style.transform = `rotate(${pastOpen ? 90 : 0}deg)`;
+  };
   root.querySelectorAll("[data-hide-meeting]").forEach(el => el.onclick = (e) => {
     e.preventDefault(); e.stopPropagation();
     if (blockOfflineEdit("Hiding a deadline")) return;
@@ -1809,6 +1817,43 @@ function dashboardHTML() {
   };
   const absBoard = boardRows("abstract", "Abstracts due", "Meeting");
   const grantBoard = boardRows("grant", "Application due", "");
+
+  // Past abstract deadlines you actually acted on. A lapsed deadline with nothing linked is
+  // just noise and stays gone; one with a project attached is a record of what you submitted
+  // where, so it moves here instead of vanishing. Hidden ones are excluded by the same shared
+  // m.hidden flag the live board uses, so "hide" means one thing everywhere.
+  const pastAbstracts = state.meetings
+    .filter(m => (m.type || "abstract") !== "grant"
+      && !m.hidden
+      && sub[m.society] !== false
+      && m.deadline && daysUntil(m.deadline) < 0
+      && (m.studyIds || []).some(id => studyById(id)))
+    .sort((a, b) => (b.deadline || "").localeCompare(a.deadline || ""));
+  const pastAbstractsHTML = () => `<div class="card" style="padding:6px 0">` + pastAbstracts.map(m => {
+    const linked = (m.studyIds || []).map(id => studyById(id)).filter(Boolean);
+    return `
+      <div style="padding:9px 16px;border-bottom:0.5px solid var(--line)">
+        <div style="display:flex;align-items:flex-start;gap:8px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span class="badge" style="background:var(--text2);font-size:10px;padding:2px 7px">${esc(m.society)}</span>
+              <span>${esc(m.name)}</span>
+            </div>
+            <div style="font-size:12px;color:var(--text2);margin-top:2px">Was due ${fmtDate(m.deadline)}${m.dates ? " · " + esc(m.dates) : ""}</div>
+          </div>
+          <button class="mini-btn" data-hide-meeting="${m.id}" style="margin-top:0;flex:0 0 auto">Hide</button>
+        </div>
+        <div style="margin-top:6px">
+          ${linked.map(s => {
+            const info = abstractLinkInfo(s, m.id);
+            return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0">
+              <span class="badge" style="background:${ABS_LINK_STATUS_COLORS[info.status] || "var(--text2)"};font-size:9px;padding:2px 6px">${esc(info.status)}</span>
+              <span class="link-chip" data-open-study="${s.id}" style="font-size:13px">${esc(s.title)}</span>
+            </div>`;
+          }).join("")}
+        </div>
+      </div>`;
+  }).join("") + `</div>`;
   // "Last Updated" per board = the most recent save/edit/link/feed-refresh across all its
   // meetings, sourced from the same Supabase updated_at tracking used for conflict detection
   // (remoteMeta). Only meaningful with Team Sync connected — otherwise there's no timestamp to show.
@@ -1827,6 +1872,13 @@ function dashboardHTML() {
     </div>`;
   if (absBoard) html += absBoard;
   else html += `<div class="card" style="color:var(--text2);font-size:14px;line-height:1.5">${state.meetings.length ? "No upcoming abstract deadlines for your subscribed societies." : "No meetings yet — tap <b>+</b> → New Deadline, or load sample data."}</div>`;
+  if (pastAbstracts.length) {
+    html += `<div class="section-title" data-past-toggle style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
+        <span>Past Deadlines <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text2);font-size:11px">(${pastAbstracts.length} with submissions)</span></span>
+        <span data-past-chev style="font-size:11px;color:var(--text2);display:inline-block;transition:transform .2s;transform:rotate(${pastOpen ? 90 : 0}deg)">▸</span>
+      </div>
+      <div data-past-body style="${pastOpen ? "" : "display:none"}">${pastAbstractsHTML()}</div>`;
+  }
   html += `<div class="section-title">Grant &amp; Funding Deadlines${lastUpdatedLabel("grant")}</div>`;
   if (grantBoard) html += grantBoard;
   else html += `<div class="card" style="color:var(--text2);font-size:14px;line-height:1.5">No upcoming grant deadlines for your subscribed societies.</div>`;
@@ -2190,6 +2242,9 @@ function initiationBodyHTML(s) {
 // studySectionState holds open/closed per section id, recomputed fresh (auto-expand if the
 // section has content, else collapsed) whenever a *different* study is opened; manual
 // expand/collapse toggles are preserved across incidental re-renders of the same study.
+// Past Deadlines starts collapsed — it's a reference archive, not something to scroll past
+// every time the dashboard opens.
+let pastOpen = false;
 let studySectionState = {};
 let sectionStateForStudy = null;
 function collapsibleSection(id, title, bodyHTML) {
