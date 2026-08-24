@@ -385,6 +385,13 @@
       </div>
       <button class="btn" id="login-submit">Sign In</button>
       <button class="link-btn" id="login-forgot">Forgot password?</button>
+      <!-- Shown only after a wrong-password attempt. "Forgot password?" above is easy to miss
+           when you're convinced you typed the right thing, and the most common cause here is
+           someone who was invited but never actually set a password. -->
+      <div id="login-reset-offer" style="display:none;margin-top:10px;padding:11px 13px;background:var(--bg);border-radius:10px">
+        <div style="font-size:13px;color:var(--text2);line-height:1.45;margin-bottom:8px">Never set a password, or can't remember it? We can email you a link to set a new one.</div>
+        <button class="btn secondary" id="login-reset-send" style="margin:0">Email me a reset link</button>
+      </div>
     </div>
     <div id="login-recovery" style="display:none">
       <div id="recovery-intro" style="font-size:13.5px;color:var(--text2);margin-bottom:12px">Enter a new password for your account.</div>
@@ -3693,37 +3700,66 @@ document.getElementById("add-btn").onclick = () => {
 // the main render() loop), unlike the rest of the app.
 function bindLoginScreen() {
   const submitBtn = document.getElementById("login-submit");
+  const resetOffer = document.getElementById("login-reset-offer");
+  const setResetOffer = (show) => { if (resetOffer) resetOffer.style.display = show ? "block" : "none"; };
+  // Shared by the "Forgot password?" link and the post-failure offer below.
+  const sendReset = async (email, btn) => {
+    const label = btn && btn.textContent;
+    if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
+    try {
+      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+      if (error) throw error;
+      setResetOffer(false);
+      setLoginMsg("Reset link sent to " + email + ". Open it on this device — it expires in an hour and only works once.", "info");
+    } catch (e) {
+      setLoginMsg(e.message || "Could not send the reset email.");
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = label; }
+    }
+  };
   const doSignIn = async () => {
     if (!sb) { setLoginMsg("Still connecting — try again in a moment."); return; }
     const email = document.getElementById("login-email").value.trim();
     const password = document.getElementById("login-password").value;
     if (!email || !password) { setLoginMsg("Enter your email and password."); return; }
     setLoginMsg("");
+    setResetOffer(false);
     submitBtn.disabled = true; submitBtn.textContent = "Signing in…";
     try {
       const { error } = await sb.auth.signInWithPassword({ email, password });
       if (error) throw error;
       // Success is handled by handleAuthChange() via the auth-state listener.
     } catch (e) {
-      setLoginMsg(e.message || "Sign in failed.");
+      const msg = e.message || "Sign in failed.";
+      // Supabase returns the same generic "Invalid login credentials" whether the password is
+      // wrong or was never set at all — and "never set" is the common case for someone who was
+      // invited. So offer the way out instead of leaving them stuck on a dead end.
+      if (/invalid\s+login\s+credentials|invalid\s+credentials/i.test(msg)) {
+        setLoginMsg("That email and password don't match.");
+        setResetOffer(true);
+      } else {
+        setLoginMsg(msg);
+      }
     } finally {
       submitBtn.disabled = false; submitBtn.textContent = "Sign In";
     }
   };
+  const resetSendBtn = document.getElementById("login-reset-send");
+  if (resetSendBtn) resetSendBtn.onclick = () => {
+    if (!sb) { setLoginMsg("Still connecting — try again in a moment."); return; }
+    const email = document.getElementById("login-email").value.trim();
+    if (!email) { setLoginMsg("Enter your email above first."); return; }
+    sendReset(email, resetSendBtn);
+  };
   submitBtn.onclick = doSignIn;
   document.getElementById("login-password").addEventListener("keydown", (e) => { if (e.key === "Enter") doSignIn(); });
-  document.getElementById("login-forgot").onclick = async () => {
+  const forgotBtn = document.getElementById("login-forgot");
+  forgotBtn.onclick = async () => {
     if (!sb) { setLoginMsg("Still connecting — try again in a moment."); return; }
     const email = document.getElementById("login-email").value.trim();
     if (!email) { setLoginMsg("Enter your email above first, then tap Forgot password."); return; }
     setLoginMsg("");
-    try {
-      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
-      if (error) throw error;
-      setLoginMsg("Check your email for a password reset link.", "info");
-    } catch (e) {
-      setLoginMsg(e.message || "Could not send reset email.");
-    }
+    await sendReset(email, forgotBtn);
   };
   document.getElementById("recovery-submit").onclick = async () => {
     if (!sb) return;
