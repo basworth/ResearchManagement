@@ -1511,23 +1511,20 @@ function render() {
   renderSidebar(); // desktop-only collapsible dashboard panel, kept in sync with every render
 }
 
-// Expandable deadline row used on both boards (abstracts & grants).
-// stage "tba" means the society is on the calendar but hasn't published a submission date yet.
+// Expandable deadline row used on both boards (abstracts & grants)
 function deadlineItemHTML(m, dueWord, metaWord, stage) {
   stage = stage || "main";
   const isLoi = stage === "loi";
-  const isTba = stage === "tba";
   const hasLoi = !!m.loiDeadline;
   const theDate = isLoi ? m.loiDeadline : m.deadline;
   const dleft = daysUntil(theDate);
-  const urg = isTba ? "var(--text2)" : dleft <= 7 ? "var(--red)" : dleft <= 30 ? "var(--orange)" : "var(--green)";
+  const urg = dleft <= 7 ? "var(--red)" : dleft <= 30 ? "var(--orange)" : "var(--green)";
   const isGrant = (m.type || "abstract") === "grant";
   // Stage badge + "due" wording, so LOI and application read as distinct stages of the same deadline.
   const stageBadge = isLoi
     ? `<span class="badge" style="background:var(--purple);font-size:9px;padding:1px 6px;letter-spacing:.3px">LOI</span>`
     : (hasLoi ? `<span class="badge" style="background:var(--teal);font-size:9px;padding:1px 6px;letter-spacing:.3px">${isGrant ? "APPLICATION" : "FINAL"}</span>` : "");
-  const stageDue = isTba ? "Submission date not announced yet"
-    : isLoi ? "LOI due" : (hasLoi ? (isGrant ? "Full application due" : "Final deadline") : dueWord);
+  const stageDue = isLoi ? "LOI due" : (hasLoi ? (isGrant ? "Full application due" : "Final deadline") : dueWord);
   // Visible link to the counterpart stage (not nested — just a reference line).
   let linkNote = "";
   if (isLoi && m.deadline) linkNote = ` · ${isGrant ? "full application" : "final"} ${fmtDate(m.deadline)}`;
@@ -1561,10 +1558,8 @@ function deadlineItemHTML(m, dueWord, metaWord, stage) {
   <details class="dl">
     <summary>
       <div style="min-width:50px;text-align:center">
-        ${isTba
-          ? `<div style="font-size:15px;font-weight:800;line-height:1.1;color:${urg}">TBA</div>`
-          : `<div style="font-size:22px;font-weight:800;line-height:1;color:${urg}">${dleft}</div>
-             <div style="font-size:9.5px;color:var(--text2);font-weight:700;text-transform:uppercase">day${dleft === 1 ? "" : "s"}</div>`}
+        <div style="font-size:22px;font-weight:800;line-height:1;color:${urg}">${dleft}</div>
+        <div style="font-size:9.5px;color:var(--text2);font-weight:700;text-transform:uppercase">day${dleft === 1 ? "" : "s"}</div>
       </div>
       <div style="flex:1;min-width:0">
         <div style="font-size:14.5px;font-weight:700;display:flex;align-items:center;gap:6px">
@@ -1573,7 +1568,7 @@ function deadlineItemHTML(m, dueWord, metaWord, stage) {
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.name)}</span>
         </div>
         <div style="font-size:12.5px;color:var(--text2);margin-top:2px">
-          ${stageDue}${isTba ? "" : " " + fmtDate(theDate)}${linkNote}${m.dates && !isLoi ? " · " + (metaWord ? metaWord + " " : "") + esc(m.dates) : ""}${linked.length ? ` · ${linked.length} project${linked.length > 1 ? "s" : ""}` : ""}${m.unconfirmed ? ` · <span style="color:var(--orange);font-weight:700">⚠︎ confirm</span>` : ""}
+          ${stageDue} ${fmtDate(theDate)}${linkNote}${m.dates && !isLoi ? " · " + (metaWord ? metaWord + " " : "") + esc(m.dates) : ""}${linked.length ? ` · ${linked.length} project${linked.length > 1 ? "s" : ""}` : ""}${m.unconfirmed ? ` · <span style="color:var(--orange);font-weight:700">⚠︎ confirm</span>` : ""}
         </div>
       </div>
       <span class="chev">▶</span>
@@ -1633,22 +1628,18 @@ function dashboardHTML() {
     // Each meeting can contribute up to two separate rows: an LOI deadline and the
     // main application/abstract deadline. They're listed individually but visibly linked.
     const entries = [];
-    const undated = [];
     state.meetings
       .filter(m => (m.type || "abstract") === type && sub[m.society] !== false && !m.hidden)
       .forEach(m => {
         if (m.loiDeadline && daysUntil(m.loiDeadline) >= 0) entries.push({ m, stage: "loi", date: m.loiDeadline });
         if (m.deadline && daysUntil(m.deadline) >= 0) entries.push({ m, stage: "main", date: m.deadline });
-        // A society we're tracking that hasn't published its submission date yet would
-        // otherwise vanish from the board entirely — no row, no way to link a project to it,
-        // and no hint that it's even being watched. Keep it visible, sorted to the bottom.
-        if (!m.deadline && !m.loiDeadline) undated.push({ m, stage: "tba", date: "" });
       });
+    // Meetings with no published submission date are deliberately NOT listed here (Adam's
+    // call, 2026-08-24): the board is for things that can actually be acted on. They remain
+    // fully present in Settings › Tracked Meetings, and reappear the moment a date is set.
     entries.sort((a, b) => a.date.localeCompare(b.date));
-    const all = entries.concat(undated.sort((a, b) =>
-      (a.m.society || "").localeCompare(b.m.society || "") || (a.m.name || "").localeCompare(b.m.name || "")));
-    if (!all.length) return "";
-    return `<div class="card" style="padding:6px 0">` + all.map(e => deadlineItemHTML(e.m, dueWord, metaWord, e.stage)).join("") + `</div>`;
+    if (!entries.length) return "";
+    return `<div class="card" style="padding:6px 0">` + entries.map(e => deadlineItemHTML(e.m, dueWord, metaWord, e.stage)).join("") + `</div>`;
   };
   const absBoard = boardRows("abstract", "Abstracts due", "Meeting");
   const grantBoard = boardRows("grant", "Application due", "");
