@@ -387,7 +387,7 @@
       <button class="link-btn" id="login-forgot">Forgot password?</button>
     </div>
     <div id="login-recovery" style="display:none">
-      <div style="font-size:13.5px;color:var(--text2);margin-bottom:12px">Enter a new password for your account.</div>
+      <div id="recovery-intro" style="font-size:13.5px;color:var(--text2);margin-bottom:12px">Enter a new password for your account.</div>
       <div class="fgroup">
         <div class="frow"><label>New password</label><input id="recovery-password" type="password" autocomplete="new-password" placeholder="••••••••"></div>
       </div>
@@ -528,17 +528,41 @@ const SOCIETIES = {
   AOSSM: "American Orthopaedic Society for Sports Medicine",
   OREF: "Orthopaedic Research and Education Foundation",
   IPSG: "International Patellofemoral Study Group",
-  ICRS: "International Cartilage Regeneration & Joint Preservation Society"
+  ICRS: "International Cartilage Regeneration & Joint Preservation Society",
+  ISHA: "International Society for Hip Arthroscopy",
+  ISAKOS: "International Society of Arthroscopy, Knee Surgery & Orthopaedic Sports Medicine",
+  ESSKA: "European Society for Sports Traumatology, Knee Surgery & Arthroscopy",
+  ASES: "American Shoulder and Elbow Surgeons",
+  "SECEC/ESSSE": "European Society for Surgery of the Shoulder and the Elbow",
+  ICSES: "International Congress on Shoulder and Elbow Surgery",
+  ORS: "Orthopaedic Research Society"
 };
+// The deadline feed can introduce societies this map has never heard of, and a society with
+// no entry here used to get no subscription toggle at all — visible on the board but
+// impossible to switch off. So the Settings list is built from the union of the map above and
+// whatever is actually in the data, with the code itself as the fallback label.
+function allSocieties() {
+  const out = Object.assign({}, SOCIETIES);
+  // Defensive: `state` is declared below this function, so a very early caller would hit the
+  // temporal dead zone. Fall back to the static map rather than throwing.
+  const known = (typeof state !== "undefined" && state && state.meetings) ? state.meetings : [];
+  known.forEach(m => {
+    const soc = (m.society || "").trim();
+    if (soc && !out[soc]) out[soc] = soc;
+  });
+  return Object.fromEntries(Object.keys(out).sort((a, b) => a.localeCompare(b)).map(k => [k, out[k]]));
+}
 // Personal show/hide prefs, keyed by the signed-in account's stable auth id — so the same
 // login sees the same board filters on any device.
 function subs() {
+  // Default every known society to on, including ones that only exist in the feed, so a
+  // toggle the person has never touched behaves the same as one they explicitly enabled.
+  const allOn = Object.fromEntries(Object.keys(allSocieties()).map(k => [k, true]));
   if (currentUser) {
     const pref = (state.userPrefs || []).find(p => p.id === currentUser.id);
-    if (pref && pref.subs) return Object.assign(Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true])), pref.subs);
-    return Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true]));
+    if (pref && pref.subs) return Object.assign(allOn, pref.subs);
   }
-  return Object.fromEntries(Object.keys(SOCIETIES).map(k => [k, true]));
+  return allOn;
 }
 function setSub(soc, on) {
   if (!currentUser) return;
@@ -816,13 +840,36 @@ async function bootApp() {
     scheduleReconnect();
   }
 }
+// Invite links and password-reset links both arrive with a one-time token in the URL, but
+// supabase-js treats them differently: a reset raises PASSWORD_RECOVERY, while an INVITE only
+// raises SIGNED_IN. Relying on the event alone therefore drops an invited person straight
+// into the app without ever asking for a password — and since they never set one, they can
+// never sign in again afterwards. So read the link's own `type` out of the URL instead.
+// Captured at parse time because createClient({detectSessionInUrl}) strips the hash.
+function detectAuthLinkType() {
+  const blob = (window.location.hash || "").replace(/^#/, "") + "&" + (window.location.search || "").replace(/^\?/, "");
+  const m = /(?:^|&)type=([^&]+)/.exec(blob);
+  return m ? decodeURIComponent(m[1]) : "";
+}
+let authLinkType = detectAuthLinkType();
+let pendingPasswordSetup = ["invite", "recovery", "signup"].indexOf(authLinkType) >= 0;
+
+function showPasswordSetup(isInvite) {
+  showLoginScreen();
+  document.getElementById("login-fields").style.display = "none";
+  document.getElementById("login-recovery").style.display = "block";
+  const intro = document.getElementById("recovery-intro");
+  if (intro) intro.textContent = isInvite
+    ? "Welcome! Choose a password to finish setting up your account. You'll use your email and this password to sign in from now on."
+    : "Enter a new password for your account.";
+  setLoginMsg("");
+}
+
 // Central handler for every auth transition: initial sign-in, later sign-in, sign-out, and
 // password-recovery links. Fully owns showing/hiding the login screen and (re)loading data.
 async function handleAuthChange(event, session) {
-  if (event === "PASSWORD_RECOVERY") {
-    document.getElementById("login-fields").style.display = "none";
-    document.getElementById("login-recovery").style.display = "block";
-    setLoginMsg("");
+  if (event === "PASSWORD_RECOVERY" || pendingPasswordSetup) {
+    showPasswordSetup(authLinkType === "invite");
     return;
   }
   if (session && session.user) {
@@ -1430,20 +1477,23 @@ function render() {
   renderSidebar(); // desktop-only collapsible dashboard panel, kept in sync with every render
 }
 
-// Expandable deadline row used on both boards (abstracts & grants)
+// Expandable deadline row used on both boards (abstracts & grants).
+// stage "tba" means the society is on the calendar but hasn't published a submission date yet.
 function deadlineItemHTML(m, dueWord, metaWord, stage) {
   stage = stage || "main";
   const isLoi = stage === "loi";
+  const isTba = stage === "tba";
   const hasLoi = !!m.loiDeadline;
   const theDate = isLoi ? m.loiDeadline : m.deadline;
   const dleft = daysUntil(theDate);
-  const urg = dleft <= 7 ? "var(--red)" : dleft <= 30 ? "var(--orange)" : "var(--green)";
+  const urg = isTba ? "var(--text2)" : dleft <= 7 ? "var(--red)" : dleft <= 30 ? "var(--orange)" : "var(--green)";
   const isGrant = (m.type || "abstract") === "grant";
   // Stage badge + "due" wording, so LOI and application read as distinct stages of the same deadline.
   const stageBadge = isLoi
     ? `<span class="badge" style="background:var(--purple);font-size:9px;padding:1px 6px;letter-spacing:.3px">LOI</span>`
     : (hasLoi ? `<span class="badge" style="background:var(--teal);font-size:9px;padding:1px 6px;letter-spacing:.3px">${isGrant ? "APPLICATION" : "FINAL"}</span>` : "");
-  const stageDue = isLoi ? "LOI due" : (hasLoi ? (isGrant ? "Full application due" : "Final deadline") : dueWord);
+  const stageDue = isTba ? "Submission date not announced yet"
+    : isLoi ? "LOI due" : (hasLoi ? (isGrant ? "Full application due" : "Final deadline") : dueWord);
   // Visible link to the counterpart stage (not nested — just a reference line).
   let linkNote = "";
   if (isLoi && m.deadline) linkNote = ` · ${isGrant ? "full application" : "final"} ${fmtDate(m.deadline)}`;
@@ -1477,8 +1527,10 @@ function deadlineItemHTML(m, dueWord, metaWord, stage) {
   <details class="dl">
     <summary>
       <div style="min-width:50px;text-align:center">
-        <div style="font-size:22px;font-weight:800;line-height:1;color:${urg}">${dleft}</div>
-        <div style="font-size:9.5px;color:var(--text2);font-weight:700;text-transform:uppercase">day${dleft === 1 ? "" : "s"}</div>
+        ${isTba
+          ? `<div style="font-size:15px;font-weight:800;line-height:1.1;color:${urg}">TBA</div>`
+          : `<div style="font-size:22px;font-weight:800;line-height:1;color:${urg}">${dleft}</div>
+             <div style="font-size:9.5px;color:var(--text2);font-weight:700;text-transform:uppercase">day${dleft === 1 ? "" : "s"}</div>`}
       </div>
       <div style="flex:1;min-width:0">
         <div style="font-size:14.5px;font-weight:700;display:flex;align-items:center;gap:6px">
@@ -1487,7 +1539,7 @@ function deadlineItemHTML(m, dueWord, metaWord, stage) {
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(m.name)}</span>
         </div>
         <div style="font-size:12.5px;color:var(--text2);margin-top:2px">
-          ${stageDue} ${fmtDate(theDate)}${linkNote}${m.dates && !isLoi ? " · " + (metaWord ? metaWord + " " : "") + esc(m.dates) : ""}${linked.length ? ` · ${linked.length} project${linked.length > 1 ? "s" : ""}` : ""}${m.unconfirmed ? ` · <span style="color:var(--orange);font-weight:700">⚠︎ confirm</span>` : ""}
+          ${stageDue}${isTba ? "" : " " + fmtDate(theDate)}${linkNote}${m.dates && !isLoi ? " · " + (metaWord ? metaWord + " " : "") + esc(m.dates) : ""}${linked.length ? ` · ${linked.length} project${linked.length > 1 ? "s" : ""}` : ""}${m.unconfirmed ? ` · <span style="color:var(--orange);font-weight:700">⚠︎ confirm</span>` : ""}
         </div>
       </div>
       <span class="chev">▶</span>
@@ -1547,15 +1599,22 @@ function dashboardHTML() {
     // Each meeting can contribute up to two separate rows: an LOI deadline and the
     // main application/abstract deadline. They're listed individually but visibly linked.
     const entries = [];
+    const undated = [];
     state.meetings
       .filter(m => (m.type || "abstract") === type && sub[m.society] !== false && !m.hidden)
       .forEach(m => {
         if (m.loiDeadline && daysUntil(m.loiDeadline) >= 0) entries.push({ m, stage: "loi", date: m.loiDeadline });
         if (m.deadline && daysUntil(m.deadline) >= 0) entries.push({ m, stage: "main", date: m.deadline });
+        // A society we're tracking that hasn't published its submission date yet would
+        // otherwise vanish from the board entirely — no row, no way to link a project to it,
+        // and no hint that it's even being watched. Keep it visible, sorted to the bottom.
+        if (!m.deadline && !m.loiDeadline) undated.push({ m, stage: "tba", date: "" });
       });
     entries.sort((a, b) => a.date.localeCompare(b.date));
-    if (!entries.length) return "";
-    return `<div class="card" style="padding:6px 0">` + entries.map(e => deadlineItemHTML(e.m, dueWord, metaWord, e.stage)).join("") + `</div>`;
+    const all = entries.concat(undated.sort((a, b) =>
+      (a.m.society || "").localeCompare(b.m.society || "") || (a.m.name || "").localeCompare(b.m.name || "")));
+    if (!all.length) return "";
+    return `<div class="card" style="padding:6px 0">` + all.map(e => deadlineItemHTML(e.m, dueWord, metaWord, e.stage)).join("") + `</div>`;
   };
   const absBoard = boardRows("abstract", "Abstracts due", "Meeting");
   const grantBoard = boardRows("grant", "Application due", "");
@@ -2874,7 +2933,7 @@ function renderSettings() {
   <div class="section-title" id="societies-anchor">Society Subscriptions</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">Toggle which societies appear on your dashboard deadline board. This is a personal view setting — it won't change what your teammates see.${me() ? " Saved under your name, so it follows you to any device." : " No name entered above, so this is saved on this device only."}</div>
   <div class="fgroup">
-    ${Object.entries(SOCIETIES).map(([k, full]) => `
+    ${Object.entries(allSocieties()).map(([k, full]) => `
       <div class="frow">
         <div style="flex:1"><div style="font-size:15px;font-weight:600">${k}</div><div style="font-size:11.5px;color:var(--text2);line-height:1.3">${esc(full)}</div></div>
         <input type="checkbox" class="sub-toggle" data-soc="${k}" ${currentSubs[k] !== false ? "checked" : ""} style="flex:0;width:24px;height:24px">
@@ -3311,7 +3370,10 @@ function openMeetingForm(existing) {
   openSheet(existing ? "Edit Deadline" : "New Deadline", `
     <div class="fgroup">
       <div class="frow"><label>Type</label><select id="f-mtype"><option value="abstract" ${(m.type || "abstract") === "abstract" ? "selected" : ""}>Abstract</option><option value="grant" ${m.type === "grant" ? "selected" : ""}>Grant / Funding</option></select></div>
-      <div class="frow"><label>Society</label>${selectHTML("f-msoc", Object.keys(SOCIETIES), m.society)}</div>
+      <!-- allSocieties(), not SOCIETIES: a feed-only society (ISHA, ORS, …) would otherwise be
+           missing from this dropdown, so opening Edit on one of those meetings and saving would
+           silently reassign it to whichever society happened to be first in the list. -->
+      <div class="frow"><label>Society</label>${selectHTML("f-msoc", Object.keys(allSocieties()), m.society)}</div>
       <div class="frow"><label>Name</label><input id="f-mname" placeholder="e.g. 2027 Annual Meeting or Clinical Research Award" value="${esc(m.name)}"></div>
       <div class="frow"><label>LOI due</label><input id="f-mloi" type="date" value="${esc(m.loiDeadline || "")}"></div>
       <div class="frow"><label id="f-mdeadline-lbl">${(m.type || "abstract") === "grant" ? "Application due" : "Deadline"}</label><input id="f-mdeadline" type="date" value="${esc(m.deadline || "")}"></div>
@@ -3618,9 +3680,21 @@ function bindLoginScreen() {
     try {
       const { error } = await sb.auth.updateUser({ password });
       if (error) throw error;
+      // Clear the one-time token out of the URL so a refresh doesn't bounce them back to this
+      // screen, then let them straight through — the invite link already signed them in, so
+      // making them retype the password they just chose would be pointless.
+      pendingPasswordSetup = false;
+      authLinkType = "";
+      try { history.replaceState(null, "", window.location.pathname); } catch (e) { /* non-fatal */ }
       document.getElementById("login-recovery").style.display = "none";
       document.getElementById("login-fields").style.display = "block";
-      toast("Password updated");
+      const { data: sess } = await sb.auth.getSession();
+      if (sess && sess.session) {
+        await handleAuthChange("SIGNED_IN", sess.session);
+        toast("Password set — you're signed in");
+      } else {
+        setLoginMsg("Password set. Sign in with your email and new password.", "info");
+      }
     } catch (e) {
       setLoginMsg(e.message || "Could not update password.");
     }
