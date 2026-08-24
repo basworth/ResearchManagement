@@ -564,6 +564,28 @@ function subs() {
   }
   return allOn;
 }
+// A person's `profile` row and their `userPref` row are both naturally keyed by their auth
+// user id — but `items.id` is the primary key, so storing both under that id means each upsert
+// overwrites the other. Profiles win, because one is written on every single sign-in. That is
+// why society-subscription changes silently reverted and the userPref table stayed completely
+// empty. (It also made pushAllLocal fail outright: two rows with the same id in one upsert is
+// a Postgres error.) So give the preferences row its own stable, derived uuid. `pref.id` stays
+// the user id, since that's what every lookup in the app matches on.
+function prefRowId(userId) {
+  const s = "pref:" + String(userId || "");
+  let h1 = 0x811c9dc5, h2 = 0x01000193, h3 = 0x9e3779b9, h4 = 0x85ebca6b;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = ((h1 ^ c) * 16777619) >>> 0;
+    h2 = (h2 + c * 2654435761) >>> 0;
+    h3 = ((h3 ^ (c + i)) * 2246822519) >>> 0;
+    h4 = (h4 + (c << (i % 13))) >>> 0;
+  }
+  const hx = n => ("00000000" + (n >>> 0).toString(16)).slice(-8);
+  const raw = hx(h1) + hx(h2) + hx(h3) + hx(h4);
+  // Shaped as a v5-style uuid so it satisfies the column's uuid type.
+  return raw.slice(0, 8) + "-" + raw.slice(8, 12) + "-5" + raw.slice(13, 16) + "-8" + raw.slice(17, 20) + "-" + raw.slice(20, 32);
+}
 function setSub(soc, on) {
   if (!currentUser) return;
   state.userPrefs = state.userPrefs || [];
@@ -3466,6 +3488,7 @@ function loadSample() {
 // others seeded as editable placeholders flagged "unconfirmed" — fill from each society's call for abstracts).
 function seedMeetings() {
   applyFeedEntries(SEED_FEED, false);
+  removeMeetingsByKey(REMOVED_KEYS);
 }
 
 // Built-in seed feed (mirrors deadlines.json; used when the hosted file isn't reachable, e.g. opened locally).
@@ -3509,7 +3532,33 @@ const SEED_FEED = [
   { key: "ISHA|2027 Annual Scientific Meeting", society: "ISHA", type: "abstract", name: "2027 ISHA Annual Scientific Meeting", deadline: "", dates: "Ottawa, Canada, 16–18 Sept 2027 (date changed from original announcement to avoid conflicting events). Abstract call not yet open. ISHA — The Hip Preservation Society is the leading hip arthroscopy/preservation congress.", location: "Ottawa, Canada", link: "https://www.ishasoc.net/isha-2027-annual-scientific-meeting-host-destination-announced/", unconfirmed: true, verifiedOn: "2026-08-24T09:00" },
   { key: "SPRI|Vail Hip Summit", society: "Steadman Philippon Research Institute", type: "abstract", name: "Vail Hip Summit", deadline: "", dates: "Annual hip preservation meeting hosted by the Steadman Philippon Research Institute in Vail, CO; ISHA – The Hip Preservation Society-approved meeting. 2026 edition held April 9–11, 2026 (abstract submissions accepted; specific deadline not published). 2027 dates and call for abstracts not yet announced.", location: "Vail, CO", link: "https://www.sprivail.org/events/vail-hip-summit", unconfirmed: true, verifiedOn: "2026-08-24T09:00" },
 ];
-// updatedOn: 2026-08-09
+// updatedOn: 2026-08-24
+
+// Keys retired from tracking. Unlike simply omitting a key from SEED_FEED/deadlines.json (which
+// only stops it from being *re-seeded* on brand-new devices), listing it here actively deletes
+// any matching meeting a device already synced locally or via Supabase — applyFeedEntries only
+// ever adds/updates by key and never deletes on its own, so without this a removed meeting keeps
+// showing up forever on any device that saw it before the removal (e.g. ICRS "8th ICRS Summit
+// (Porto)", dropped 2026-08-24 per Adam's request to track ICRS World Congress only).
+const REMOVED_KEYS = ["ICRS|8th ICRS Summit (Porto)"];
+
+// Deletes any already-synced meeting (and its auto-linked submission tasks) whose key is in
+// `keys` — the tombstone counterpart to applyFeedEntries. Returns how many were removed.
+function removeMeetingsByKey(keys) {
+  if (!keys || !keys.length) return 0;
+  const set = new Set(keys);
+  const toRemove = state.meetings.filter(m => m.key && set.has(m.key));
+  if (!toRemove.length) return 0;
+  const ids = toRemove.map(m => m.id);
+  state.meetings = state.meetings.filter(m => !ids.includes(m.id));
+  const orphaned = state.tasks.filter(t => ids.includes(t.linkedMeetingId)).map(t => t.id);
+  state.tasks = state.tasks.filter(t => !ids.includes(t.linkedMeetingId));
+  saveLocal();
+  ids.forEach(deleteRemote);
+  orphaned.forEach(deleteRemote);
+  render();
+  return toRemove.length;
+}
 
 // Merge feed entries into state.meetings. A feed entry updates the matching meeting only when its
 // verifiedOn is newer than what we last applied, so manual edits between refreshes are preserved
@@ -3547,7 +3596,9 @@ async function fetchDeadlineFeed() {
     const data = await res.json();
     const entries = Array.isArray(data) ? data : data.meetings;
     const n = applyFeedEntries(entries, true);
-    if (n) toast("Deadlines updated");
+    const feedRemovedKeys = (!Array.isArray(data) && Array.isArray(data.removedKeys)) ? data.removedKeys : [];
+    const r = removeMeetingsByKey(Array.from(new Set(REMOVED_KEYS.concat(feedRemovedKeys))));
+    if (n || r) toast("Deadlines updated");
   } catch (e) { /* offline or opened as a local file — seeds already cover it */ }
 }
 
@@ -3704,6 +3755,7 @@ loadLocal();
 // On first ever launch, seed the meeting board so deadlines show without needing sample data.
 if (!localStorage.getItem("rt-seeded")) {
   applyFeedEntries(SEED_FEED, false);
+  removeMeetingsByKey(REMOVED_KEYS);
   localStorage.setItem("rt-seeded", "1");
 }
 // On desktop the dashboard lives in the sidebar, so start on the Worklist instead of duplicating it in the main pane.

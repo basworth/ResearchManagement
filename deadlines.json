@@ -1,6 +1,9 @@
 {
   "_comment": "Abstract-deadline feed for Research Tracker. The biweekly scheduled task rewrites this file after checking each society. The app fetches it on load and merges any entry whose verifiedOn is newer. 'key' must stay stable so updates match the right meeting. Set unconfirmed=false only when a date is verified from the society's official call for abstracts.",
   "updatedOn": "2026-08-24",
+  "removedKeys": [
+    "ICRS|8th ICRS Summit (Porto)"
+  ],
   "meetings": [
     {
       "key": "AAOS|2027 Annual Meeting",
