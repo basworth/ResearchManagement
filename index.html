@@ -518,14 +518,125 @@ function me() {
   const p = profileFor(currentUser.id);
   return p ? p.name : "";
 }
-function upsertProfile(name) {
+// What someone does, kept separate from what they're allowed to do — a person can be a
+// research assistant AND an admin, so position and admin are two fields, not one list.
+const POSITIONS = [
+  "Clinician",
+  "Scientist",
+  "Research manager (CRCM)",
+  "Sports medicine fellow",
+  "Orthopedic resident",
+  "Research assistant",
+  "Student"
+];
+function upsertProfile(name, extra) {
   if (!currentUser) return;
   state.profiles = state.profiles || [];
   let p = profileFor(currentUser.id);
-  if (!p) { p = { id: currentUser.id, email: currentUser.email, name: "" }; state.profiles.push(p); }
+  if (!p) { p = { id: currentUser.id, email: currentUser.email, name: "", position: "", reportsTo: "" }; state.profiles.push(p); }
   p.email = currentUser.email;
-  p.name = name;
+  if (name != null) p.name = name;
+  if (extra) Object.assign(p, extra);
   saveLocal(); pushItem("profile", p);
+}
+// Admin-only edit of somebody else's record (org chart). Kept separate from upsertProfile so
+// the "this is me" path can't accidentally be used to rewrite another person's row.
+function updateProfileFields(userId, fields) {
+  const p = profileFor(userId);
+  if (!p) return;
+  Object.assign(p, fields);
+  saveLocal(); pushItem("profile", p);
+}
+function positionOf(userId) { const p = profileFor(userId); return (p && p.position) || ""; }
+
+// ---------- Org chart ----------
+// Reporting lines are stored per profile as `reportsTo` (another profile's user id). Anyone
+// whose manager is missing or unset is treated as a root, so a deleted account can never
+// orphan the people under it — they just float to the top rather than vanishing.
+function orgChildren(id) {
+  return (state.profiles || [])
+    .filter(p => (p.reportsTo || "") === id)
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+}
+function orgRoots() {
+  return (state.profiles || [])
+    .filter(p => !p.reportsTo || !profileFor(p.reportsTo))
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+}
+function orgChartHTML(canEdit) {
+  const seen = {};
+  const row = (p, depth) => {
+    if (seen[p.id]) return "";   // cycle guard: a loop would otherwise recurse forever
+    seen[p.id] = true;
+    const badge = p.position
+      ? `<span class="badge outline" style="font-size:9.5px;padding:1px 6px;margin-left:6px">${esc(p.position)}</span>`
+      : `<span class="badge" style="background:var(--orange);font-size:9.5px;padding:1px 6px;margin-left:6px">role not set</span>`;
+    const admin = p.admin ? `<span class="badge" style="background:var(--blue);font-size:9.5px;padding:1px 6px;margin-left:4px">admin</span>` : "";
+    const kids = orgChildren(p.id).map(c => row(c, depth + 1)).join("");
+    return `
+      <div class="task-row" style="padding:8px 0;gap:8px;padding-left:${depth * 18}px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis">${depth ? `<span style="color:var(--text2)">└ </span>` : ""}${esc(p.name || p.email || "Unnamed")}${badge}${admin}</div>
+          <div style="font-size:11.5px;color:var(--text2)">${esc(p.email || "")}</div>
+        </div>
+        ${canEdit ? `<button class="mini-btn" data-org-edit="${esc(p.id)}" style="margin-top:0;flex:0 0 auto">Edit</button>` : ""}
+      </div>${kids}`;
+  };
+  const profiles = state.profiles || [];
+  if (!profiles.length) return `<div style="color:var(--text2);font-size:14px">Nobody has signed in yet, so there's nothing to chart.</div>`;
+  let html = orgRoots().map(p => row(p, 0)).join("");
+  // Anyone caught in a reporting loop never gets rendered above. If EVERY profile is in one,
+  // the tree comes back empty — which must not be mistaken for "no one has signed in". Either
+  // way, list the stranded people so they're visible and, crucially, still editable.
+  const missing = profiles.filter(p => !seen[p.id]);
+  if (missing.length) {
+    html += `<div style="font-size:12.5px;color:var(--red);margin:10px 0 2px">These people report in a circle, so they can't be placed. Edit one of them to point somewhere else:</div>`;
+    html += missing.map(p => `
+      <div class="task-row" style="padding:8px 0;gap:8px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14.5px;font-weight:600">${esc(p.name || p.email || "Unnamed")}</div>
+          <div style="font-size:11.5px;color:var(--text2)">${esc(p.email || "")}</div>
+        </div>
+        ${canEdit ? `<button class="mini-btn" data-org-edit="${esc(p.id)}" style="margin-top:0;flex:0 0 auto">Edit</button>` : ""}
+      </div>`).join("");
+  }
+  return html;
+}
+function openOrgSheet(userId) {
+  const p = profileFor(userId);
+  if (!p) return;
+  // A person can't report to themselves, nor to anyone already beneath them — that's what
+  // creates the loops the chart has to guard against, so block it at the source.
+  const descendants = {};
+  (function walk(id) { orgChildren(id).forEach(c => { descendants[c.id] = true; walk(c.id); }); })(userId);
+  const candidates = (state.profiles || []).filter(x => x.id !== userId && !descendants[x.id]);
+  openSheet("Edit " + (p.name || p.email), `
+    <div class="fgroup">
+      <div class="frow"><label>Role</label>${selectHTML("f-org-pos", ["— not set —"].concat(POSITIONS), p.position || "— not set —")}</div>
+      <div class="frow"><label>Reports to</label>
+        <select id="f-org-boss">
+          <option value="">— top of chart —</option>
+          ${candidates.map(x => `<option value="${esc(x.id)}" ${x.id === p.reportsTo ? "selected" : ""}>${esc(x.name || x.email)}</option>`).join("")}
+        </select>
+      </div>
+      <div class="frow" style="gap:10px">
+        <input type="checkbox" id="f-org-admin" ${p.admin ? "checked" : ""}>
+        <label for="f-org-admin" style="flex:1">Admin — can see and edit every project</label>
+      </div>
+    </div>
+    <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+      Roles and reporting lines are recorded for everyone, but they don't change who can see what yet — that stays off until you switch it on below the chart.
+    </div>`,
+    () => {
+      const pos = document.getElementById("f-org-pos").value;
+      updateProfileFields(userId, {
+        position: pos === "— not set —" ? "" : pos,
+        reportsTo: document.getElementById("f-org-boss").value,
+        admin: document.getElementById("f-org-admin").checked
+      });
+      render();
+      toast("Saved — change it again any time from Settings › Org Chart");
+    });
 }
 
 // Orthopedic societies for the abstract-deadline board (full names for reference)
@@ -605,7 +716,7 @@ function setSub(soc, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [] };
+let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], orgPermissions: false };
 let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
@@ -726,6 +837,13 @@ function migrate() {
   if (!Array.isArray(state.teamNotes)) state.teamNotes = [];
   if (!Array.isArray(state.userPrefs)) state.userPrefs = [];
   if (!Array.isArray(state.profiles)) state.profiles = [];
+  // Profiles predate the org chart, so backfill the new fields rather than letting undefined
+  // leak into comparisons and selects.
+  state.profiles.forEach(p => {
+    if (typeof p.position !== "string") p.position = "";
+    if (typeof p.reportsTo !== "string") p.reportsTo = "";
+    if (typeof p.admin !== "boolean") p.admin = ADMIN_NAMES.includes(canonName(p.name || ""));
+  });
   if (!Array.isArray(state.meetings)) state.meetings = [];
   state.meetings.forEach(m => {
     if (!m.type) m.type = "abstract";
@@ -929,22 +1047,37 @@ async function handleAuthChange(event, session) {
 // First time a given account signs in, ask what to call them — matching their existing roster
 // name (if they have one) means their existing task assignments and study PI/team involvement
 // keep working immediately, with nothing to re-assign.
+// Runs after every sign-in. Prompts for anything still missing — a brand-new account needs
+// both name and position, while someone who joined before positions existed only gets asked
+// for the position. Anyone already complete is never bothered.
 function maybePromptDisplayName() {
-  if (!currentUser || profileFor(currentUser.id)) return;
-  openSheet("Welcome — what's your name?", `
+  if (!currentUser) return;
+  const p = profileFor(currentUser.id);
+  const needName = !p;
+  const needPosition = !p || !p.position;
+  if (!needName && !needPosition) return;
+  const title = needName ? "Welcome — tell us who you are" : "One more thing — what's your role?";
+  openSheet(title, `
     <div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">
-      This is used for the "Mine" filter and task assignments. If you're already in the team roster below, use that exact same name so your existing tasks and studies link up automatically instead of needing to be re-assigned.
+      ${needName
+        ? `Your name drives the "Mine" filter and task assignments. If you're already in the team roster, use that exact same name so your existing tasks and studies link up automatically instead of needing to be reassigned.`
+        : `We've started tracking what everyone does so the team list and org chart make sense. This only takes a second.`}
     </div>
     <div class="fgroup">
-      <div class="frow"><label>Your name</label><input id="f-profile-name" list="dl-people-profile" placeholder="e.g. Adam Yanke"></div>
+      ${needName ? `<div class="frow"><label>Your name</label><input id="f-profile-name" list="dl-people-profile" placeholder="e.g. Adam Yanke" value="${esc((p && p.name) || "")}"></div>` : ""}
+      <div class="frow"><label>Your role</label>${selectHTML("f-profile-position", ["— select —"].concat(POSITIONS), (p && p.position) || "— select —")}</div>
     </div>
     <datalist id="dl-people-profile">${state.roster.map(n => `<option value="${esc(n)}">`).join("")}</datalist>`,
     () => {
-      const name = document.getElementById("f-profile-name").value.trim();
+      const nameEl = document.getElementById("f-profile-name");
+      const name = nameEl ? nameEl.value.trim() : ((p && p.name) || "");
       if (!name) { toast("Enter your name"); return false; }
-      upsertProfile(name);
+      const position = document.getElementById("f-profile-position").value;
+      if (!position || position === "— select —") { toast("Pick the role that fits you best"); return false; }
+      upsertProfile(name, { position });
       personFilter = "mine";
       render();
+      toast("Thanks — you're set up. You can change this in Settings.");
     });
 }
 async function pullAll() {
@@ -961,13 +1094,14 @@ async function pullAll() {
     const meta = data.find(r => r.kind === "meta");
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
     if (meta && meta.data.degrees && typeof meta.data.degrees === "object") state.rosterDegrees = meta.data.degrees;
+    if (meta) state.orgPermissions = !!meta.data.orgPermissions;
     data.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; });
     migrate();
     saveLocal();
     render();
   }
 }
-function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {} }); }
+function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions }); }
 // rowIdOverride exists for records whose natural key would collide with another kind's row —
 // see prefRowId(). Everything else stores itself under its own obj.id.
 async function pushItem(kind, obj, rowIdOverride) {
@@ -1316,19 +1450,44 @@ function namesFromField(v) {
 // shared table, so treat it as "keeps people focused on their own work", not as a security
 // boundary against a determined user.
 const ADMIN_NAMES = ["Adam Yanke", "William Lee", "Thomas Turinske"];
-function isAdmin() { return ADMIN_NAMES.includes(canonName(me())); }
+// Two sources of truth, deliberately: the hardcoded list is what ships, and the org chart's
+// per-person admin ticks only take over once state.orgPermissions is switched on in Settings.
+// That way the chart can be filled in and reviewed without changing anyone's access.
+function isAdmin() {
+  if (state.orgPermissions && currentUser) {
+    const p = profileFor(currentUser.id);
+    if (p) return !!p.admin;
+  }
+  return ADMIN_NAMES.includes(canonName(me()));
+}
+// Everyone reporting up through this person, at any depth. Only consulted when the org chart
+// is driving permissions; a manager can see their reports' work.
+function orgReportsOf(userId, acc, seen) {
+  acc = acc || []; seen = seen || {};
+  if (seen[userId]) return acc;
+  seen[userId] = true;
+  orgChildren(userId).forEach(c => { acc.push(c); orgReportsOf(c.id, acc, seen); });
+  return acc;
+}
+function namesIManage() {
+  if (!state.orgPermissions || !currentUser) return [];
+  return orgReportsOf(currentUser.id).map(p => canonName(p.name || "")).filter(Boolean);
+}
 // The set of studies the signed-in person is allowed to see anywhere in the app.
 function visibleStudies() {
   if (isAdmin()) return state.studies.slice();
   const myName = me();
   if (!myName) return state.studies.slice(); // no identity yet — don't hide everything and confuse them
-  return state.studies.filter(s => studyInvolvesPerson(s, myName));
+  const managed = namesIManage();
+  return state.studies.filter(s => studyInvolvesPerson(s, myName) || managed.some(n => studyInvolvesPerson(s, n)));
 }
 function canSeeStudy(s) {
   if (!s) return false;
   if (isAdmin()) return true;
   const myName = me();
-  return !myName || studyInvolvesPerson(s, myName);
+  if (!myName) return true;
+  if (studyInvolvesPerson(s, myName)) return true;
+  return namesIManage().some(n => studyInvolvesPerson(s, n));
 }
 function studyById(id) { return state.studies.find(s => s.id === id); }
 function isActive(s) { return s.phase !== "Published" && s.phase !== "On Hold"; }
@@ -2962,6 +3121,22 @@ function renderSettings() {
     </div>
   </div>
 
+  <div class="section-title" id="org-anchor">Org Chart</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
+    Everyone who has signed in, with what they do and who they report to. New accounts are asked for their role the first time they log in.${isAdmin() ? "" : " Only admins can change this."}
+  </div>
+  <div class="card" style="padding:6px 14px">${orgChartHTML(isAdmin())}</div>
+  ${isAdmin() ? `
+  <div class="card" style="margin-top:10px">
+    <div class="frow" style="gap:10px;border-bottom:none;padding:4px 0">
+      <input type="checkbox" id="org-perms-toggle" ${state.orgPermissions ? "checked" : ""}>
+      <label for="org-perms-toggle" style="flex:1">
+        <div style="font-size:15px;font-weight:600">Use the org chart for permissions</div>
+        <div style="font-size:12.5px;color:var(--text2);line-height:1.45">Off: admin rights come from the built-in list and everyone else sees only their own projects. On: the admin ticks above decide instead, and managers can see their reports' work.</div>
+      </label>
+    </div>
+  </div>` : ""}
+
   <div class="section-title" id="societies-anchor">Society Subscriptions</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">Toggle which societies appear on your dashboard deadline board. This is a personal view setting — it won't change what your teammates see.${me() ? " Saved under your name, so it follows you to any device." : " No name entered above, so this is saved on this device only."}</div>
   <div class="fgroup">
@@ -3038,6 +3213,19 @@ function renderSettings() {
     saveLocal(); pushRoster(); render(); toast(n + " added");
   };
   $main.querySelectorAll("[data-degrees-for]").forEach(b => b.onclick = () => openDegreesSheet(b.dataset.degreesFor));
+  $main.querySelectorAll("[data-org-edit]").forEach(b => b.onclick = () => {
+    if (!isAdmin()) { toast("Only admins can change the org chart"); return; }
+    openOrgSheet(b.dataset.orgEdit);
+  });
+  const orgToggle = document.getElementById("org-perms-toggle");
+  if (orgToggle) orgToggle.onchange = () => {
+    if (!isAdmin()) { orgToggle.checked = !orgToggle.checked; return; }
+    state.orgPermissions = orgToggle.checked;
+    saveLocal(); pushRoster(); render();
+    toast(state.orgPermissions
+      ? "Org chart now controls who sees what — turn it off here if anything looks wrong"
+      : "Back to the built-in admin list — nothing changed for anyone else");
+  };
   $main.querySelectorAll("[data-roster-del]").forEach(b => b.onclick = () => {
     const gone = b.dataset.rosterDel;
     state.roster = state.roster.filter(x => x !== gone);
