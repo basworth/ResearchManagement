@@ -542,6 +542,10 @@ function upsertProfile(name, extra) {
 // Admin-only edit of somebody else's record (org chart). Kept separate from upsertProfile so
 // the "this is me" path can't accidentally be used to rewrite another person's row.
 function updateProfileFields(userId, fields) {
+  // Guarded here, not just at the button, so any future call site inherits the restriction
+  // instead of quietly reopening a hole. upsertProfile() is the unguarded "this is me" path —
+  // everyone may set their OWN name and role; only admins may rewrite anyone's record.
+  if (!isAdmin()) { toast("Only admins can change the org chart"); return; }
   const p = profileFor(userId);
   if (!p) return;
   Object.assign(p, fields);
@@ -603,6 +607,8 @@ function orgChartHTML(canEdit) {
   return html;
 }
 function openOrgSheet(userId) {
+  // Refuse before the sheet opens, so a non-admin never types into a form that won't save.
+  if (!isAdmin()) { toast("Only admins can change the org chart"); return; }
   const p = profileFor(userId);
   if (!p) return;
   // A person can't report to themselves, nor to anyone already beneath them — that's what
@@ -716,7 +722,7 @@ function setSub(soc, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], orgPermissions: false };
+let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], orgPermissions: false };
 let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
@@ -837,6 +843,7 @@ function migrate() {
   if (!Array.isArray(state.teamNotes)) state.teamNotes = [];
   if (!Array.isArray(state.userPrefs)) state.userPrefs = [];
   if (!Array.isArray(state.profiles)) state.profiles = [];
+  if (!Array.isArray(state.filterSets)) state.filterSets = [];
   // Profiles predate the org chart, so backfill the new fields rather than letting undefined
   // leak into comparisons and selects.
   state.profiles.forEach(p => {
@@ -1091,6 +1098,7 @@ async function pullAll() {
     state.teamNotes = data.filter(r => r.kind === "teamNote").map(r => r.data);
     state.userPrefs = data.filter(r => r.kind === "userPref").map(r => r.data);
     state.profiles = data.filter(r => r.kind === "profile").map(r => r.data);
+    state.filterSets = data.filter(r => r.kind === "filterSet").map(r => r.data);
     const meta = data.find(r => r.kind === "meta");
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
     if (meta && meta.data.degrees && typeof meta.data.degrees === "object") state.rosterDegrees = meta.data.degrees;
@@ -1167,7 +1175,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
     if (Array.isArray(data.names)) { state.roster = data.names; saveLocal(); render(); }
     return;
   }
-  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : null;
+  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : kind === "filterSet" ? state.filterSets : null;
   if (!arr) return;
   // Match on the payload's own id, not the row id: for userPref the two differ (see
   // prefRowId), and matching on the row id would never find the existing entry — so every
@@ -1184,7 +1192,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
 function applyRealtimeDelete(id) {
   if (!id) return;
   let hitOpenRecord = false;
-  ["studies", "tasks", "meetings", "teamNotes", "userPrefs", "profiles"].forEach(key => {
+  ["studies", "tasks", "meetings", "teamNotes", "userPrefs", "profiles", "filterSets"].forEach(key => {
     const before = state[key].length;
     // userPref rows live under a derived row id, so also check that mapping — otherwise a
     // deleted preferences row would linger in local state forever.
@@ -1228,6 +1236,7 @@ async function pushAllLocal() {
     // batch used to fail for anyone who had ever set a subscription.
     ...(state.userPrefs || []).map(p => ({ id: prefRowId(p.id), kind: "userPref", data: p, updated_at: now() })),
     ...(state.profiles || []).map(p => ({ id: p.id, kind: "profile", data: p, updated_at: now() })),
+    ...(state.filterSets || []).map(f => ({ id: f.id, kind: "filterSet", data: f, updated_at: now() })),
     { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster }, updated_at: now() }
   ];
   await sb.from("items").upsert(rows);
@@ -2073,6 +2082,7 @@ function renderStudies() {
   let html = `<div class="seg">` + filters.map(f =>
     `<button class="${f === studyFilter ? "active" : ""}" data-filter="${f}">${f}</button>`).join("") + `</div>`;
   html += searchBoxHTML("study-search", studySearchQuery, "Search by title, nickname, PI, or IRB #");
+  html += filterSetsBarHTML("studies", studyViewId);
   const otherNames = state.roster.filter(n => n.trim().toLowerCase() !== myName.trim().toLowerCase());
   // Only admins can look beyond their own projects, so the Who picker is theirs alone. Everyone
   // else is already scoped by visibleStudies() and would just see "All" == "Mine".
@@ -2110,6 +2120,7 @@ function renderStudies() {
   $main.innerHTML = html;
   $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { studyFilter = b.dataset.filter; studyPhaseFilter = "All phases"; studyDesignFilter = "All designs"; render(); });
   bindSearchBox("study-search", (v) => { studySearchQuery = v; });
+  bindFilterSetsBar("studies", (id) => { studyViewId = id; });
   const personSel = document.getElementById("person-filter"); // admins only
   if (personSel) personSel.onchange = (e) => { personFilter = e.target.value; studyPhaseFilter = "All phases"; studyDesignFilter = "All designs"; render(); };
   document.getElementById("phase-filter").onchange = (e) => { studyPhaseFilter = e.target.value; render(); };
@@ -2989,11 +3000,140 @@ function renderTasks() {
 let worklistShowClosed = false;
 let worklistSort = { key: null, dir: 1 };
 let worklistSearchQuery = "";
+// Worklist keeps its OWN filter state (Adam's call): you can have Studies on your own
+// projects while the Worklist shows the whole lab.
+let worklistPerson = "mine";
+let worklistPhaseFilter = "All phases";
+let worklistDesignFilter = "All designs";
+
+// ---------- Saved filter sets ----------
+// Shared by org-chart team rather than per person: a surgeon and the students reporting to
+// them should see the same saved views. "Team" = the subtree of your top-most non-root
+// ancestor, so each surgeon under Adam forms one team and Adam (a root) sees everything.
+function teamRootOf(userId) {
+  let cur = profileFor(userId);
+  if (!cur) return "";
+  const guard = {};
+  while (cur && cur.reportsTo && profileFor(cur.reportsTo) && !guard[cur.id]) {
+    guard[cur.id] = true;
+    const parent = profileFor(cur.reportsTo);
+    // Once the parent is a root, WE are the top-most non-root ancestor — so the team is our
+    // own subtree, not the root's. Returning the root here would collapse every team into one.
+    if (!parent.reportsTo || !profileFor(parent.reportsTo)) return cur.id;
+    cur = parent;
+  }
+  return cur ? cur.id : "";
+}
+function myTeamRoot() { return currentUser ? teamRootOf(currentUser.id) : ""; }
+function amRootOfChart() {
+  const p = currentUser && profileFor(currentUser.id);
+  return !!p && (!p.reportsTo || !profileFor(p.reportsTo));
+}
+function visibleFilterSets(tab) {
+  const root = myTeamRoot();
+  return (state.filterSets || [])
+    .filter(f => f.tab === tab)
+    // A root of the chart (and anyone with no reporting data yet) sees every set rather than
+    // being locked out of views their own team created.
+    .filter(f => amRootOfChart() || !root || !f.teamRoot || f.teamRoot === root)
+    .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+}
+function currentFilters(tab) {
+  return tab === "worklist"
+    ? { status: worklistShowClosed ? "All" : "Active", person: worklistPerson, phase: worklistPhaseFilter, design: worklistDesignFilter, search: worklistSearchQuery }
+    : { status: studyFilter, person: personFilter, phase: studyPhaseFilter, design: studyDesignFilter, search: studySearchQuery };
+}
+function applyFilters(tab, f) {
+  if (!f) return;
+  if (tab === "worklist") {
+    worklistShowClosed = f.status === "All";
+    worklistPerson = f.person || "mine";
+    worklistPhaseFilter = f.phase || "All phases";
+    worklistDesignFilter = f.design || "All designs";
+    worklistSearchQuery = f.search || "";
+  } else {
+    studyFilter = f.status || "Active";
+    personFilter = f.person || "mine";
+    studyPhaseFilter = f.phase || "All phases";
+    studyDesignFilter = f.design || "All designs";
+    studySearchQuery = f.search || "";
+  }
+}
+function saveFilterSet(tab, name) {
+  if (!currentUser) { toast("Sign in first"); return; }
+  const existing = (state.filterSets || []).find(f => f.tab === tab && (f.name || "").toLowerCase() === name.toLowerCase() && (amRootOfChart() || f.teamRoot === myTeamRoot()));
+  const rec = existing || { id: uid(), tab, name, ownerId: currentUser.id };
+  rec.name = name;
+  rec.ownerName = me();
+  rec.teamRoot = myTeamRoot();
+  rec.filters = currentFilters(tab);
+  state.filterSets = state.filterSets || [];
+  if (!existing) state.filterSets.push(rec);
+  saveLocal(); pushItem("filterSet", rec);
+  toast(existing ? `Updated "${name}" — your team sees it too` : `Saved "${name}" — shared with your team`);
+}
+function deleteFilterSet(id) {
+  const rec = (state.filterSets || []).find(f => f.id === id);
+  if (!rec) return;
+  state.filterSets = state.filterSets.filter(f => f.id !== id);
+  saveLocal(); deleteRemote(id); render();
+  toast(`Deleted "${rec.name || "view"}"`);
+}
+// The Views row shown above the filters on both Studies and Worklist.
+function filterSetsBarHTML(tab, activeId) {
+  const sets = visibleFilterSets(tab);
+  return `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 10px 4px">
+      <span style="font-size:13px;font-weight:600;color:var(--text2);flex:0 0 auto">View</span>
+      <select id="fs-select-${tab}" style="flex:1;min-width:0;-webkit-appearance:none;appearance:none;background:var(--card);border:none;border-radius:10px;padding:9px 30px 9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.06)">
+        <option value="">${sets.length ? "— pick a saved view —" : "— none saved yet —"}</option>
+        ${sets.map(f => `<option value="${esc(f.id)}" ${f.id === activeId ? "selected" : ""}>${esc(f.name)}${f.ownerName && f.ownerId !== (currentUser && currentUser.id) ? " · " + esc(f.ownerName) : ""}</option>`).join("")}
+      </select>
+      <button class="mini-btn" id="fs-save-${tab}" style="margin:0;flex:0 0 auto">Save</button>
+      ${activeId ? `<button class="mini-btn" id="fs-del-${tab}" style="margin:0;flex:0 0 auto;color:var(--red)">Delete</button>` : ""}
+    </div>`;
+}
+function bindFilterSetsBar(tab, setActive) {
+  const sel = document.getElementById("fs-select-" + tab);
+  if (sel) sel.onchange = () => {
+    const f = (state.filterSets || []).find(x => x.id === sel.value);
+    setActive(sel.value || "");
+    if (f) { applyFilters(tab, f.filters); toast(`Loaded "${f.name}"`); }
+    render();
+  };
+  const save = document.getElementById("fs-save-" + tab);
+  if (save) save.onclick = () => {
+    const name = (prompt("Name this view (e.g. Enrolling · needs IRB)") || "").trim();
+    if (!name) return;
+    saveFilterSet(tab, name);
+    render();
+  };
+  const del = document.getElementById("fs-del-" + tab);
+  if (del) del.onclick = () => {
+    const id = sel ? sel.value : "";
+    if (!id) return;
+    if (!confirm("Delete this saved view for your whole team?")) return;
+    setActive("");
+    deleteFilterSet(id);
+  };
+}
+let studyViewId = "";
+let worklistViewId = "";
 function renderWorkingList() {
   $title.textContent = "Working Study List";
   let studies = visibleStudies();
+  const wlMyName = me();
+  if (worklistPerson === "mine") { if (wlMyName) studies = studies.filter(s => studyInvolvesPerson(s, wlMyName)); }
+  else if (worklistPerson !== "all") studies = studies.filter(s => studyInvolvesPerson(s, worklistPerson));
   if (!worklistShowClosed) studies = studies.filter(isActive);
   if (worklistSearchQuery) studies = studies.filter(s => studyMatchesSearch(s, worklistSearchQuery));
+  // Drop a phase/design selection that no longer matches anything, so the table can't end up
+  // stuck on an empty view with no obvious way back.
+  const wlPhases = PHASES.filter(p => studies.some(s => s.phase === p));
+  if (worklistPhaseFilter !== "All phases" && !wlPhases.includes(worklistPhaseFilter)) worklistPhaseFilter = "All phases";
+  const wlDesigns = DESIGNS.filter(d => studies.some(s => (s.design || "Unspecified") === d));
+  if (worklistDesignFilter !== "All designs" && !wlDesigns.includes(worklistDesignFilter)) worklistDesignFilter = "All designs";
+  if (worklistPhaseFilter !== "All phases") studies = studies.filter(s => s.phase === worklistPhaseFilter);
+  if (worklistDesignFilter !== "All designs") studies = studies.filter(s => s.design === worklistDesignFilter);
 
   const sortKeyFns = {
     irb: s => (s.irb || "").toLowerCase(),
@@ -3036,6 +3176,43 @@ function renderWorkingList() {
       <button class="${worklistShowClosed ? "active" : ""}" data-wl="all">All</button>
     </div>`;
   html += searchBoxHTML("worklist-search", worklistSearchQuery, "Search by title, nickname, PI, or IRB #");
+  html += filterSetsBarHTML("worklist", worklistViewId);
+  const wlSelStyle = "flex:1;-webkit-appearance:none;appearance:none;background:var(--card);border:none;border-radius:10px;padding:9px 30px 9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.06)";
+  if (isAdmin()) {
+    const others = state.roster.filter(n => n.trim().toLowerCase() !== wlMyName.trim().toLowerCase());
+    html += `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 10px 4px">
+      <span style="font-size:13px;font-weight:600;color:var(--text2)">Who</span>
+      <select id="wl-person" style="${wlSelStyle}">
+        <option value="mine" ${worklistPerson === "mine" ? "selected" : ""}>${wlMyName ? "My Projects (" + esc(wlMyName) + ")" : "My Projects"}</option>
+        <option value="all" ${worklistPerson === "all" ? "selected" : ""}>All Projects</option>
+        ${others.map(n => `<option value="${esc(n)}" ${worklistPerson === n ? "selected" : ""}>${esc(n)}'s Projects</option>`).join("")}
+      </select>
+    </div>`;
+  }
+  html += `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 10px 4px">
+      <span style="font-size:13px;font-weight:600;color:var(--text2)">Phase</span>
+      <select id="wl-phase" style="${wlSelStyle}">
+        <option ${worklistPhaseFilter === "All phases" ? "selected" : ""}>All phases</option>
+        ${wlPhases.map(p => `<option ${worklistPhaseFilter === p ? "selected" : ""}>${esc(p)}</option>`).join("")}
+      </select>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin:0 4px 10px 4px">
+      <span style="font-size:13px;font-weight:600;color:var(--text2)">Design</span>
+      <select id="wl-design" style="${wlSelStyle}">
+        <option ${worklistDesignFilter === "All designs" ? "selected" : ""}>All designs</option>
+        ${wlDesigns.map(d => `<option ${worklistDesignFilter === d ? "selected" : ""}>${esc(d)}</option>`).join("")}
+      </select>
+    </div>`;
+
+  const bindWorklistFilters = () => {
+    bindFilterSetsBar("worklist", (id) => { worklistViewId = id; });
+    const wp = document.getElementById("wl-person");
+    if (wp) wp.onchange = () => { worklistPerson = wp.value; render(); };
+    const ph = document.getElementById("wl-phase");
+    if (ph) ph.onchange = () => { worklistPhaseFilter = ph.value; render(); };
+    const dg = document.getElementById("wl-design");
+    if (dg) dg.onchange = () => { worklistDesignFilter = dg.value; render(); };
+  };
 
   if (!studies.length) {
     html += worklistSearchQuery
@@ -3044,6 +3221,7 @@ function renderWorkingList() {
     $main.innerHTML = html;
     $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
     bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
+    bindWorklistFilters();
     return;
   }
 
@@ -3085,6 +3263,7 @@ function renderWorkingList() {
   $main.innerHTML = html;
   $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
   bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
+  bindWorklistFilters();
   $main.querySelectorAll("[data-sort]").forEach(th => th.onclick = () => {
     const key = th.dataset.sort;
     if (worklistSort.key === key) worklistSort.dir *= -1;
