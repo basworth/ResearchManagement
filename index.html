@@ -722,7 +722,7 @@ function setSub(soc, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], orgPermissions: false };
+let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], orgPermissions: false, initiationStages: null };
 let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
@@ -839,6 +839,18 @@ function migrate() {
       else s.irbStatus = "Approved";
     }
     if (!s.initiation) s.initiation = { sportsSubmission: false, irbApproved: false, caApproved: false, piqBuilt: false, ready: false };
+    // Widen the old boolean checklist into dated stages, carrying across what it already knew.
+    // Runs once (guarded on the object's absence) so later edits aren't overwritten.
+    if (!s.initiationProgress) {
+      const init = s.initiation || {};
+      const p = {};
+      if (init.caApproved) p.coverage = { status: "Passed", submitted: "", passed: "" };
+      if (init.irbApproved) p.irb = { status: "Passed", submitted: "", passed: "" };
+      else if (init.sportsSubmission) p.irb = { status: "Submitted", submitted: "", passed: "" };
+      if (init.piqBuilt) p.piq = { status: "Passed", submitted: "", passed: "" };
+      s.initiationProgress = p;
+    }
+    if (!Array.isArray(s.followUp)) s.followUp = [];
   });
   if (!Array.isArray(state.teamNotes)) state.teamNotes = [];
   if (!Array.isArray(state.userPrefs)) state.userPrefs = [];
@@ -1103,13 +1115,14 @@ async function pullAll() {
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
     if (meta && meta.data.degrees && typeof meta.data.degrees === "object") state.rosterDegrees = meta.data.degrees;
     if (meta) state.orgPermissions = !!meta.data.orgPermissions;
+    if (meta && Array.isArray(meta.data.initiationStages) && meta.data.initiationStages.length) state.initiationStages = meta.data.initiationStages;
     data.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; });
     migrate();
     saveLocal();
     render();
   }
 }
-function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions }); }
+function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null }); }
 // rowIdOverride exists for records whose natural key would collide with another kind's row —
 // see prefRowId(). Everything else stores itself under its own obj.id.
 async function pushItem(kind, obj, rowIdOverride) {
@@ -1772,6 +1785,14 @@ function bindDeadlineRows(root) {
     const chev = pastToggle.querySelector("[data-past-chev]");
     if (chev) chev.style.transform = `rotate(${pastOpen ? 90 : 0}deg)`;
   };
+  root.querySelectorAll("[data-past-meeting]").forEach(el => el.onclick = () => {
+    const id = el.dataset.pastMeeting;
+    pastMeetingOpen[id] = !pastMeetingOpen[id];
+    const body = root.querySelector(`[data-past-meeting-body="${id}"]`);
+    if (body) body.style.display = pastMeetingOpen[id] ? "" : "none";
+    const chev = el.querySelector("[data-past-meeting-chev]");
+    if (chev) chev.style.transform = `rotate(${pastMeetingOpen[id] ? 90 : 0}deg)`;
+  });
   root.querySelectorAll("[data-hide-meeting]").forEach(el => el.onclick = (e) => {
     e.preventDefault(); e.stopPropagation();
     if (blockOfflineEdit("Hiding a deadline")) return;
@@ -1838,21 +1859,25 @@ function dashboardHTML() {
       && m.deadline && daysUntil(m.deadline) < 0
       && (m.studyIds || []).some(id => studyById(id)))
     .sort((a, b) => (b.deadline || "").localeCompare(a.deadline || ""));
+  // Each past meeting collapses on its own too, and starts closed — the archive is for looking
+  // something up, not for scrolling through every submission every time.
   const pastAbstractsHTML = () => `<div class="card" style="padding:6px 0">` + pastAbstracts.map(m => {
     const linked = (m.studyIds || []).map(id => studyById(id)).filter(Boolean);
+    const open = !!pastMeetingOpen[m.id];
     return `
       <div style="padding:9px 16px;border-bottom:0.5px solid var(--line)">
         <div style="display:flex;align-items:flex-start;gap:8px">
-          <div style="flex:1;min-width:0">
+          <div style="flex:1;min-width:0;cursor:pointer;user-select:none" data-past-meeting="${m.id}">
             <div style="font-size:14px;font-weight:700;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <span data-past-meeting-chev style="font-size:10px;color:var(--text2);display:inline-block;transition:transform .2s;transform:rotate(${open ? 90 : 0}deg)">▸</span>
               <span class="badge" style="background:var(--text2);font-size:10px;padding:2px 7px">${esc(m.society)}</span>
               <span>${esc(m.name)}</span>
             </div>
-            <div style="font-size:12px;color:var(--text2);margin-top:2px">Was due ${fmtDate(m.deadline)}${m.dates ? " · " + esc(m.dates) : ""}</div>
+            <div style="font-size:12px;color:var(--text2);margin-top:2px">Was due ${fmtDate(m.deadline)} · ${linked.length} submission${linked.length === 1 ? "" : "s"}${m.dates ? " · " + esc(m.dates) : ""}</div>
           </div>
           <button class="mini-btn" data-hide-meeting="${m.id}" style="margin-top:0;flex:0 0 auto">Hide</button>
         </div>
-        <div style="margin-top:6px">
+        <div data-past-meeting-body="${m.id}" style="margin-top:6px;${open ? "" : "display:none"}">
           ${linked.map(s => {
             const info = abstractLinkInfo(s, m.id);
             return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0">
@@ -2145,6 +2170,136 @@ function enrollmentBodyHTML(s) {
 }
 function enrollmentHasContent(s) { return s.enrollTarget !== "" || s.enrollCurrent !== ""; }
 
+// ---------- Initiation stages ----------
+// The stage list is data, not code: Adam expects it to grow ("this list I likely will have to
+// figure out"). It lives on the shared roster record so the whole team sees the same stages,
+// and falls back to these six when nothing has been customised.
+const DEFAULT_INITIATION_STAGES = [
+  { key: "coverage", label: "Coverage analysis" },
+  { key: "irb",      label: "IRB submission" },
+  { key: "contract", label: "Contracting" },
+  { key: "piq",      label: "Patient IQ build" },
+  { key: "redcap",   label: "REDCap build" },
+  { key: "sync",     label: "Sync" }
+];
+const STAGE_STATUSES = ["Not started", "Submitted", "Passed", "N/A"];
+const STAGE_COLORS = {
+  "Not started": "var(--text2)",
+  "Submitted": "var(--orange)",
+  "Passed": "var(--green)",
+  "N/A": "var(--line)"
+};
+function initiationStages() {
+  const list = state.initiationStages;
+  return (Array.isArray(list) && list.length) ? list : DEFAULT_INITIATION_STAGES;
+}
+function stageInfo(s, key) {
+  const m = (s.initiationProgress || {})[key] || {};
+  return {
+    status: STAGE_STATUSES.includes(m.status) ? m.status : "Not started",
+    submitted: m.submitted || "",
+    passed: m.passed || ""
+  };
+}
+// Stages that actually count toward "ready": N/A is a pass, not a gap.
+function initiationDone(s) {
+  const stages = initiationStages();
+  const counted = stages.filter(st => stageInfo(s, st.key).status !== "N/A");
+  const passed = counted.filter(st => stageInfo(s, st.key).status === "Passed");
+  return { passed: passed.length, total: counted.length };
+}
+function isProspective(s) { return (s.design || "") === "Prospective (Consented)"; }
+
+// Per-study editor for the initiation stages: status plus the dates it was submitted and
+// cleared, which is the whole point of the board (when did it go in, when did it pass).
+function openInitiationSheet(studyId) {
+  const s = studyById(studyId);
+  if (!s) return;
+  if (blockOfflineEdit("Editing initiation stages")) return;
+  const stages = initiationStages();
+  openSheet("Initiation — " + (s.nickname || s.title), stages.map(st => {
+    const info = stageInfo(s, st.key);
+    return `<div class="fgroup">
+      <div class="frow"><label>${esc(st.label)}</label>${selectHTML("f-st-" + st.key, STAGE_STATUSES, info.status)}</div>
+      <div class="frow"><label>Submitted</label><input id="f-sub-${esc(st.key)}" type="date" value="${esc(info.submitted)}"></div>
+      <div class="frow"><label>Passed</label><input id="f-pass-${esc(st.key)}" type="date" value="${esc(info.passed)}"></div>
+    </div>`;
+  }).join("") + `<div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+      Mark a stage <b>N/A</b> when it doesn't apply to this study — it counts as cleared rather than outstanding.
+    </div>`,
+    () => {
+      const p = {};
+      stages.forEach(st => {
+        p[st.key] = {
+          status: document.getElementById("f-st-" + st.key).value,
+          submitted: document.getElementById("f-sub-" + st.key).value,
+          passed: document.getElementById("f-pass-" + st.key).value
+        };
+      });
+      s.initiationProgress = p;
+      upsertStudy(s);
+      toast("Initiation stages saved");
+    });
+}
+
+// Follow-up editor: counts per timepoint. No names, no dates of birth, no per-patient rows —
+// see the note on followUpTotals().
+function openFollowUpSheet(studyId) {
+  const s = studyById(studyId);
+  if (!s) return;
+  if (blockOfflineEdit("Editing follow-up")) return;
+  const rows = (Array.isArray(s.followUp) ? s.followUp : []).slice();
+  if (!rows.length) rows.push({ id: uid(), label: "", due: "", done: "" });
+  openSheet("Follow-up — " + (s.nickname || s.title),
+    `<div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+       Counts only, deliberately: how many are due at each timepoint and how many are done. No patient-level records, so this stays outside HIPAA scope.
+     </div>
+     <div id="fu-rows">${rows.map((r, i) => `
+       <div class="fgroup" data-fu-row="${i}">
+         <div class="frow"><label>Timepoint</label><input class="fu-label" placeholder="e.g. 6 month" value="${esc(r.label || "")}"></div>
+         <div class="frow"><label>Due</label><input class="fu-due" type="number" min="0" inputmode="numeric" value="${esc(String(r.due ?? ""))}"></div>
+         <div class="frow"><label>Completed</label><input class="fu-done" type="number" min="0" inputmode="numeric" value="${esc(String(r.done ?? ""))}"></div>
+       </div>`).join("")}</div>
+     <button class="mini-btn" id="fu-add">＋ Add a timepoint</button>`,
+    () => {
+      const out = [];
+      document.querySelectorAll("#fu-rows [data-fu-row]").forEach(row => {
+        const label = row.querySelector(".fu-label").value.trim();
+        const due = row.querySelector(".fu-due").value;
+        const done = row.querySelector(".fu-done").value;
+        if (!label && due === "" && done === "") return;   // blank row, skip
+        out.push({ id: uid(), label, due: due === "" ? 0 : Number(due), done: done === "" ? 0 : Number(done) });
+      });
+      s.followUp = out;
+      upsertStudy(s);
+      toast("Follow-up saved");
+    },
+    () => {
+      const addBtn = document.getElementById("fu-add");
+      if (addBtn) addBtn.onclick = () => {
+        const wrap = document.getElementById("fu-rows");
+        const i = wrap.querySelectorAll("[data-fu-row]").length;
+        const div = document.createElement("div");
+        div.className = "fgroup";
+        div.setAttribute("data-fu-row", String(i));
+        div.innerHTML = `<div class="frow"><label>Timepoint</label><input class="fu-label" placeholder="e.g. 1 year"></div>
+          <div class="frow"><label>Due</label><input class="fu-due" type="number" min="0" inputmode="numeric"></div>
+          <div class="frow"><label>Completed</label><input class="fu-done" type="number" min="0" inputmode="numeric"></div>`;
+        wrap.appendChild(div);
+      };
+    });
+}
+
+// ---------- Follow-up (aggregate only) ----------
+// Counts per timepoint, never per patient — the app deliberately holds no subject-level data,
+// which is what keeps it outside HIPAA scope. Real per-visit scheduling belongs in REDCap.
+function followUpTotals(s) {
+  const rows = Array.isArray(s.followUp) ? s.followUp : [];
+  let due = 0, done = 0;
+  rows.forEach(r => { due += Number(r.due) || 0; done += Number(r.done) || 0; });
+  return { due, done, pct: due > 0 ? Math.round(100 * done / due) : null, rows };
+}
+
 // ---------- Study notes ----------
 // Notes are dated entries with an archive lane rather than one free-text blob. "Archive"
 // never deletes: it stamps entries with the date they were cleared and files them under a
@@ -2256,6 +2411,8 @@ function initiationBodyHTML(s) {
 // Past Deadlines starts collapsed — it's a reference archive, not something to scroll past
 // every time the dashboard opens.
 let pastOpen = false;
+// Per-meeting open state inside the archive, keyed by meeting id. All closed by default.
+let pastMeetingOpen = {};
 let studySectionState = {};
 let sectionStateForStudy = null;
 function collapsibleSection(id, title, bodyHTML) {
@@ -3002,6 +3159,9 @@ let worklistSort = { key: null, dir: 1 };
 let worklistSearchQuery = "";
 // Worklist keeps its OWN filter state (Adam's call): you can have Studies on your own
 // projects while the Worklist shows the whole lab.
+// "table" is the spreadsheet everyone knows; the other two are purpose-built boards offered in
+// the same View dropdown as saved filter sets.
+let worklistLayout = "table";
 let worklistPerson = "mine";
 let worklistPhaseFilter = "All phases";
 let worklistDesignFilter = "All designs";
@@ -3082,10 +3242,18 @@ function deleteFilterSet(id) {
 // The Views row shown above the filters on both Studies and Worklist.
 function filterSetsBarHTML(tab, activeId) {
   const sets = visibleFilterSets(tab);
+  // The Worklist's dropdown doubles as a layout picker: the two purpose-built boards sit above
+  // the saved filter sets, since from the user's point of view they're all "views".
+  const layouts = tab === "worklist"
+    ? `<option value="__layout_table" ${worklistLayout === "table" ? "selected" : ""}>Spreadsheet (all columns)</option>
+       <option value="__layout_initiation" ${worklistLayout === "initiation" ? "selected" : ""}>Initiation status — prospective</option>
+       <option value="__layout_enrolling" ${worklistLayout === "enrolling" ? "selected" : ""}>Enrolling summary — prospective</option>
+       ${sets.length ? `<option disabled>──────────</option>` : ""}`
+    : "";
   return `<div style="display:flex;align-items:center;gap:8px;margin:0 4px 10px 4px">
       <span style="font-size:13px;font-weight:600;color:var(--text2);flex:0 0 auto">View</span>
       <select id="fs-select-${tab}" style="flex:1;min-width:0;-webkit-appearance:none;appearance:none;background:var(--card);border:none;border-radius:10px;padding:9px 30px 9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.06)">
-        <option value="">${sets.length ? "— pick a saved view —" : "— none saved yet —"}</option>
+        ${tab === "worklist" ? layouts : `<option value="">${sets.length ? "— pick a saved view —" : "— none saved yet —"}</option>`}
         ${sets.map(f => `<option value="${esc(f.id)}" ${f.id === activeId ? "selected" : ""}>${esc(f.name)}${f.ownerName && f.ownerId !== (currentUser && currentUser.id) ? " · " + esc(f.ownerName) : ""}</option>`).join("")}
       </select>
       <button class="mini-btn" id="fs-save-${tab}" style="margin:0;flex:0 0 auto">Save</button>
@@ -3095,6 +3263,13 @@ function filterSetsBarHTML(tab, activeId) {
 function bindFilterSetsBar(tab, setActive) {
   const sel = document.getElementById("fs-select-" + tab);
   if (sel) sel.onchange = () => {
+    // Layout choices share this dropdown with saved filter sets; they're distinguished by a
+    // reserved prefix so a view named "Initiation status" can't be mistaken for one.
+    if (sel.value.indexOf("__layout_") === 0) {
+      worklistLayout = sel.value.replace("__layout_", "");
+      render();
+      return;
+    }
     const f = (state.filterSets || []).find(x => x.id === sel.value);
     setActive(sel.value || "");
     if (f) { applyFilters(tab, f.filters); toast(`Loaded "${f.name}"`); }
@@ -3213,6 +3388,103 @@ function renderWorkingList() {
     const dg = document.getElementById("wl-design");
     if (dg) dg.onchange = () => { worklistDesignFilter = dg.value; render(); };
   };
+
+  // ---------- Purpose-built layouts ----------
+  // Both are prospective-only by definition, so they narrow the set themselves rather than
+  // relying on the Design filter being set correctly.
+  if (worklistLayout === "initiation") {
+    const rows = studies.filter(s => isProspective(s) && s.phase === "Initiation");
+    const stages = initiationStages();
+    if (!rows.length) {
+      html += `<div class="empty"><div class="big">▦</div>No prospective studies in Initiation${worklistPerson === "mine" ? " for you" : ""}.<br><span style="font-size:13px">Switch Who to All Projects, or check the Phase filter.</span></div>`;
+    } else {
+      html += `<div class="wl-wrap"><table class="wl">
+        <thead><tr>
+          <th style="white-space:nowrap">Study</th>
+          <th style="white-space:nowrap">Cleared</th>
+          ${stages.map(st => `<th style="white-space:nowrap">${esc(st.label)}</th>`).join("")}
+          <th></th>
+        </tr></thead>
+        <tbody>${rows.map(s => {
+          const d = initiationDone(s);
+          return `<tr>
+            <td data-open-study="${s.id}" style="cursor:pointer"><b>${esc(s.nickname || s.title)}</b><div style="font-size:11.5px;color:var(--text2)">${esc(s.irb || "no IRB #")}</div></td>
+            <td><span class="wl-pill" style="background:${d.passed === d.total && d.total ? "var(--green)" : "var(--orange)"}">${d.passed}/${d.total}</span></td>
+            ${stages.map(st => {
+              const info = stageInfo(s, st.key);
+              const when = info.status === "Passed" ? info.passed : info.submitted;
+              return `<td><span class="wl-pill" style="background:${STAGE_COLORS[info.status]}">${esc(info.status)}</span>${when ? `<div style="font-size:11px;color:var(--text2);margin-top:2px">${fmtDate(when)}</div>` : ""}</td>`;
+            }).join("")}
+            <td><button class="mini-btn" data-init-edit="${s.id}" style="margin:0">Edit</button></td>
+          </tr>`;
+        }).join("")}</tbody></table></div>
+        <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Each cell shows the stage's status and the date it was submitted, or cleared once passed. <b>N/A</b> counts as cleared. Swipe sideways for more stages.</div>`;
+    }
+    $main.innerHTML = html;
+    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
+    bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
+    bindWorklistFilters();
+    $main.querySelectorAll("[data-init-edit]").forEach(b => b.onclick = () => openInitiationSheet(b.dataset.initEdit));
+    $main.querySelectorAll("[data-open-study]").forEach(el => el.onclick = () => { openStudy(el.dataset.openStudy); render(); });
+    return;
+  }
+
+  if (worklistLayout === "enrolling") {
+    const rows = studies.filter(s => isProspective(s) && s.phase === "Enrolling");
+    if (!rows.length) {
+      html += `<div class="empty"><div class="big">▦</div>No prospective studies currently enrolling${worklistPerson === "mine" ? " for you" : ""}.<br><span style="font-size:13px">Switch Who to All Projects, or check the Phase filter.</span></div>`;
+    } else {
+      const totalTarget = rows.reduce((n, s) => n + (parseInt(s.enrollTarget, 10) || 0), 0);
+      const totalNow = rows.reduce((n, s) => n + (parseInt(s.enrollCurrent, 10) || 0), 0);
+      html += `<div class="stat-grid">
+          <div class="stat"><div class="num">${rows.length}</div><div class="lbl">Enrolling Studies</div></div>
+          <div class="stat"><div class="num">${totalNow}</div><div class="lbl">Enrolled</div></div>
+          <div class="stat"><div class="num">${totalTarget}</div><div class="lbl">Target (IRB)</div></div>
+          <div class="stat"><div class="num">${totalTarget > 0 ? Math.round(100 * totalNow / totalTarget) + "%" : "—"}</div><div class="lbl">Of Target</div></div>
+        </div>`;
+      html += rows.map(s => {
+        const tgt = parseInt(s.enrollTarget, 10);
+        const cur = parseInt(s.enrollCurrent, 10);
+        const pct = (tgt > 0 && !isNaN(cur)) ? Math.min(100, Math.round(100 * cur / tgt)) : null;
+        const fu = followUpTotals(s);
+        return `<div class="card">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:15px;font-weight:700;cursor:pointer" data-open-study="${s.id}">${esc(s.nickname || s.title)}</div>
+              <div style="font-size:11.5px;color:var(--text2)">${esc(s.irb || "no IRB #")}${s.pi ? " · PI " + esc(s.pi) : ""}</div>
+            </div>
+            <button class="mini-btn" data-fu-edit="${s.id}" style="margin:0;flex:0 0 auto">Follow-up</button>
+          </div>
+          <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:8px">
+            <div style="font-size:22px;font-weight:800">${isNaN(cur) ? "—" : cur}<span style="font-size:14px;color:var(--text2);font-weight:600"> / ${isNaN(tgt) ? "—" : tgt}</span></div>
+            <div style="font-size:12.5px;color:var(--text2);font-weight:600">${pct === null ? "set a target in Edit Study" : pct + "% of IRB target"}</div>
+          </div>
+          ${tgt > 0 ? `<div class="progressbar" style="margin-top:6px;height:7px"><div style="width:${pct}%;background:${pct >= 100 ? "var(--green)" : "var(--blue)"}"></div></div>` : ""}
+          ${fu.rows.length ? `
+            <div style="margin-top:10px;border-top:0.5px solid var(--line);padding-top:8px">
+              <div style="font-size:11.5px;color:var(--text2);font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-bottom:4px">Follow-up ${fu.pct !== null ? "· " + fu.pct + "% complete" : ""}</div>
+              ${fu.rows.map(r => {
+                const due = Number(r.due) || 0, done = Number(r.done) || 0;
+                const p = due > 0 ? Math.round(100 * done / due) : null;
+                const behind = p !== null && p < 80;
+                return `<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0">
+                  <span>${esc(r.label || "Timepoint")}</span>
+                  <span style="color:${behind ? "var(--orange)" : "var(--text2)"}">${done} / ${due}${p === null ? "" : " · " + p + "%"}</span>
+                </div>`;
+              }).join("")}
+            </div>` : `<div style="font-size:12.5px;color:var(--text2);margin-top:8px">No follow-up timepoints recorded — tap Follow-up to add them.</div>`}
+        </div>`;
+      }).join("");
+      html += `<div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Follow-up is tracked as counts per timepoint, not per patient — no subject-level data is stored here. Anything below 80% complete is flagged.</div>`;
+    }
+    $main.innerHTML = html;
+    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
+    bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
+    bindWorklistFilters();
+    $main.querySelectorAll("[data-fu-edit]").forEach(b => b.onclick = () => openFollowUpSheet(b.dataset.fuEdit));
+    $main.querySelectorAll("[data-open-study]").forEach(el => el.onclick = () => { openStudy(el.dataset.openStudy); render(); });
+    return;
+  }
 
   if (!studies.length) {
     html += worklistSearchQuery
@@ -3661,7 +3933,9 @@ function renderSettings() {
 }
 
 /* ============ Forms (bottom sheets) ============ */
-function openSheet(title, bodyHTML, onSave) {
+// afterOpen runs once the sheet is in the DOM, for sheets that need their own handlers wired
+// (repeatable rows, live previews). Optional — most callers don't need it.
+function openSheet(title, bodyHTML, onSave, afterOpen) {
   // Remove any prior sheet instantly — a delayed (animated) removal would leave
   // duplicate element IDs and route the Save button to the wrong handler.
   document.querySelectorAll("#sheet-bd, #sheet").forEach(el => el.remove());
@@ -3679,6 +3953,7 @@ function openSheet(title, bodyHTML, onSave) {
   bd.onclick = closeSheet;
   document.getElementById("sheet-cancel").onclick = closeSheet;
   document.getElementById("sheet-save").onclick = () => { if (onSave() !== false) closeSheet(); };
+  if (typeof afterOpen === "function") afterOpen(sh);
 }
 function closeSheet() {
   const bd = document.getElementById("sheet-bd"), sh = document.getElementById("sheet");
