@@ -3355,6 +3355,19 @@ function renderSettings() {
     </div>
   </div>
 
+  ${isAdmin() ? `
+  <div class="section-title">Invite a Teammate</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
+    They'll get an email with a link to set their own password. The server checks you're on the approved list before sending — the app can't do it on its own.
+  </div>
+  <div class="card">
+    <div style="display:flex;gap:8px">
+      <input id="invite-email" type="email" autocomplete="off" placeholder="name@rushortho.com" style="flex:1;min-width:0;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+      <button id="invite-send" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 16px;font-weight:700;font-size:15px;cursor:pointer">Invite</button>
+    </div>
+    <div id="invite-msg" style="font-size:13px;line-height:1.45;margin-top:8px"></div>
+  </div>` : ""}
+
   <div class="section-title" id="org-anchor">Org Chart</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
     Everyone who has signed in, with what they do and who they report to. New accounts are asked for their role the first time they log in.${isAdmin() ? "" : " Only admins can change this."}
@@ -3447,6 +3460,37 @@ function renderSettings() {
     saveLocal(); pushRoster(); render(); toast(n + " added");
   };
   $main.querySelectorAll("[data-degrees-for]").forEach(b => b.onclick = () => openDegreesSheet(b.dataset.degreesFor));
+  const inviteBtn = document.getElementById("invite-send");
+  if (inviteBtn) inviteBtn.onclick = async () => {
+    const input = document.getElementById("invite-email");
+    const msgEl = document.getElementById("invite-msg");
+    const say = (text, colour) => { msgEl.textContent = text; msgEl.style.color = colour; };
+    const email = (input.value || "").trim();
+    if (!email) { say("Enter an email address first.", "var(--red)"); return; }
+    if (!sb) { say("Not connected — try again in a moment.", "var(--red)"); return; }
+    inviteBtn.disabled = true; inviteBtn.textContent = "Sending…"; say("", "");
+    try {
+      // Send the caller's OWN access token. The function asks Supabase whose token it is and
+      // checks that against its allowlist — it never takes our word for who we are.
+      const { data: sess } = await sb.auth.getSession();
+      const tokenValue = sess && sess.session && sess.session.access_token;
+      if (!tokenValue) throw new Error("Your session expired — sign out and back in.");
+      const res = await fetch(SUPABASE_URL + "/functions/v1/invite-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tokenValue },
+        body: JSON.stringify({ email })
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok || out.error) throw new Error(out.error || ("Invite failed (" + res.status + ")"));
+      say(out.message || "Invite sent.", out.alreadyActive ? "var(--orange)" : "var(--green)");
+      if (out.ok) input.value = "";
+      toast(out.message || "Invite sent");
+    } catch (e) {
+      say(e.message || "Could not send the invite.", "var(--red)");
+    } finally {
+      inviteBtn.disabled = false; inviteBtn.textContent = "Invite";
+    }
+  };
   $main.querySelectorAll("[data-org-edit]").forEach(b => b.onclick = () => {
     if (!isAdmin()) { toast("Only admins can change the org chart"); return; }
     openOrgSheet(b.dataset.orgEdit);
