@@ -2288,8 +2288,10 @@ const DEFAULT_INITIATION_STAGES = [
   { key: "sync",        label: "SYNC" },
   { key: "oncore",      label: "ONCORE — open to accrual" },
   { key: "contract",    label: "Contracting (CTA / DUA)" },
-  { key: "piq",         label: "Patient IQ build" },
-  { key: "redcap",      label: "REDCap / EDC build" },
+  // Patient IQ is the primary platform here; REDCap is used only for pediatric assent
+  // consenting, so it's N/A on most studies — the label says so to save people wondering.
+  { key: "piq",         label: "Patient IQ build (primary EDC)" },
+  { key: "redcap",      label: "REDCap build — pediatric assent consent only" },
   { key: "systems",     label: "Systems access & training (eConsent, payments, billing)" },
   { key: "labs",        label: "Labs, supply & pharmacy readiness" },
   { key: "siv",         label: "Site Initiation Visit (SIV)" },
