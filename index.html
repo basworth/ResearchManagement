@@ -722,7 +722,7 @@ function setSub(soc, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], orgPermissions: false, initiationStages: null };
+let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], orgPermissions: false, initiationStages: null, nameAliases: {} };
 let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
@@ -856,6 +856,7 @@ function migrate() {
   if (!Array.isArray(state.userPrefs)) state.userPrefs = [];
   if (!Array.isArray(state.profiles)) state.profiles = [];
   if (!Array.isArray(state.filterSets)) state.filterSets = [];
+  if (!state.nameAliases || typeof state.nameAliases !== "object") state.nameAliases = {};
   // Profiles predate the org chart, so backfill the new fields rather than letting undefined
   // leak into comparisons and selects.
   state.profiles.forEach(p => {
@@ -1116,13 +1117,14 @@ async function pullAll() {
     if (meta && meta.data.degrees && typeof meta.data.degrees === "object") state.rosterDegrees = meta.data.degrees;
     if (meta) state.orgPermissions = !!meta.data.orgPermissions;
     if (meta && Array.isArray(meta.data.initiationStages) && meta.data.initiationStages.length) state.initiationStages = meta.data.initiationStages;
+    if (meta && meta.data.nameAliases && typeof meta.data.nameAliases === "object") state.nameAliases = meta.data.nameAliases;
     data.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; });
     migrate();
     saveLocal();
     render();
   }
 }
-function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null }); }
+function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null, nameAliases: state.nameAliases || {} }); }
 // rowIdOverride exists for records whose natural key would collide with another kind's row —
 // see prefRowId(). Everything else stores itself under its own obj.id.
 async function pushItem(kind, obj, rowIdOverride) {
@@ -1250,7 +1252,9 @@ async function pushAllLocal() {
     ...(state.userPrefs || []).map(p => ({ id: prefRowId(p.id), kind: "userPref", data: p, updated_at: now() })),
     ...(state.profiles || []).map(p => ({ id: p.id, kind: "profile", data: p, updated_at: now() })),
     ...(state.filterSets || []).map(f => ({ id: f.id, kind: "filterSet", data: f, updated_at: now() })),
-    { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster }, updated_at: now() }
+    // Must carry every meta field, not just names — an earlier version dropped degrees and
+    // would silently wipe them on a full re-push.
+    { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null, nameAliases: state.nameAliases || {} }, updated_at: now() }
   ];
   await sb.from("items").upsert(rows);
   // upload any locally stored files one at a time (they can be large)
@@ -1420,13 +1424,109 @@ function stripDegrees(n) {
   while (parts.length > 1 && DEGREE_TOKENS.includes(parts[parts.length - 1].toLowerCase().replace(/[.\-]/g, ""))) parts.pop();
   return parts.join(" ");
 }
+// Aliases now come from two places: the map above (shipped defaults) and state.nameAliases,
+// which admins add to via the merge tool and which syncs to the team. The dynamic ones win, so
+// a merge can override a shipped default if it was ever wrong.
+function aliasFor(key) {
+  const dyn = (typeof state !== "undefined" && state && state.nameAliases) ? state.nameAliases : null;
+  if (dyn && dyn[key]) return dyn[key];
+  return NAME_ALIASES[key];
+}
 function canonName(n) {
   const raw = (n || "").trim();
   if (!raw) return "";
-  const direct = NAME_ALIASES[raw.toLowerCase()];
+  const direct = aliasFor(raw.toLowerCase());
   if (direct) return direct;
   const stripped = stripDegrees(raw);
-  return NAME_ALIASES[stripped.toLowerCase()] || stripped;
+  return aliasFor(stripped.toLowerCase()) || stripped;
+}
+
+// ---------- Merging duplicate names ----------
+// Free-text entry over years left the same person spelled several ways ("Chahla" vs "Jorge
+// Chahla"). Rewriting every record is the only real fix: migrate() rebuilds the roster from the
+// raw pi/team/assignee fields on every load, so editing the roster alone achieves nothing — the
+// old spelling simply reappears. The alias is ALSO recorded, which catches anything missed and
+// any future typo of the same form.
+function nameMatches(value, target) {
+  return (value || "").trim().toLowerCase() === (target || "").trim().toLowerCase();
+}
+// What would a merge touch? Used to show a count before anything is changed.
+function nameMergeImpact(from) {
+  const hit = (v) => nameMatches(v, from);
+  let studies = 0, tasks = 0, docs = 0;
+  (state.studies || []).forEach(s => {
+    let n = 0;
+    if (namesFromField(s.pi).some(hit)) n++;
+    if ((s.team || []).some(hit)) n++;
+    if (Array.isArray(s.authors) && s.authors.some(hit)) n++;
+    (s.docs || []).forEach(d => { if (hit(d.by)) docs++; });
+    if (n) studies++;
+  });
+  (state.tasks || []).forEach(t => { if ((t.assignees || []).some(hit)) tasks++; });
+  return { studies, tasks, docs };
+}
+function mergeNames(fromRaw, toRaw) {
+  const from = (fromRaw || "").trim();
+  const to = (toRaw || "").trim();
+  if (!isAdmin()) { toast("Only admins can merge names"); return null; }
+  if (!from || !to) { toast("Pick both names"); return null; }
+  if (from.toLowerCase() === to.toLowerCase()) { toast("Those are the same name"); return null; }
+  if (blockOfflineEdit("Merging names")) return null;
+
+  const hit = (v) => nameMatches(v, from);
+  const uniq = (arr) => arr.filter((x, i) => arr.findIndex(y => nameMatches(y, x)) === i);
+  const studies = [], tasks = [], profiles = [], prefs = [], sets = [];
+
+  (state.studies || []).forEach(s => {
+    let touched = false;
+    const pis = namesFromField(s.pi);
+    if (pis.some(hit)) { s.pi = uniq(pis.map(n => hit(n) ? to : n)).join(", "); touched = true; }
+    if (Array.isArray(s.team) && s.team.some(hit)) { s.team = uniq(s.team.map(n => hit(n) ? to : n)); touched = true; }
+    if (Array.isArray(s.authors) && s.authors.some(hit)) { s.authors = uniq(s.authors.map(n => hit(n) ? to : n)); touched = true; }
+    (s.docs || []).forEach(d => { if (hit(d.by)) { d.by = to; touched = true; } });
+    if (touched) studies.push(s);
+  });
+  (state.tasks || []).forEach(t => {
+    if (Array.isArray(t.assignees) && t.assignees.some(hit)) {
+      t.assignees = uniq(t.assignees.map(n => hit(n) ? to : n));
+      tasks.push(t);
+    }
+  });
+
+  state.roster = uniq((state.roster || []).map(n => hit(n) ? to : n)).sort((a, b) => a.localeCompare(b));
+  // Degrees are keyed by name, so the key has to move and any two sets get unioned.
+  const rd = Object.assign({}, state.rosterDegrees || {});
+  const oldKey = Object.keys(rd).find(hit);
+  if (oldKey) {
+    const merged = uniq((rd[to] || []).concat(rd[oldKey] || []));
+    delete rd[oldKey];
+    if (merged.length) rd[to] = merged;
+    state.rosterDegrees = rd;
+  }
+  state.nameAliases = Object.assign({}, state.nameAliases || {});
+  state.nameAliases[from.toLowerCase()] = to;
+
+  (state.profiles || []).forEach(p => { if (hit(p.name)) { p.name = to; profiles.push(p); } });
+  (state.userPrefs || []).forEach(p => { if (hit(p.name)) { p.name = to; prefs.push(p); } });
+  (state.filterSets || []).forEach(f => {
+    let touched = false;
+    if (hit(f.ownerName)) { f.ownerName = to; touched = true; }
+    // A saved view pointing at the old spelling would silently return nothing.
+    if (f.filters && hit(f.filters.person)) { f.filters.person = to; touched = true; }
+    if (touched) sets.push(f);
+  });
+  if (hit(personFilter)) personFilter = to;
+  if (hit(worklistPerson)) worklistPerson = to;
+
+  saveLocal();
+  studies.forEach(s => pushItem("study", s));
+  tasks.forEach(t => pushItem("task", t));
+  profiles.forEach(p => pushItem("profile", p));
+  prefs.forEach(p => pushItem("userPref", p, prefRowId(p.id)));
+  sets.forEach(f => pushItem("filterSet", f));
+  pushRoster();
+  render();
+  return { studies: studies.length, tasks: tasks.length, profiles: profiles.length, views: sets.length };
 }
 // Degrees are stored per person (not baked into the name) so author lists can render the
 // manuscript form — "Adam Yanke, MD, PhD" — while the app keeps matching on the plain name.
@@ -3627,6 +3727,41 @@ function renderSettings() {
     </div>
   </div>
 
+  ${isAdmin() ? `
+  <div class="section-title">Merge Duplicate Names</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
+    Same person, two spellings? Pick the wrong one and the right one. Every study, task, author list and saved view is rewritten, and the old spelling is remembered so it can't creep back in.
+  </div>
+  <div class="card">
+    <div class="frow" style="padding:8px 0"><label>Wrong name</label>
+      <select id="merge-from" style="flex:1">
+        <option value="">— pick —</option>
+        ${state.roster.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="frow" style="padding:8px 0;border-bottom:none"><label>Correct name</label>
+      <select id="merge-to" style="flex:1">
+        <option value="">— pick —</option>
+        ${state.roster.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}
+      </select>
+    </div>
+    <div id="merge-preview" style="font-size:13px;color:var(--text2);line-height:1.45;margin:6px 0 8px"></div>
+    <button class="btn secondary" id="merge-go" style="margin:0">Merge</button>
+  </div>
+  ${Object.keys(state.nameAliases || {}).length ? `
+  <div class="card" style="margin-top:10px">
+    <div style="font-size:12px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin-bottom:6px">ALREADY MERGED</div>
+    ${Object.entries(state.nameAliases).map(([from, to]) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13.5px">
+        <span style="color:var(--text2);text-decoration:line-through">${esc(from)}</span>
+        <span style="color:var(--text2)">→</span>
+        <span style="font-weight:600;flex:1">${esc(to)}</span>
+        <button class="mini-btn" data-unalias="${esc(from)}" style="margin:0;color:var(--red)">Undo</button>
+      </div>`).join("")}
+    <div style="font-size:12px;color:var(--text2);line-height:1.45;margin-top:6px">Undo only forgets the rule — it doesn't put the old spelling back on any record.</div>
+  </div>` : ""}
+  ` : ""}
+
   <div class="section-title">Admin Access</div>
   ${isAdmin()
     ? `<div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
@@ -3747,6 +3882,45 @@ function renderSettings() {
     saveLocal(); pushRoster(); render(); toast(n + " added");
   };
   $main.querySelectorAll("[data-degrees-for]").forEach(b => b.onclick = () => openDegreesSheet(b.dataset.degreesFor));
+  // ---------- Merge duplicate names ----------
+  const mFrom = document.getElementById("merge-from");
+  const mTo = document.getElementById("merge-to");
+  const mPrev = document.getElementById("merge-preview");
+  if (mFrom && mTo && mPrev) {
+    const describe = () => {
+      const from = mFrom.value, to = mTo.value;
+      if (!from || !to) { mPrev.textContent = "Pick both names to see what would change."; return; }
+      if (from.toLowerCase() === to.toLowerCase()) { mPrev.textContent = "Those are the same name."; return; }
+      const i = nameMergeImpact(from);
+      const bits = [];
+      if (i.studies) bits.push(i.studies + (i.studies === 1 ? " study" : " studies"));
+      if (i.tasks) bits.push(i.tasks + (i.tasks === 1 ? " task" : " tasks"));
+      if (i.docs) bits.push(i.docs + (i.docs === 1 ? " upload" : " uploads"));
+      mPrev.textContent = bits.length
+        ? `“${from}” appears on ${bits.join(", ")} — all will become “${to}”.`
+        : `“${from}” isn't on any record. Merging still records the rule so it can't come back.`;
+    };
+    mFrom.onchange = describe;
+    mTo.onchange = describe;
+    describe();
+    const goBtn = document.getElementById("merge-go");
+    if (goBtn) goBtn.onclick = () => {
+      const from = mFrom.value, to = mTo.value;
+      if (!from || !to) { toast("Pick both names"); return; }
+      if (!confirm(`Rewrite every record from “${from}” to “${to}”? This can't be undone automatically.`)) return;
+      const r = mergeNames(from, to);
+      if (r) toast(`Merged — ${r.studies} studies, ${r.tasks} tasks, ${r.views} saved views updated`);
+    };
+  }
+  $main.querySelectorAll("[data-unalias]").forEach(b => b.onclick = () => {
+    if (!isAdmin()) return;
+    const key = b.dataset.unalias;
+    state.nameAliases = Object.assign({}, state.nameAliases || {});
+    delete state.nameAliases[key];
+    saveLocal(); pushRoster(); render();
+    toast(`Forgot the rule for “${key}” — records already merged are unchanged`);
+  });
+
   // ---------- Admin access requests ----------
   async function callAdminFn(payload) {
     const { data: sess } = await sb.auth.getSession();
