@@ -625,20 +625,20 @@ function openOrgSheet(userId) {
           ${candidates.map(x => `<option value="${esc(x.id)}" ${x.id === p.reportsTo ? "selected" : ""}>${esc(x.name || x.email)}</option>`).join("")}
         </select>
       </div>
-      <div class="frow" style="gap:10px">
-        <input type="checkbox" id="f-org-admin" ${p.admin ? "checked" : ""}>
-        <label for="f-org-admin" style="flex:1">Admin — can see and edit every project</label>
-      </div>
     </div>
     <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
-      Roles and reporting lines are recorded for everyone, but they don't change who can see what yet — that stays off until you switch it on below the chart.
+      ${p.admin
+        ? `<b>${esc(p.name || "They")} is an admin.</b> Admin rights aren't editable here — they're granted only by approving a request, so there's always a record of who asked.`
+        : `Admin rights aren't set here. Someone becomes an admin by requesting it and Adam approving, which the database enforces.`}
+      Roles and reporting lines are recorded for everyone, but they don't change who can see what until the switch below the chart is on.
     </div>`,
     () => {
       const pos = document.getElementById("f-org-pos").value;
+      // Deliberately no `admin` here: the database refuses admin-flag changes from any client,
+      // so including it would make every save fail.
       updateProfileFields(userId, {
         position: pos === "— not set —" ? "" : pos,
-        reportsTo: document.getElementById("f-org-boss").value,
-        admin: document.getElementById("f-org-admin").checked
+        reportsTo: document.getElementById("f-org-boss").value
       });
       render();
       toast("Saved — change it again any time from Settings › Org Chart");
@@ -3355,6 +3355,21 @@ function renderSettings() {
     </div>
   </div>
 
+  <div class="section-title">Admin Access</div>
+  ${isAdmin()
+    ? `<div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
+         You're an admin. Requests from others are emailed to Adam and appear below for him to approve — admin rights can't be handed out any other way, including from the org chart.
+       </div>
+       <div id="admin-req-list" class="card" style="padding:6px 14px"><div style="color:var(--text2);font-size:14px">Checking for requests…</div></div>`
+    : `<div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
+         Admins can see and edit every project. If you need that, ask — Adam gets an email and decides.
+       </div>
+       <div class="card">
+         <input id="admin-req-reason" placeholder="Why do you need it? (optional)" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+         <button class="btn secondary" id="admin-req-btn" style="margin-top:10px">Request admin access</button>
+         <div id="admin-req-msg" style="font-size:13px;line-height:1.45;margin-top:6px"></div>
+       </div>`}
+
   ${isAdmin() ? `
   <div class="section-title">Invite a Teammate</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
@@ -3460,6 +3475,77 @@ function renderSettings() {
     saveLocal(); pushRoster(); render(); toast(n + " added");
   };
   $main.querySelectorAll("[data-degrees-for]").forEach(b => b.onclick = () => openDegreesSheet(b.dataset.degreesFor));
+  // ---------- Admin access requests ----------
+  async function callAdminFn(payload) {
+    const { data: sess } = await sb.auth.getSession();
+    const tok = sess && sess.session && sess.session.access_token;
+    if (!tok) throw new Error("Your session expired — sign out and back in.");
+    const res = await fetch(SUPABASE_URL + "/functions/v1/admin-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
+      body: JSON.stringify(payload)
+    });
+    const out = await res.json().catch(() => ({}));
+    if (!res.ok || out.error) throw new Error(out.error || ("Failed (" + res.status + ")"));
+    return out;
+  }
+  const reqBtn = document.getElementById("admin-req-btn");
+  if (reqBtn) reqBtn.onclick = async () => {
+    const msgEl = document.getElementById("admin-req-msg");
+    const say = (t, c) => { msgEl.textContent = t; msgEl.style.color = c; };
+    if (!sb) { say("Not connected — try again shortly.", "var(--red)"); return; }
+    reqBtn.disabled = true; reqBtn.textContent = "Sending…"; say("", "");
+    try {
+      const out = await callAdminFn({ action: "request", reason: (document.getElementById("admin-req-reason").value || "").trim() });
+      say(out.message || "Request sent.", out.ok ? "var(--green)" : "var(--orange)");
+      toast(out.message || "Request sent");
+    } catch (e) {
+      say(e.message || "Could not send the request.", "var(--red)");
+    } finally {
+      reqBtn.disabled = false; reqBtn.textContent = "Request admin access";
+    }
+  };
+  const reqList = document.getElementById("admin-req-list");
+  if (reqList && sb) {
+    (async () => {
+      try {
+        // RLS lets admins read every request and everyone else only their own, so this needs no
+        // filtering of its own.
+        const { data, error } = await sb.from("admin_requests")
+          .select("id, user_id, reason, status, requested_at")
+          .eq("status", "pending").order("requested_at", { ascending: true });
+        if (error) throw error;
+        if (!data || !data.length) {
+          reqList.innerHTML = `<div style="color:var(--text2);font-size:14px;padding:6px 0">No pending requests.</div>`;
+          return;
+        }
+        reqList.innerHTML = data.map(r => {
+          const who = profileFor(r.user_id);
+          return `<div class="task-row" style="padding:9px 0;gap:8px;align-items:flex-start">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:14.5px;font-weight:600">${esc((who && who.name) || (who && who.email) || "Someone")}</div>
+              <div style="font-size:12px;color:var(--text2)">Asked ${fmtDate(String(r.requested_at).slice(0, 10))}${r.reason ? " · " + esc(r.reason) : ""}</div>
+            </div>
+            <button class="mini-btn" data-req-yes="${esc(r.id)}" style="margin-top:0;flex:0 0 auto">Approve</button>
+            <button class="mini-btn" data-req-no="${esc(r.id)}" style="margin-top:0;flex:0 0 auto;color:var(--red)">Deny</button>
+          </div>`;
+        }).join("");
+        const decide = async (id, approve) => {
+          try {
+            const out = await callAdminFn({ action: "decide", requestId: id, approve });
+            toast(out.message || "Done");
+            await pullAll();
+            render();
+          } catch (e) { toast(e.message || "Could not save that decision"); }
+        };
+        reqList.querySelectorAll("[data-req-yes]").forEach(b => b.onclick = () => decide(b.dataset.reqYes, true));
+        reqList.querySelectorAll("[data-req-no]").forEach(b => b.onclick = () => decide(b.dataset.reqNo, false));
+      } catch (e) {
+        reqList.innerHTML = `<div style="color:var(--text2);font-size:13px;padding:6px 0">Couldn't load requests: ${esc(e.message || "unknown error")}</div>`;
+      }
+    })();
+  }
+
   const inviteBtn = document.getElementById("invite-send");
   if (inviteBtn) inviteBtn.onclick = async () => {
     const input = document.getElementById("invite-email");
