@@ -389,9 +389,22 @@
            when you're convinced you typed the right thing, and the most common cause here is
            someone who was invited but never actually set a password. -->
       <div id="login-reset-offer" style="display:none;margin-top:10px;padding:11px 13px;background:var(--bg);border-radius:10px">
-        <div style="font-size:13px;color:var(--text2);line-height:1.45;margin-bottom:8px">Never set a password, or can't remember it? We can email you a link to set a new one.</div>
-        <button class="btn secondary" id="login-reset-send" style="margin:0">Email me a reset link</button>
+        <div style="font-size:13px;color:var(--text2);line-height:1.45;margin-bottom:8px">Never set a password, or can't remember it? We can email you a code to set a new one.</div>
+        <button class="btn secondary" id="login-reset-send" style="margin:0">Email me a sign-in code</button>
+        <button class="link-btn" id="login-have-code" style="margin-top:6px">I already have a code</button>
       </div>
+    </div>
+    <!-- Codes rather than clickable links: Rush's mail security opens links to vet them before
+         the recipient gets there, which spends the one-time token and leaves the real person
+         staring at a dead link. A typed code has nothing for a scanner to consume. -->
+    <div id="login-code" style="display:none">
+      <div id="code-intro" style="font-size:13.5px;color:var(--text2);margin-bottom:12px">Check your email for a 6-digit code and enter it below.</div>
+      <div class="fgroup">
+        <div class="frow"><label>Code</label><input id="login-code-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456"></div>
+      </div>
+      <button class="btn" id="login-code-submit">Continue</button>
+      <button class="link-btn" id="login-code-resend">Send a new code</button>
+      <button class="link-btn" id="login-code-back">Back to sign in</button>
     </div>
     <div id="login-recovery" style="display:none">
       <div id="recovery-intro" style="font-size:13.5px;color:var(--text2);margin-bottom:12px">Enter a new password for your account.</div>
@@ -1036,18 +1049,32 @@ function detectAuthLinkError() {
 function authLinkErrorMessage(e) {
   const c = (e && e.code || "").toLowerCase();
   if (c === "otp_expired" || c.indexOf("expired") >= 0) {
-    return "That link has already been used, or it's more than an hour old. Each link only works once — send yourself a fresh one below.";
+    return "That link was already opened, most likely by Rush's email scanner before it reached you. Use the 6-digit code in the same email instead — tap \"I already have a code\" below.";
   }
   if (c === "access_denied") {
-    return "That link is no longer valid — it may have been opened once already. Send yourself a fresh one below.";
+    return "That link is no longer valid — something opened it first. Use the 6-digit code in the same email instead.";
   }
-  return (e && e.description) || "That link didn't work. Send yourself a fresh one below.";
+  return (e && e.description) || "That link didn't work. Use the 6-digit code in the same email instead.";
 }
 let authLinkType = detectAuthLinkType();
 let authLinkError = detectAuthLinkError();
 // A dead link carries no session, so there is nothing to set a password against. Offering the
 // password box anyway would fail on save and read as a second, unrelated fault.
 let pendingPasswordSetup = !authLinkError && ["invite", "recovery", "signup"].indexOf(authLinkType) >= 0;
+
+// The three login panes are mutually exclusive; every switch goes through here so a stray
+// display:block can't leave two of them stacked on top of each other.
+function showLoginPane(which) {
+  const panes = { fields: "login-fields", code: "login-code", password: "login-recovery" };
+  Object.keys(panes).forEach(k => {
+    const el = document.getElementById(panes[k]);
+    if (el) el.style.display = (k === which) ? "block" : "none";
+  });
+  if (which !== "fields") {
+    const offer = document.getElementById("login-reset-offer");
+    if (offer) offer.style.display = "none";
+  }
+}
 
 // Landing from a link that's already spent. Say so, and put the fix one tap away with the
 // address already filled in — the error itself carries no email, but the person clicking a
@@ -1062,8 +1089,7 @@ function showDeadLinkScreen() {
 
 function showPasswordSetup(isInvite) {
   showLoginScreen();
-  document.getElementById("login-fields").style.display = "none";
-  document.getElementById("login-recovery").style.display = "block";
+  showLoginPane("password");
   const intro = document.getElementById("recovery-intro");
   if (intro) intro.textContent = isInvite
     ? "Welcome! Choose a password to finish setting up your account. You'll use your email and this password to sign in from now on."
@@ -3994,7 +4020,7 @@ function renderSettings() {
   ${isAdmin() ? `
   <div class="section-title">Invite a Teammate</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
-    They'll get an email with a link to set their own password. The server checks you're on the approved list before sending — the app can't do it on its own.
+    They'll get an email with a 6-digit code to set their own password — a code rather than a link, because Rush's email scanner opens links before people get to them. The server checks you're an admin before sending; the app can't do it on its own.
   </div>
   <div class="card">
     <div style="display:flex;gap:8px">
@@ -4916,11 +4942,14 @@ document.getElementById("add-btn").onclick = () => {
 
 // Login screen handlers — bound once; the login screen markup is static (not re-rendered by
 // the main render() loop), unlike the rest of the app.
+let codeEmail = "";
 function bindLoginScreen() {
   const submitBtn = document.getElementById("login-submit");
   const resetOffer = document.getElementById("login-reset-offer");
   const setResetOffer = (show) => { if (resetOffer) resetOffer.style.display = show ? "block" : "none"; };
-  // Shared by the "Forgot password?" link and the post-failure offer below.
+  // Shared by the "Forgot password?" link and the post-failure offer below. The email carries
+  // both a code and a link; we steer people to the code because the link may well be dead by
+  // the time it reaches them (see showDeadLinkScreen).
   const sendReset = async (email, btn) => {
     const label = btn && btn.textContent;
     if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
@@ -4928,9 +4957,15 @@ function bindLoginScreen() {
       const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
       if (error) throw error;
       setResetOffer(false);
-      setLoginMsg("Reset link sent to " + email + ". Open it on this device — it expires in an hour and only works once.", "info");
+      codeEmail = email;
+      showLoginPane("code");
+      const intro = document.getElementById("code-intro");
+      if (intro) intro.textContent = "We emailed a 6-digit code to " + email + ". Enter it below — it lasts an hour. Check your junk folder if it's slow to arrive.";
+      setLoginMsg("");
+      const input = document.getElementById("login-code-input");
+      if (input) { input.value = ""; input.focus(); }
     } catch (e) {
-      setLoginMsg(e.message || "Could not send the reset email.");
+      setLoginMsg(e.message || "Could not send the email.");
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = label; }
     }
@@ -4979,6 +5014,71 @@ function bindLoginScreen() {
     setLoginMsg("");
     await sendReset(email, forgotBtn);
   };
+  // One code box serves resets and invites. We don't ask which kind of email arrived — nobody
+  // knows or cares — so try the plausible types in turn. Supabase rejects the wrong type
+  // without spending the code, so a miss costs nothing but a round trip.
+  const verifyCode = async () => {
+    if (!sb) { setLoginMsg("Still connecting — try again in a moment."); return; }
+    const input = document.getElementById("login-code-input");
+    const token = (input.value || "").replace(/\s|-/g, "");
+    const email = codeEmail || document.getElementById("login-email").value.trim();
+    if (!email) { setLoginMsg("Go back and enter your email first."); return; }
+    if (token.length < 6) { setLoginMsg("Enter the 6-digit code from the email."); return; }
+    const btn = document.getElementById("login-code-submit");
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = "Checking…";
+    setLoginMsg("");
+    let lastErr = null;
+    try {
+      for (const type of ["recovery", "invite", "signup", "magiclink", "email"]) {
+        const { data, error } = await sb.auth.verifyOtp({ email, token, type });
+        if (!error && data && data.session) {
+          // A code proves they own the mailbox, exactly like a link would, so hand them
+          // straight to the password box rather than bouncing them back to sign in.
+          pendingPasswordSetup = true;
+          authLinkType = (type === "invite" || type === "signup") ? "invite" : "recovery";
+          authLinkError = null;
+          showPasswordSetup(authLinkType === "invite");
+          return;
+        }
+        lastErr = error;
+        // A wrong/expired code is final — no point trying the other types.
+        if (error && /expired|invalid/i.test(error.message || "") && type !== "recovery") break;
+      }
+      setLoginMsg((lastErr && /expired/i.test(lastErr.message || ""))
+        ? "That code has expired. Send a new one below."
+        : "That code didn't match. Check the email and try again, or send a new one.");
+    } catch (e) {
+      setLoginMsg(e.message || "Could not check that code.");
+    } finally {
+      btn.disabled = false; btn.textContent = label;
+    }
+  };
+  document.getElementById("login-code-submit").onclick = verifyCode;
+  document.getElementById("login-code-input").addEventListener("keydown", (e) => { if (e.key === "Enter") verifyCode(); });
+  document.getElementById("login-code-resend").onclick = () => {
+    const email = codeEmail || document.getElementById("login-email").value.trim();
+    if (!email) { setLoginMsg("Go back and enter your email first."); return; }
+    sendReset(email, document.getElementById("login-code-resend"));
+  };
+  document.getElementById("login-code-back").onclick = () => {
+    showLoginPane("fields");
+    setLoginMsg("");
+  };
+  // Someone invited by email already holds a code, so don't force them to burn it and wait
+  // for a second one just to reach the box.
+  document.getElementById("login-have-code").onclick = () => {
+    const email = document.getElementById("login-email").value.trim();
+    if (!email) { setLoginMsg("Enter your email above first."); return; }
+    codeEmail = email;
+    showLoginPane("code");
+    const intro = document.getElementById("code-intro");
+    if (intro) intro.textContent = "Enter the 6-digit code from the email we sent to " + email + ".";
+    setLoginMsg("");
+    const input = document.getElementById("login-code-input");
+    if (input) { input.value = ""; input.focus(); }
+  };
+
   document.getElementById("recovery-submit").onclick = async () => {
     if (!sb) return;
     const password = document.getElementById("recovery-password").value;
@@ -4992,9 +5092,9 @@ function bindLoginScreen() {
       // making them retype the password they just chose would be pointless.
       pendingPasswordSetup = false;
       authLinkType = "";
+      codeEmail = "";
       try { history.replaceState(null, "", window.location.pathname); } catch (e) { /* non-fatal */ }
-      document.getElementById("login-recovery").style.display = "none";
-      document.getElementById("login-fields").style.display = "block";
+      showLoginPane("fields");
       const { data: sess } = await sb.auth.getSession();
       if (sess && sess.session) {
         await handleAuthChange("SIGNED_IN", sess.session);
