@@ -2274,13 +2274,26 @@ function enrollmentHasContent(s) { return s.enrollTarget !== "" || s.enrollCurre
 // The stage list is data, not code: Adam expects it to grow ("this list I likely will have to
 // figure out"). It lives on the shared roster record so the whole team sees the same stages,
 // and falls back to these six when nothing has been customised.
+// Ordered roughly as a site actually activates, from Carla Edwards' (CRCM) list. The six
+// original keys — coverage, irb, contract, piq, redcap, sync — are DELIBERATELY unchanged even
+// where the wording improved, because studies already carry recorded dates against them and
+// renaming a key would orphan that history.
 const DEFAULT_INITIATION_STAGES = [
-  { key: "coverage", label: "Coverage analysis" },
-  { key: "irb",      label: "IRB submission" },
-  { key: "contract", label: "Contracting" },
-  { key: "piq",      label: "Patient IQ build" },
-  { key: "redcap",   label: "REDCap build" },
-  { key: "sync",     label: "Sync" }
+  { key: "feasibility", label: "Feasibility & site selection (SQV)" },
+  { key: "irb",         label: "IRB approval" },
+  { key: "pcoi",        label: "pCOI / investigator disclosures" },
+  { key: "extIrb",      label: "External site IRB approvals (lead site)" },
+  { key: "coverage",    label: "Coverage analysis — initial" },
+  { key: "coverageFinal", label: "Coverage analysis — final" },
+  { key: "sync",        label: "SYNC" },
+  { key: "oncore",      label: "ONCORE — open to accrual" },
+  { key: "contract",    label: "Contracting (CTA / DUA)" },
+  { key: "piq",         label: "Patient IQ build" },
+  { key: "redcap",      label: "REDCap / EDC build" },
+  { key: "systems",     label: "Systems access & training (eConsent, payments, billing)" },
+  { key: "labs",        label: "Labs, supply & pharmacy readiness" },
+  { key: "siv",         label: "Site Initiation Visit (SIV)" },
+  { key: "activation",  label: "Site activation / first patient in" }
 ];
 const STAGE_STATUSES = ["Not started", "Submitted", "Passed", "N/A"];
 const STAGE_COLORS = {
@@ -2309,6 +2322,75 @@ function initiationDone(s) {
   return { passed: passed.length, total: counted.length };
 }
 function isProspective(s) { return (s.design || "") === "Prospective (Consented)"; }
+
+// Team-wide editor for WHICH stages are tracked. Removing a stage only stops it being listed —
+// any dates already recorded against it stay on the study record untouched, per the standing
+// rule that nothing is destroyed without being asked for.
+function openStagesSheet() {
+  if (!isAdmin()) { toast("Only admins can change the stage list"); return; }
+  if (blockOfflineEdit("Editing the stage list")) return;
+  const rows = initiationStages().slice();
+  const rowHTML = (st, i) => `
+    <div class="fgroup" data-stage-row="${i}">
+      <div class="frow"><label>Stage</label><input class="stage-label" value="${esc(st.label)}" placeholder="e.g. Sponsor agreement"></div>
+      <div class="frow" style="border-bottom:none">
+        <label style="color:var(--text2);font-size:12.5px">Key: ${esc(st.key)}</label>
+        <button class="mini-btn stage-drop" style="margin:0;color:var(--red)">Stop tracking</button>
+      </div>
+    </div>`;
+  openSheet("Initiation stages", `
+    <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+      These are the stages every prospective study is tracked against. Renaming one keeps its
+      history. <b>Stop tracking</b> only removes it from this list — dates already recorded stay
+      on the study and come back if you add the stage again.
+    </div>
+    <div id="stage-rows">${rows.map(rowHTML).join("")}</div>
+    <button class="mini-btn" id="stage-add">＋ Add a stage</button>`,
+    () => {
+      const out = [];
+      document.querySelectorAll("#stage-rows [data-stage-row]").forEach(row => {
+        if (row.dataset.dropped === "1") return;
+        const label = row.querySelector(".stage-label").value.trim();
+        if (!label) return;
+        // Existing rows keep their key; new ones get one derived from the label.
+        const key = row.dataset.key || label.toLowerCase().replace(/[^a-z0-9]+/g, "").slice(0, 24) || uid().slice(0, 8);
+        out.push({ key, label });
+      });
+      if (!out.length) { toast("Keep at least one stage"); return false; }
+      state.initiationStages = out;
+      saveLocal(); pushRoster(); render();
+      toast("Stage list saved — it applies to every study");
+    },
+    (sheet) => {
+      rows.forEach((st, i) => {
+        const row = sheet.querySelector(`[data-stage-row="${i}"]`);
+        if (row) row.dataset.key = st.key;
+      });
+      const wire = (row) => {
+        const drop = row.querySelector(".stage-drop");
+        if (drop) drop.onclick = () => {
+          row.dataset.dropped = row.dataset.dropped === "1" ? "" : "1";
+          const off = row.dataset.dropped === "1";
+          row.style.opacity = off ? "0.45" : "";
+          drop.textContent = off ? "Keep tracking" : "Stop tracking";
+        };
+      };
+      sheet.querySelectorAll("[data-stage-row]").forEach(wire);
+      const add = sheet.querySelector("#stage-add");
+      if (add) add.onclick = () => {
+        const wrap = sheet.querySelector("#stage-rows");
+        const i = wrap.querySelectorAll("[data-stage-row]").length;
+        const div = document.createElement("div");
+        div.className = "fgroup";
+        div.setAttribute("data-stage-row", String(i));
+        div.innerHTML = `<div class="frow"><label>Stage</label><input class="stage-label" placeholder="e.g. Sponsor agreement"></div>
+          <div class="frow" style="border-bottom:none"><label style="color:var(--text2);font-size:12.5px">New stage</label>
+          <button class="mini-btn stage-drop" style="margin:0;color:var(--red)">Stop tracking</button></div>`;
+        wrap.appendChild(div);
+        wire(div);
+      };
+    });
+}
 
 // Per-study editor for the initiation stages: status plus the dates it was submitted and
 // cleared, which is the whole point of the board (when did it go in, when did it pass).
@@ -3802,6 +3884,17 @@ function renderSettings() {
   </div>
 
   ${isAdmin() ? `
+  <div class="section-title">Initiation Stages</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
+    ${initiationStages().length} stages tracked on every prospective study, shown in the Worklist's Initiation view and on each study page. Renaming keeps history; nothing recorded is ever deleted.
+  </div>
+  <div class="card">
+    <div style="font-size:13px;line-height:1.6;color:var(--text2)">${initiationStages().map(st => esc(st.label)).join(" · ")}</div>
+    <button class="btn secondary" id="stages-edit" style="margin-top:10px">Edit stage list</button>
+  </div>
+  ` : ""}
+
+  ${isAdmin() ? `
   <div class="section-title">Merge Duplicate Names</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
     Same person, two spellings? Pick the wrong one and the right one. Every study, task, author list and saved view is rewritten, and the old spelling is remembered so it can't creep back in.
@@ -3956,6 +4049,9 @@ function renderSettings() {
     saveLocal(); pushRoster(); render(); toast(n + " added");
   };
   $main.querySelectorAll("[data-degrees-for]").forEach(b => b.onclick = () => openDegreesSheet(b.dataset.degreesFor));
+  const stagesBtn = document.getElementById("stages-edit");
+  if (stagesBtn) stagesBtn.onclick = () => openStagesSheet();
+
   // ---------- Merge duplicate names ----------
   const mFrom = document.getElementById("merge-from");
   const mTo = document.getElementById("merge-to");
