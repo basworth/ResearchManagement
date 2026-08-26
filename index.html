@@ -999,6 +999,10 @@ async function bootApp() {
     }
     const { data, error } = await withTimeout(sb.auth.getSession(), 12000, "Checking session");
     if (error) throw error;
+    // A dead link takes priority over an existing session: someone who clicked a reset link
+    // came here to change their password, and silently dropping them into the app as their
+    // old self is how "the link doesn't work" turns into a mystery.
+    if (authLinkError) { showDeadLinkScreen(); return; }
     if (data && data.session) await handleAuthChange("SIGNED_IN", data.session);
     else showLoginScreen();
   } catch (e) {
@@ -1013,13 +1017,48 @@ async function bootApp() {
 // into the app without ever asking for a password — and since they never set one, they can
 // never sign in again afterwards. So read the link's own `type` out of the URL instead.
 // Captured at parse time because createClient({detectSessionInUrl}) strips the hash.
-function detectAuthLinkType() {
+function authLinkParam(name) {
   const blob = (window.location.hash || "").replace(/^#/, "") + "&" + (window.location.search || "").replace(/^\?/, "");
-  const m = /(?:^|&)type=([^&]+)/.exec(blob);
-  return m ? decodeURIComponent(m[1]) : "";
+  const m = new RegExp("(?:^|&)" + name + "=([^&]*)").exec(blob);
+  return m ? decodeURIComponent(m[1].replace(/\+/g, " ")) : "";
+}
+function detectAuthLinkType() { return authLinkParam("type"); }
+// When a link is dead, GoTrue doesn't hand back a session — it redirects here with an error in
+// the URL instead. Read it, because the alternative is what people actually saw: a bare sign-in
+// box and no clue why. The usual cause is a one-time token that something already spent, often
+// a corporate mail scanner pre-opening the link to check it's safe before the recipient clicks.
+function detectAuthLinkError() {
+  const code = authLinkParam("error_code");
+  const err = authLinkParam("error");
+  if (!code && !err) return null;
+  return { code: code || err, description: authLinkParam("error_description") };
+}
+function authLinkErrorMessage(e) {
+  const c = (e && e.code || "").toLowerCase();
+  if (c === "otp_expired" || c.indexOf("expired") >= 0) {
+    return "That link has already been used, or it's more than an hour old. Each link only works once — send yourself a fresh one below.";
+  }
+  if (c === "access_denied") {
+    return "That link is no longer valid — it may have been opened once already. Send yourself a fresh one below.";
+  }
+  return (e && e.description) || "That link didn't work. Send yourself a fresh one below.";
 }
 let authLinkType = detectAuthLinkType();
-let pendingPasswordSetup = ["invite", "recovery", "signup"].indexOf(authLinkType) >= 0;
+let authLinkError = detectAuthLinkError();
+// A dead link carries no session, so there is nothing to set a password against. Offering the
+// password box anyway would fail on save and read as a second, unrelated fault.
+let pendingPasswordSetup = !authLinkError && ["invite", "recovery", "signup"].indexOf(authLinkType) >= 0;
+
+// Landing from a link that's already spent. Say so, and put the fix one tap away with the
+// address already filled in — the error itself carries no email, but the person clicking a
+// reset link is almost always the person who asked for it.
+function showDeadLinkScreen() {
+  showLoginScreen(authLinkErrorMessage(authLinkError));
+  const offer = document.getElementById("login-reset-offer");
+  if (offer) offer.style.display = "block";
+  // Drop the spent token so a refresh doesn't replay this screen forever.
+  try { history.replaceState(null, "", window.location.pathname); } catch (e) { /* non-fatal */ }
+}
 
 function showPasswordSetup(isInvite) {
   showLoginScreen();
