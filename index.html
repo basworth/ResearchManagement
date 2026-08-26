@@ -2577,9 +2577,14 @@ function initiationBodyHTML(s) {
   const d = initiationDone(s);
   const target = esc(nextAfterInit(s));
   const init = s.initiation || {};
+  // A stage marked N/A drops off this list — it isn't part of this study's work, so it's just
+  // noise here. The record is untouched and it's still listed in the edit sheet, so nothing is
+  // lost and it can be switched back at any time.
+  const shown = stages.filter(st => stageInfo(s, st.key).status !== "N/A");
+  const na = stages.length - shown.length;
   return `
-    <div style="font-size:12.5px;color:var(--text2);margin-bottom:8px">${d.passed} of ${d.total} stages cleared${d.passed === d.total && d.total ? ` — ready to move to <b>${target}</b>.` : ". Stages marked N/A count as cleared."}</div>
-    ${stages.map(st => {
+    <div style="font-size:12.5px;color:var(--text2);margin-bottom:8px">${d.passed} of ${d.total} stages cleared${d.passed === d.total && d.total ? ` — ready to move to <b>${target}</b>.` : ""}${na ? ` · ${na} marked not applicable and hidden below` : ""}</div>
+    ${shown.map(st => {
       const info = stageInfo(s, st.key);
       const detail = [
         info.submitted ? "submitted " + fmtDate(info.submitted) : "",
@@ -2594,7 +2599,8 @@ function initiationBodyHTML(s) {
         <span class="badge" style="background:${STAGE_COLORS[info.status]};font-size:9.5px;padding:2px 7px">${esc(info.status)}</span>
       </div>`;
     }).join("")}
-    <button class="mini-btn" data-init-edit="${s.id}" style="margin-top:10px">Edit stages &amp; dates</button>
+    ${shown.length ? "" : `<div style="color:var(--text2);font-size:14px">Every stage is marked not applicable for this study.</div>`}
+    <button class="mini-btn" data-init-edit="${s.id}" style="margin-top:10px">Edit stages &amp; dates${na ? " (" + na + " hidden)" : ""}</button>
     <div class="milestone-row" style="border-top:1px solid var(--line);margin-top:10px;padding-top:12px">
       <button class="task-check ${init.ready ? "done" : ""}" data-init="ready" style="width:24px;height:24px;min-width:24px;border-color:var(--green)"></button>
       <div style="flex:1;font-size:15px;font-weight:800">Study Ready for Enrollment</div>
