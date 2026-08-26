@@ -2487,18 +2487,33 @@ function grantHasContent(s) {
   return !!(g && g.enabled && (g.amount || g.source || g.awardDate || g.balance || g.expirationDate || g.balanceUpdatedDate));
 }
 
+// Shows the dated stages (status, submitted, passed) rather than the old tick boxes — the same
+// data the Worklist's Initiation board reads, so the two can't disagree. Kept visible after the
+// study leaves Initiation because these dates are its start-up audit trail.
 function initiationBodyHTML(s) {
-  const init = s.initiation || {};
-  const done = INIT_STEPS.filter(st => init[st.key]).length;
+  const stages = initiationStages();
+  const d = initiationDone(s);
   const target = esc(nextAfterInit(s));
+  const init = s.initiation || {};
   return `
-    <div style="font-size:12.5px;color:var(--text2);margin-bottom:6px">${done} of ${INIT_STEPS.length} steps complete. When the study is ready, check the final box to move it to <b>${target}</b>.</div>
-    ${INIT_STEPS.map(st => `
+    <div style="font-size:12.5px;color:var(--text2);margin-bottom:8px">${d.passed} of ${d.total} stages cleared${d.passed === d.total && d.total ? ` — ready to move to <b>${target}</b>.` : ". Stages marked N/A count as cleared."}</div>
+    ${stages.map(st => {
+      const info = stageInfo(s, st.key);
+      const detail = [
+        info.submitted ? "submitted " + fmtDate(info.submitted) : "",
+        info.passed ? "passed " + fmtDate(info.passed) : ""
+      ].filter(Boolean).join(" · ");
+      return `
       <div class="milestone-row">
-        <button class="task-check ${init[st.key] ? "done" : ""}" data-init="${st.key}" style="width:22px;height:22px;min-width:22px"></button>
-        <div style="flex:1;font-size:14.5px;font-weight:600;${init[st.key] ? "color:var(--text2)" : ""}">${esc(st.label)}</div>
-      </div>`).join("")}
-    <div class="milestone-row" style="border-top:1px solid var(--line);margin-top:6px;padding-top:12px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14.5px;font-weight:600">${esc(st.label)}</div>
+          ${detail ? `<div style="font-size:12px;color:var(--text2);margin-top:2px">${detail}</div>` : ""}
+        </div>
+        <span class="badge" style="background:${STAGE_COLORS[info.status]};font-size:9.5px;padding:2px 7px">${esc(info.status)}</span>
+      </div>`;
+    }).join("")}
+    <button class="mini-btn" data-init-edit="${s.id}" style="margin-top:10px">Edit stages &amp; dates</button>
+    <div class="milestone-row" style="border-top:1px solid var(--line);margin-top:10px;padding-top:12px">
       <button class="task-check ${init.ready ? "done" : ""}" data-init="ready" style="width:24px;height:24px;min-width:24px;border-color:var(--green)"></button>
       <div style="flex:1;font-size:15px;font-weight:800">Study Ready for Enrollment</div>
     </div>`;
@@ -2513,13 +2528,39 @@ function initiationBodyHTML(s) {
 let pastOpen = false;
 // Per-meeting open state inside the archive, keyed by meeting id. All closed by default.
 let pastMeetingOpen = {};
+// Which sections matter at each phase. A study page carries thirteen sections; only a handful
+// are the actual work at any given moment, so the rest recede as the study advances.
+// Anything not listed for a phase is "irrelevant" — which never means deleted, and never means
+// hidden if it holds anything (see sectionVisibility()).
+const PHASE_SECTIONS = {
+  "Concept":            ["notes", "tasks", "workingDocs", "deadlines", "abstracts"],
+  "Initiation":         ["initiation", "notes", "tasks", "workingDocs", "grant"],
+  "Enrolling":          ["enrollment", "notes", "tasks", "workingDocs", "milestones"],
+  "Data Collection":    ["enrollment", "workingDocs", "notes", "tasks", "milestones"],
+  "Data Extraction":    ["workingDocs", "notes", "tasks", "milestones"],
+  "Experiments":        ["workingDocs", "notes", "tasks", "milestones"],
+  "Analysis":           ["workingDocs", "authors", "notes", "tasks", "milestones"],
+  "Manuscript":         ["docs", "authors", "workingDocs", "abstracts", "notes", "tasks"],
+  "Submitted":          ["docs", "authors", "abstracts", "notes", "tasks"],
+  "Revisions Required": ["revisionDocs", "docs", "authors", "notes", "tasks"],
+  "Published":          ["docs", "abstracts", "authors", "notes"],
+  "On Hold":            ["notes", "tasks"]
+};
+function sectionsForPhase(phase) { return PHASE_SECTIONS[phase] || PHASE_SECTIONS["Concept"]; }
+// Every section always stays on the page — this only decides what starts OPEN. Adam was explicit
+// that "hiding" meant collapsing, and a section that vanished would be indistinguishable from
+// data having been lost.
+function sectionOpenForPhase(id, phase) { return sectionsForPhase(phase).indexOf(id) >= 0; }
 let studySectionState = {};
 let sectionStateForStudy = null;
-function collapsibleSection(id, title, bodyHTML) {
+// A collapsed section that holds something says so, so you don't have to open each one to find
+// out where the content is.
+function collapsibleSection(id, title, bodyHTML, badge) {
   const open = !!studySectionState[id];
+  const hint = (!open && badge) ? `<span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text2);font-size:11px;margin-left:6px">${esc(String(badge))}</span>` : "";
   return `
   <div class="section-title" data-sec-toggle="${id}" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;user-select:none">
-    <span>${esc(title)}</span>
+    <span>${esc(title)}${hint}</span>
     <span data-sec-chev style="font-size:11px;color:var(--text2);display:inline-block;transition:transform .2s;transform:rotate(${open ? 90 : 0}deg)">▸</span>
   </div>
   <div class="card" data-sec-body="${id}" style="${open ? "" : "display:none"}">
@@ -2714,25 +2755,51 @@ function renderStudyDetail() {
   // Fresh open of a (possibly different) study: recompute default open/closed per section.
   // Re-renders of the SAME study (e.g. after an inline edit) reuse the existing state so
   // manual expand/collapse choices aren't clobbered.
+  // What each section actually holds, computed once so both the open/closed decision and the
+  // hide decision work from the same facts.
+  const hasContent = {
+    notes: notesHasContent(s),
+    enrollment: enrollmentHasContent(s),
+    grant: grantHasContent(s),
+    initiation: Object.keys(s.initiationProgress || {}).length > 0,
+    authors: Array.isArray(s.authors) && s.authors.length > 0,
+    workingDocs: !!(s.workingAbstractLink || s.projectOverviewLink || s.workingManuscriptLink || s.dataCollectionSheetLink || s.dataProcessDocLink || s.trackingSheetLink),
+    meetingNotes: meetingNotes.length > 0,
+    milestones: milestones.length > 0,
+    docs: docs.length > 0,
+    revisionDocs: revisionDocs.length > 0 || !!s.revisedManuscriptLink || !!s.responseToReviewersLink,
+    abstracts: abstracts.length > 0 || linkedAbstractMeetings.length > 0,
+    deadlines: linkedGrantMeetings.length > 0,
+    tasks: tasks.length > 0
+  };
+  // Open state is set on a fresh open of a (different) study and then left alone, so manual
+  // expand/collapse choices survive the re-renders that follow an inline edit.
   if (sectionStateForStudy !== s.id) {
-    const workingDocsHasContent = !!(s.workingAbstractLink || s.projectOverviewLink || s.workingManuscriptLink || s.dataCollectionSheetLink || s.dataProcessDocLink || s.trackingSheetLink);
     openNoteArchives = {};
-    studySectionState = {
-      notes: notesHasContent(s),
-      enrollment: enrollmentHasContent(s),
-      grant: grantHasContent(s),
-      initiation: s.phase === "Initiation",
-      workingDocs: workingDocsHasContent,
-      meetingNotes: meetingNotes.length > 0,
-      milestones: milestones.length > 0,
-      docs: docs.length > 0,
-      revisionDocs: revisionDocs.length > 0 || !!s.revisedManuscriptLink || !!s.responseToReviewersLink,
-      abstracts: abstracts.length > 0 || linkedAbstractMeetings.length > 0,
-      deadlines: linkedGrantMeetings.length > 0,
-      tasks: tasks.length > 0
-    };
+    studySectionState = {};
+    Object.keys(hasContent).forEach(id => {
+      // Phase decides. A section that isn't part of this phase's work starts collapsed even if
+      // it has content — it's still right there, one tap away, with a count on the header.
+      studySectionState[id] = sectionOpenForPhase(id, s.phase);
+    });
     sectionStateForStudy = s.id;
   }
+  // Counts shown on collapsed headers.
+  const sectionBadge = {
+    notes: (s.noteEntries || []).filter(n => !n.archivedOn).length || "",
+    initiation: (() => { const d = initiationDone(s); return d.total ? d.passed + "/" + d.total : ""; })(),
+    authors: hasContent.authors ? String(s.authors.length) : "",
+    workingDocs: hasContent.workingDocs ? "linked" : "",
+    meetingNotes: meetingNotes.length || "",
+    milestones: milestones.length || "",
+    docs: docs.length || "",
+    revisionDocs: revisionDocs.length || "",
+    abstracts: (abstracts.length + linkedAbstractMeetings.length) || "",
+    deadlines: linkedGrantMeetings.length || "",
+    tasks: tasks.filter(t => !t.done).length || "",
+    enrollment: hasContent.enrollment ? (s.enrollCurrent || 0) + "/" + (s.enrollTarget || "?") : "",
+    grant: hasContent.grant ? "funded" : ""
+  };
 
   let html = `
   <button class="btn secondary" id="back-btn" style="margin:8px 0 12px 0">‹ All Studies</button>
@@ -2762,12 +2829,15 @@ function renderStudyDetail() {
     ${s.phase === "Submitted" ? `<div style="font-size:12px;color:var(--orange);line-height:1.4;margin-top:10px">⚠︎ Make sure the Title above matches the manuscript title exactly as submitted to the journal.</div>` : ""}
   </div>
   <button class="btn secondary" id="edit-study-btn">Edit Study</button>
-  ${collapsibleSection("notes", "Notes", notesBodyHTML(s, inputStyle))}
-  ${collapsibleSection("enrollment", "Enrollment", enrollmentBodyHTML(s))}
-  ${s.grant && s.grant.enabled ? collapsibleSection("grant", "Grant & Award Funding", grantBodyHTML(s)) : ""}
-  ${s.phase === "Initiation" ? collapsibleSection("initiation", "Initiation Checklist", initiationBodyHTML(s)) : ""}
+  ${collapsibleSection("notes", "Notes", notesBodyHTML(s, inputStyle), sectionBadge.notes)}
+  ${collapsibleSection("enrollment", "Enrollment", enrollmentBodyHTML(s), sectionBadge.enrollment)}
+  ${s.grant && s.grant.enabled ? collapsibleSection("grant", "Grant & Award Funding", grantBodyHTML(s), sectionBadge.grant) : ""}
+  <!-- Kept once there's recorded progress, not just during Initiation: the submitted/passed
+       dates are the audit trail of how the study got started, and losing sight of them the
+       moment it begins enrolling is exactly the disappearing-data problem. -->
+  ${(s.phase === "Initiation" || hasContent.initiation) ? collapsibleSection("initiation", "Initiation Checklist", initiationBodyHTML(s), sectionBadge.initiation) : ""}
 
-  ${collapsibleSection("authors", "Proposed Authors", authorsBodyHTML(s))}
+  ${collapsibleSection("authors", "Proposed Authors", authorsBodyHTML(s), sectionBadge.authors)}
 
   ${collapsibleSection("workingDocs", "Working Documents", `
     ${linkFieldRow("Working Abstract", "wd-abstract", s.workingAbstractLink)}
@@ -2776,7 +2846,7 @@ function renderStudyDetail() {
     ${linkFieldRow("Data Collection Spreadsheet", "wd-sheet", s.dataCollectionSheetLink)}
     ${linkFieldRow("Data Collection Process & Analysis Doc", "wd-process", s.dataProcessDocLink)}
     ${linkFieldRow("Tracking Sheet (Enrolling Studies)", "wd-tracking", s.trackingSheetLink)}
-  `)}
+  `, sectionBadge.workingDocs)}
 
   ${collapsibleSection("meetingNotes", "Meeting Notes", `
     ${meetingNotes.length ? meetingNotes.map(n => `
@@ -2796,7 +2866,7 @@ function renderStudyDetail() {
       <input id="mnote-link" placeholder="Paste link to the notes…" style="flex:1;${inputStyle}">
       <button id="mnote-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:15px;cursor:pointer">Add</button>
     </div>
-  `)}
+  `, sectionBadge.meetingNotes)}
 
   ${collapsibleSection("milestones", "Milestones", `
     ${milestones.length ? milestones.map((m, i) => `
@@ -2813,7 +2883,7 @@ function renderStudyDetail() {
       <input id="ms-date" type="date" style="border:none;background:var(--bg);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none;max-width:135px">
       <button id="ms-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:15px;cursor:pointer">Add</button>
     </div>
-  `)}
+  `, sectionBadge.milestones)}
 
   ${collapsibleSection("docs", "Manuscript & Documents", `
     ${docs.length ? docs.map(dc => `
@@ -2830,7 +2900,7 @@ function renderStudyDetail() {
     </div>
     <input type="file" id="doc-file" style="display:none">
     ${sb ? "" : `<div style="font-size:12px;color:var(--text2);margin-top:8px">Without Team Sync, files stay on this device only (max 2.5 MB each).</div>`}
-  `)}
+  `, sectionBadge.docs)}
 
   ${collapsibleSection("revisionDocs", "Revision Documents", `
     ${revisionDocs.length ? revisionDocs.map(dc => `
@@ -2848,7 +2918,7 @@ function renderStudyDetail() {
     <input type="file" id="revdoc-file" style="display:none">
     ${linkFieldRow("Revised Manuscript", "wd-revised-ms", s.revisedManuscriptLink)}
     ${linkFieldRow("Response to Reviewers", "wd-response", s.responseToReviewersLink)}
-  `)}
+  `, sectionBadge.revisionDocs)}
 
   ${collapsibleSection("abstracts", "Abstract Submissions", `
     ${abstracts.length ? abstracts.map(a => `
@@ -2883,7 +2953,7 @@ function renderStudyDetail() {
         <button id="custom-dl-add-abs" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:9px 14px;font-weight:700;font-size:15px;cursor:pointer">Add</button>
       </div>
     </div>
-  `)}
+  `, sectionBadge.abstracts)}
 
   ${collapsibleSection("deadlines", "Grant Deadlines", `
     ${linkedGrantMeetings.length ? linkedGrantMeetings.map(meetingRowHTML).join("") : `<div style="color:var(--text2);font-size:14px">No linked grant deadlines.</div>`}
@@ -2902,9 +2972,11 @@ function renderStudyDetail() {
         <button id="custom-dl-add-grant" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:9px 14px;font-weight:700;font-size:15px;cursor:pointer">Add</button>
       </div>
     </div>
-  `)}
+  `, sectionBadge.deadlines)}
 
-  <div class="section-title">Tasks</div>
+  <!-- Tasks is deliberately not collapsible: it's listed in every phase's relevant set, so it
+       would always be open anyway, and it's the thing people come here to act on. -->
+  <div class="section-title">Tasks${tasks.filter(t => !t.done).length ? `<span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text2);font-size:11px;margin-left:6px">${tasks.filter(t => !t.done).length} open</span>` : ""}</div>
   <div class="card">
     ${tasks.length ? tasks.map(taskRowHTML).join("") : `<div style="color:var(--text2);font-size:14px">No tasks for this study.</div>`}
     <button class="btn secondary" id="add-task-here" style="margin:12px 0 0 0;padding:10px">+ Add Task</button>
@@ -2919,7 +2991,9 @@ function renderStudyDetail() {
     if (confirm(`Delete "${s.title}" and its tasks? This can't be undone.`)) { detailStudyId = null; removeStudy(s.id); toast("Study deleted"); }
   };
   document.getElementById("add-task-here").onclick = () => openTaskForm(null, s.id);
-  // Initiation checklist
+  // Initiation checklist — the stage grid is edited through the same sheet the Worklist board
+  // uses, so there's one editor rather than two that can drift apart.
+  $main.querySelectorAll("[data-init-edit]").forEach(b => b.onclick = () => openInitiationSheet(b.dataset.initEdit));
   $main.querySelectorAll("[data-init]").forEach(b => b.onclick = () => {
     s.initiation = s.initiation || { sportsSubmission: false, irbApproved: false, caApproved: false, piqBuilt: false, ready: false };
     const k = b.dataset.init;
