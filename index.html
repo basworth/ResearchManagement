@@ -735,7 +735,7 @@ function setSub(soc, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], orgPermissions: false, initiationStages: null, nameAliases: {} };
+let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [] };
 let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
@@ -864,12 +864,44 @@ function migrate() {
       s.initiationProgress = p;
     }
     if (!Array.isArray(s.followUp)) s.followUp = [];
+    // ClinicalTrials.gov identifier, kept next to the stage that tracks getting it.
+    if (s.nct == null) s.nct = "";
+    // IRB continuing-review expiry. A lapse means anything enrolled after it is a reportable
+    // problem, and nothing in the app used to know the date existed.
+    if (s.irbExpiry == null) s.irbExpiry = "";
   });
   if (!Array.isArray(state.teamNotes)) state.teamNotes = [];
   if (!Array.isArray(state.userPrefs)) state.userPrefs = [];
   if (!Array.isArray(state.profiles)) state.profiles = [];
   if (!Array.isArray(state.filterSets)) state.filterSets = [];
   if (!state.nameAliases || typeof state.nameAliases !== "object") state.nameAliases = {};
+  // A customised stage list won't contain stages added to the defaults later, so splice them in
+  // once. The "once" matters: the stage editor lets people deliberately remove stages, and
+  // re-adding on every load would silently override that. stageAdds remembers what we've
+  // already offered, so a removal sticks.
+  if (!Array.isArray(state.stageAdds)) state.stageAdds = [];
+  if (Array.isArray(state.initiationStages) && state.initiationStages.length) {
+    DEFAULT_INITIATION_STAGES.forEach((def, i) => {
+      if (state.stageAdds.indexOf(def.key) >= 0) return;
+      state.stageAdds.push(def.key);
+      if (state.initiationStages.some(st => st.key === def.key)) return;
+      // Insert before the first LATER default stage that the custom list actually has, so the
+      // new stage keeps its place in the sequence. Checking only the immediately-next default
+      // isn't enough — if that one was removed too, the stage gets appended to the end and the
+      // order stops meaning anything.
+      let at = -1;
+      for (let j = i + 1; j < DEFAULT_INITIATION_STAGES.length && at < 0; j++) {
+        at = state.initiationStages.findIndex(st => st.key === DEFAULT_INITIATION_STAGES[j].key);
+      }
+      if (at >= 0) state.initiationStages.splice(at, 0, { key: def.key, label: def.label });
+      else state.initiationStages.push({ key: def.key, label: def.label });
+    });
+  } else {
+    // Nothing customised yet, so the defaults are already in force — just record them as seen.
+    DEFAULT_INITIATION_STAGES.forEach(def => {
+      if (state.stageAdds.indexOf(def.key) < 0) state.stageAdds.push(def.key);
+    });
+  }
   // Profiles predate the org chart, so backfill the new fields rather than letting undefined
   // leak into comparisons and selects.
   state.profiles.forEach(p => {
@@ -1183,13 +1215,15 @@ async function pullAll() {
     if (meta) state.orgPermissions = !!meta.data.orgPermissions;
     if (meta && Array.isArray(meta.data.initiationStages) && meta.data.initiationStages.length) state.initiationStages = meta.data.initiationStages;
     if (meta && meta.data.nameAliases && typeof meta.data.nameAliases === "object") state.nameAliases = meta.data.nameAliases;
+    // Team-wide, so a stage one person removed doesn't come back for everyone else.
+    if (meta && Array.isArray(meta.data.stageAdds)) state.stageAdds = meta.data.stageAdds;
     data.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; });
     migrate();
     saveLocal();
     render();
   }
 }
-function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null, nameAliases: state.nameAliases || {} }); }
+function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null, nameAliases: state.nameAliases || {}, stageAdds: state.stageAdds || [] }); }
 // rowIdOverride exists for records whose natural key would collide with another kind's row —
 // see prefRowId(). Everything else stores itself under its own obj.id.
 async function pushItem(kind, obj, rowIdOverride) {
@@ -1319,7 +1353,7 @@ async function pushAllLocal() {
     ...(state.filterSets || []).map(f => ({ id: f.id, kind: "filterSet", data: f, updated_at: now() })),
     // Must carry every meta field, not just names — an earlier version dropped degrees and
     // would silently wipe them on a full re-push.
-    { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null, nameAliases: state.nameAliases || {} }, updated_at: now() }
+    { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null, nameAliases: state.nameAliases || {}, stageAdds: state.stageAdds || [] }, updated_at: now() }
   ];
   await sb.from("items").upsert(rows);
   // upload any locally stored files one at a time (they can be large)
@@ -2359,6 +2393,11 @@ const DEFAULT_INITIATION_STAGES = [
   { key: "redcap",      label: "REDCap build — pediatric assent consent only" },
   { key: "systems",     label: "Systems access & training (eConsent, payments, billing)" },
   { key: "labs",        label: "Labs, supply & pharmacy readiness" },
+  // Deliberately ahead of activation. For an applicable clinical trial, ICMJE journals want
+  // registration BEFORE the first patient enrols, and registering late can't be undone — the
+  // journal may still refuse the paper. Every other stage costs time when it slips; this one
+  // costs the publication, which is why it sits on the critical path rather than in a footnote.
+  { key: "ctgov",       label: "ClinicalTrials.gov registration (before first enrolment)" },
   { key: "siv",         label: "Site Initiation Visit (SIV)" },
   { key: "activation",  label: "Site activation / first patient in" }
 ];
@@ -2389,6 +2428,31 @@ function initiationDone(s) {
   return { passed: passed.length, total: counted.length };
 }
 function isProspective(s) { return (s.design || "") === "Prospective (Consented)"; }
+
+// IRB continuing review. Approval isn't permanent — it expires, and anything enrolled after a
+// lapse is a reportable problem, so this needs to shout well before the date rather than on it.
+// Thresholds match the email alerts so the screen and the inbox never disagree.
+const IRB_EXPIRY_STEPS = [90, 60, 30];
+function irbExpiryState(s) {
+  const d = (s && s.irbExpiry) || "";
+  if (!d) return null;
+  const days = daysUntil(d);
+  if (days < 0) {
+    return { days, level: "lapsed", color: "var(--red)",
+      label: `IRB LAPSED ${Math.abs(days)}d ago`,
+      detail: "Continuing review has expired. Enrolling or collecting data past this date is reportable — stop and check with the IRB." };
+  }
+  if (days <= 30) return { days, level: "urgent", color: "var(--red)", label: `IRB expires in ${days}d`, detail: "Continuing review is due now." };
+  if (days <= 60) return { days, level: "soon", color: "var(--orange)", label: `IRB expires in ${days}d`, detail: "Continuing review is coming up." };
+  if (days <= 90) return { days, level: "watch", color: "var(--orange)", label: `IRB expires in ${days}d`, detail: "Start the continuing review packet." };
+  return { days, level: "ok", color: "var(--text2)", label: `IRB expires ${fmtDate(d)}`, detail: "" };
+}
+// Studies that are actually exposed by a lapse — a finished study with an expired approval is
+// untidy, not dangerous, so it shouldn't compete for attention with one still enrolling.
+function irbExpiryMatters(s) {
+  const live = ["Initiation", "Enrolling", "Data Collection", "Data Extraction"];
+  return isProspective(s) && live.indexOf(s.phase || "") >= 0;
+}
 
 // Team-wide editor for WHICH stages are tracked. Removing a stage only stops it being listed —
 // any dates already recorded against it stay on the study record untouched, per the standing
@@ -2979,8 +3043,28 @@ function renderStudyDetail() {
       ${s.revisionsReceivedDate ? `<br><b>Revisions received:</b> ${fmtDate(s.revisionsReceivedDate)}` : ""}
       ${s.revisionsDeadline ? `<br><b>Revisions due:</b> ${fmtDate(s.revisionsDeadline)}` : ""}
       ${s.irb ? `<br><b>IRB #:</b> ${esc(s.irb)}` : ""}
+      ${s.nct ? `<br><b>ClinicalTrials.gov:</b> <a href="https://clinicaltrials.gov/study/${encodeURIComponent(s.nct)}" target="_blank" rel="noopener" style="color:var(--blue)">${esc(s.nct)}</a>` : ""}
       ${s.start ? `<br><b>Started:</b> ${fmtDate(s.start)}` : ""}
     </div>
+    ${(() => {
+      // Surfaced on the header rather than buried in the checklist: a lapsed approval is the one
+      // thing here that makes ongoing work reportable, so it shouldn't need a click to find.
+      const ie = irbExpiryState(s);
+      if (!ie || !irbExpiryMatters(s) || ie.level === "ok") return "";
+      return `<div style="margin-top:10px;padding:9px 11px;border-radius:9px;background:var(--bg);border-left:3px solid ${ie.color}">
+        <div style="font-size:13px;font-weight:700;color:${ie.color}">${esc(ie.label)}</div>
+        <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-top:2px">${esc(ie.detail)}</div>
+      </div>`;
+    })()}
+    ${(() => {
+      // Registration has to happen before the first patient. Once it's enrolling, an unregistered
+      // applicable trial is a publication problem you can't fix later, so say so here.
+      if (!isProspective(s)) return "";
+      const st = stageInfo(s, "ctgov").status;
+      const enrolling = ["Enrolling", "Data Collection"].indexOf(s.phase || "") >= 0;
+      if (!enrolling || st === "Passed" || st === "N/A") return "";
+      return `<div style="margin-top:8px;font-size:12px;color:var(--orange);line-height:1.45">⚠︎ Enrolling without ClinicalTrials.gov registration marked as done. If this is an applicable clinical trial, registration was due before the first patient — journals can refuse a late-registered trial. Mark it N/A on the Initiation Checklist if it doesn't apply.</div>`;
+    })()}
     ${s.phase === "Submitted" ? `<div style="font-size:12px;color:var(--orange);line-height:1.4;margin-top:10px">⚠︎ Make sure the Title above matches the manuscript title exactly as submitted to the journal.</div>` : ""}
   </div>
   <button class="btn secondary" id="edit-study-btn">Edit Study</button>
@@ -3771,6 +3855,24 @@ function renderWorkingList() {
           <div class="stat"><div class="num">${totalTarget}</div><div class="lbl">Target (IRB)</div></div>
           <div class="stat"><div class="num">${totalTarget > 0 ? Math.round(100 * totalNow / totalTarget) + "%" : "—"}</div><div class="lbl">Of Target</div></div>
         </div>`;
+      // Enrolling on a lapsed approval is the worst case this view can show, so it goes at the
+      // top where it can't be missed, not inline among the enrolment bars.
+      const expiring = rows.map(s => ({ s, ie: irbExpiryState(s) }))
+        .filter(x => x.ie && x.ie.level !== "ok")
+        .sort((a, b) => a.ie.days - b.ie.days);
+      const noExpiry = rows.filter(s => !s.irbExpiry);
+      if (expiring.length) {
+        html += `<div class="card" style="border-left:3px solid ${expiring[0].ie.color}">
+          <div style="font-size:11.5px;color:var(--text2);font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-bottom:6px">IRB Continuing Review</div>
+          ${expiring.map(x => `<div style="display:flex;justify-content:space-between;gap:8px;font-size:13.5px;padding:3px 0">
+            <span style="cursor:pointer;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" data-open-study="${x.s.id}">${esc(x.s.nickname || x.s.title)}</span>
+            <span style="color:${x.ie.color};font-weight:700;white-space:nowrap">${esc(x.ie.label)}</span>
+          </div>`).join("")}
+        </div>`;
+      }
+      if (noExpiry.length) {
+        html += `<div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">${noExpiry.length} enrolling ${noExpiry.length === 1 ? "study has" : "studies have"} no IRB expiry recorded, so nothing here can warn you before ${noExpiry.length === 1 ? "it lapses" : "they lapse"} — add it under Edit Study.</div>`;
+      }
       html += rows.map(s => {
         const tgt = parseInt(s.enrollTarget, 10);
         const cur = parseInt(s.enrollCurrent, 10);
@@ -4486,6 +4588,8 @@ function openStudyForm(existing, onCreated) {
     <div class="fgroup">
       <div class="frow"><label>ORA / IRB #</label><input id="f-irb" placeholder="Protocol #, Exempt, or N/A" value="${esc(s.irb || "")}"></div>
       <div class="frow"><label>IRB status</label>${selectHTML("f-irbstatus", IRB_STATUSES, s.irbStatus || "Not Submitted")}</div>
+      <div class="frow"><label>IRB expires</label><input id="f-irb-expiry" type="date" value="${esc(s.irbExpiry || "")}"></div>
+      <div class="frow"><label>NCT number</label><input id="f-nct" placeholder="NCT01234567" value="${esc(s.nct || "")}"></div>
       <div class="frow"><label>Start</label><input id="f-start" type="date" value="${esc(s.start || "")}"></div>
     </div>
     <div class="fgroup">
@@ -4523,6 +4627,8 @@ function openStudyForm(existing, onCreated) {
         priority: document.getElementById("f-priority").value,
         irb: document.getElementById("f-irb").value.trim(),
         irbStatus: document.getElementById("f-irbstatus").value,
+        irbExpiry: document.getElementById("f-irb-expiry").value,
+        nct: document.getElementById("f-nct").value.trim(),
         start: document.getElementById("f-start").value,
         // `notes` is deliberately absent: notes now live in s.noteEntries, edited inline in
         // the study page's Notes section. The old blob is left untouched on existing records.
