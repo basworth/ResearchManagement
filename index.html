@@ -990,14 +990,53 @@ function withTimeout(promise, ms, label) {
   const timeout = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error((label || "Request") + " timed out")), ms); });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
-function loadSupabaseLib() {
-  if (window.supabase) return Promise.resolve();
+// Three CDNs, tried in turn. The app cannot boot at all without this library, so a single
+// third-party host was a single point of failure for the whole tracker — and on a hospital
+// network any one of them may be blocked, throttled or intermittently unreachable. Falling
+// through costs nothing when the first one works.
+const SUPABASE_LIB_URLS = [
+  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js",
+  "https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/supabase-js/2.39.7/supabase.min.js"
+];
+function loadOneScript(src, ms) {
   return new Promise((res, rej) => {
     const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js";
-    s.onload = res; s.onerror = rej;
+    let settled = false;
+    // onerror doesn't fire for a host that accepts the connection then stalls, which is exactly
+    // how a throttling proxy behaves, so each attempt gets its own deadline.
+    const timer = setTimeout(() => { if (!settled) { settled = true; s.remove(); rej(new Error("timeout")); } }, ms || 8000);
+    s.src = src;
+    s.onload = () => { if (!settled) { settled = true; clearTimeout(timer); res(); } };
+    s.onerror = () => { if (!settled) { settled = true; clearTimeout(timer); s.remove(); rej(new Error("failed")); } };
     document.head.appendChild(s);
   });
+}
+async function loadSupabaseLib() {
+  if (window.supabase) return;
+  let lastErr = null;
+  for (const url of SUPABASE_LIB_URLS) {
+    try {
+      await loadOneScript(url, 8000);
+      if (window.supabase) return;
+      lastErr = new Error("loaded but window.supabase missing: " + url);
+    } catch (e) {
+      lastErr = e;
+      console.warn("Team Sync library failed from " + url, e && e.message);
+    }
+  }
+  throw lastErr || new Error("Could not load the Team Sync library");
+}
+// Is there a saved session? Distinguishes "the network is down" from "you need to sign in",
+// which look identical on screen but need completely different words.
+function hasStoredSession() {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && /^sb-.*-auth-token$/.test(k) && localStorage.getItem(k)) return true;
+    }
+  } catch (e) { /* private mode */ }
+  return false;
 }
 let reconnectTimer = null;
 // If already signed in, a dropped connection only needs pullAll() retried. If we never
@@ -1052,7 +1091,12 @@ async function bootApp() {
     else showLoginScreen();
   } catch (e) {
     console.warn("boot failed", e);
-    showLoginScreen("Could not reach the server. Check your connection — this page will keep retrying automatically.");
+    // Someone with a saved session hasn't been signed out — the app just couldn't reach the
+    // server yet. Saying "check your connection" above an empty sign-in box reads as "your
+    // login is gone", which sends people hunting for a password they don't need.
+    showLoginScreen(hasStoredSession()
+      ? "Still signed in — just can't reach the server yet. Retrying automatically; no need to sign in again unless this doesn't clear."
+      : "Could not reach the server. Check your connection — this page will keep retrying automatically.");
     scheduleReconnect();
   }
 }
