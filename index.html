@@ -1071,9 +1071,21 @@ function hideLoginScreen() {
 // Runs once at page load: connects the Supabase client and checks for an existing session.
 // Login itself (and all subsequent sign-in/out/recovery events) is handled by
 // handleAuthChange() via onAuthStateChange, so this only needs to do the FIRST check.
+// Presence of a stored token says nothing about whether it still WORKS. An expired or revoked
+// refresh token makes getSession() throw, which looks identical to a network failure from the
+// outside — and telling someone who has actually been signed out that they're "still signed in"
+// is worse than saying nothing, because it tells them not to do the one thing that would help.
+function isAuthFailure(e) {
+  const name = (e && e.name) || "";
+  const msg = ((e && e.message) || "").toLowerCase();
+  if (/AuthApiError|AuthSessionMissingError|AuthInvalidTokenResponseError/.test(name)) return true;
+  return /refresh token|jwt|invalid token|token is expired|session (is )?missing|not authenticated|bad_jwt/.test(msg);
+}
 async function bootApp() {
+  let libLoaded = false;
   try {
-    await withTimeout(loadSupabaseLib(), 12000, "Loading Team Sync library");
+    await withTimeout(loadSupabaseLib(), 30000, "Loading Team Sync library");
+    libLoaded = true;
     if (!sb) {
       sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
       sb.auth.onAuthStateChange((event, session) => {
@@ -1081,7 +1093,7 @@ async function bootApp() {
         handleAuthChange(event, session);
       });
     }
-    const { data, error } = await withTimeout(sb.auth.getSession(), 12000, "Checking session");
+    const { data, error } = await withTimeout(sb.auth.getSession(), 20000, "Checking session");
     if (error) throw error;
     // A dead link takes priority over an existing session: someone who clicked a reset link
     // came here to change their password, and silently dropping them into the app as their
@@ -1091,9 +1103,21 @@ async function bootApp() {
     else showLoginScreen();
   } catch (e) {
     console.warn("boot failed", e);
-    // Someone with a saved session hasn't been signed out — the app just couldn't reach the
-    // server yet. Saying "check your connection" above an empty sign-in box reads as "your
-    // login is gone", which sends people hunting for a password they don't need.
+    if (libLoaded && isAuthFailure(e)) {
+      // Genuinely signed out: the saved token is dead. Drop it so this doesn't repeat on every
+      // reload, and ask for a password — retrying can't fix an expired session.
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const k = localStorage.key(i);
+          if (k && /^sb-.*-auth-token$/.test(k)) localStorage.removeItem(k);
+        }
+      } catch (err) { /* private mode */ }
+      showLoginScreen("Your session expired — please sign in again. If your password doesn't work, use \"Forgot password?\" for a 6-digit code.");
+      return;
+    }
+    // Transport-level failure. Someone with a saved session hasn't been signed out; the app just
+    // couldn't reach the server yet, and saying "check your connection" above an empty sign-in
+    // box reads as "your login is gone".
     showLoginScreen(hasStoredSession()
       ? "Still signed in — just can't reach the server yet. Retrying automatically; no need to sign in again unless this doesn't clear."
       : "Could not reach the server. Check your connection — this page will keep retrying automatically.");
