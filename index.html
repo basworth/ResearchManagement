@@ -1986,7 +1986,7 @@ function deadlineItemHTML(m, dueWord, metaWord, stage) {
   panel += `<button class="mini-btn" data-edit-meeting="${m.id}">Edit</button>`;
   panel += `<button class="mini-btn" data-hide-meeting="${m.id}">${m.hidden ? "Unhide" : "Hide"}</button></div>`;
   return `
-  <details class="dl">
+  <details class="dl" data-dl="${m.id}"${openDeadlines[m.id] ? " open" : ""}>
     <summary>
       <div style="min-width:50px;text-align:center">
         <div style="font-size:22px;font-weight:800;line-height:1;color:${urg}">${dleft}</div>
@@ -2008,8 +2008,20 @@ function deadlineItemHTML(m, dueWord, metaWord, stage) {
   </details>`;
 }
 function bindDeadlineRows(root) {
+  // Remember expand/collapse so it survives the next render. Listening to `toggle` rather than
+  // clicking the summary ourselves keeps the native disclosure behaviour (keyboard, etc.) intact.
+  root.querySelectorAll("details.dl[data-dl]").forEach(d => {
+    d.addEventListener("toggle", () => {
+      if (d.open) openDeadlines[d.dataset.dl] = true;
+      else delete openDeadlines[d.dataset.dl];
+    });
+  });
   root.querySelectorAll("[data-open-study]").forEach(el => el.onclick = (e) => {
     e.preventDefault(); e.stopPropagation();
+    // Keep the meeting this project was reached from expanded, so coming back lands where you
+    // left rather than at a collapsed list you have to hunt through again.
+    const holder = el.closest("details.dl[data-dl]");
+    if (holder) openDeadlines[holder.dataset.dl] = true;
     openStudy(el.dataset.openStudy); tab = "studies"; render();
   });
   root.querySelectorAll("[data-edit-meeting]").forEach(el => el.onclick = (e) => {
@@ -2791,6 +2803,11 @@ function initiationBodyHTML(s) {
 let pastOpen = false;
 // Per-meeting open state inside the archive, keyed by meeting id. All closed by default.
 let pastMeetingOpen = {};
+// Which deadline rows on the board are expanded, keyed by meeting id. <details> keeps its own
+// open state in the DOM only, so every render() collapsed everything — including the render that
+// happens when you tap a linked project and come back. Opening a meeting is a statement about
+// what you're working on, so it survives navigation.
+let openDeadlines = {};
 // Which sections matter at each phase. A study page carries thirteen sections; only a handful
 // are the actual work at any given moment, so the rest recede as the study advances.
 // Anything not listed for a phase is "irrelevant" — which never means deleted, and never means
