@@ -162,6 +162,38 @@
   .wl-pill { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 700; color: #fff; }
   .wl-pill.outline { background: transparent; color: var(--text2); border: 1px solid var(--line); }
 
+  /* Going off. A study nobody has touched in a fortnight tints yellow; four weeks and it goes
+     mouldy green. Tints are kept low-opacity and mixed with the row background so the text stays
+     readable in both light and dark mode — and the mould green is deliberately a muddy olive, not
+     the success green used for "Passed", so a rotten row can't be misread as a good one. */
+  table.wl tbody tr.wl-stale td { background: color-mix(in srgb, #e8b400 16%, transparent); }
+  table.wl tbody tr.wl-rotten td { background: color-mix(in srgb, #6b8e23 22%, transparent); }
+  table.wl tbody tr.wl-stale:active td { background: color-mix(in srgb, #e8b400 26%, transparent); }
+  table.wl tbody tr.wl-rotten:active td { background: color-mix(in srgb, #6b8e23 32%, transparent); }
+  .rot-tag { display: inline-block; padding: 2px 7px; border-radius: 999px; font-size: 9.5px;
+    font-weight: 800; letter-spacing: .5px; white-space: nowrap; }
+  .rot-tag.stale { background: #e8b400; color: #3a2d00; }
+  .rot-tag.rotten { background: #55701c; color: #f0f5e2; }
+  /* The smell. Three wavy lines drifting up off a rotten row, staggered so it looks like a wisp
+     rather than a metronome. Purely decorative, hidden from screen readers, and switched off for
+     anyone who has asked for reduced motion. */
+  .stink { position: relative; display: inline-block; width: 15px; height: 13px;
+    vertical-align: -2px; margin-left: 2px; }
+  .stink span { position: absolute; bottom: 0; font-size: 10px; line-height: 1; color: #7d9b34;
+    animation: stink-rise 2.6s ease-in-out infinite; }
+  .stink span:nth-child(1) { left: 0; animation-delay: 0s; }
+  .stink span:nth-child(2) { left: 5px; animation-delay: .55s; }
+  .stink span:nth-child(3) { left: 10px; animation-delay: 1.15s; }
+  @keyframes stink-rise {
+    0%   { transform: translateY(4px) scale(.7); opacity: 0; }
+    25%  { opacity: .85; }
+    70%  { opacity: .35; }
+    100% { transform: translateY(-11px) scale(1.15) rotate(8deg); opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .stink span { animation: none; opacity: .6; }
+  }
+
   /* Cards & lists */
   .card {
     background: var(--card); border-radius: var(--radius);
@@ -2509,6 +2541,41 @@ function initiationDone(s) {
 }
 function isProspective(s) { return (s.design || "") === "Prospective (Consented)"; }
 
+/* ============ Freshness: has anyone touched this lately? ============ */
+// A study nobody has touched in a fortnight has usually been forgotten rather than finished, and
+// the Worklist is where that should be embarrassing. Two weeks = stale, four = rotten.
+const STALE_DAYS = 14;
+const ROTTEN_DAYS = 28;
+// On Hold and Published are deliberately parked — silence there means the system is working, so
+// they're exempt. Everything else is fair game.
+const FRESHNESS_EXEMPT_PHASES = ["On Hold", "Published"];
+// "Touched" means the study row OR any of its tasks was saved, because ticking off a task is
+// unmistakably work on the study even though the study record itself didn't change. Timestamps
+// come from Supabase's own updated_at via remoteMeta — the same source the sync uses for conflict
+// detection — so this measures real saves, not just someone opening the page.
+function lastTouchedAt(s) {
+  let latest = "";
+  const meta = remoteMeta[s.id];
+  if (meta && meta.updated_at) latest = meta.updated_at;
+  state.tasks.forEach(t => {
+    if (t.studyId !== s.id) return;
+    const tm = remoteMeta[t.id];
+    if (tm && tm.updated_at && tm.updated_at > latest) latest = tm.updated_at;
+  });
+  return latest;
+}
+function freshness(s) {
+  if (!s || FRESHNESS_EXEMPT_PHASES.indexOf(s.phase || "") >= 0) return null;
+  const at = lastTouchedAt(s);
+  // No timestamp means Team Sync has never seen it, not that it's ancient. Guessing "rotten" here
+  // would light up the whole board the first time someone opens it offline.
+  if (!at) return null;
+  const days = Math.floor((Date.now() - new Date(at).getTime()) / 86400000);
+  if (days >= ROTTEN_DAYS) return { level: "rotten", days, label: "ROTTEN", note: `untouched ${days} days` };
+  if (days >= STALE_DAYS) return { level: "stale", days, label: "STALE", note: `untouched ${days} days` };
+  return { level: "fresh", days, label: "", note: "" };
+}
+
 // IRB continuing review. Approval isn't permanent — it expires, and anything enrolled after a
 // lapse is a reportable problem, so this needs to shout well before the date rather than on it.
 // Thresholds match the email alerts so the screen and the inbox never disagree.
@@ -4029,24 +4096,47 @@ function renderWorkingList() {
       + (open.length > 5 ? `<li class="none">+${open.length - 5} more</li>` : "") + `</ul>`;
   };
 
-  const rows = studies.map(s => `
-    <tr data-open-study="${s.id}">
+  // The tag rides next to the nickname rather than in its own column, so it stays visible without
+  // sideways scrolling — the point of it is to be impossible to miss.
+  const rotCell = (s) => {
+    const f = freshness(s);
+    if (!f || f.level === "fresh") return "";
+    if (f.level === "rotten") {
+      return `<div style="margin-top:3px"><span class="rot-tag rotten" title="${esc(f.note)}">ROTTEN · ${f.days}d</span><span class="stink" aria-hidden="true"><span>〜</span><span>〜</span><span>〜</span></span></div>`;
+    }
+    return `<div style="margin-top:3px"><span class="rot-tag stale" title="${esc(f.note)}">STALE · ${f.days}d</span></div>`;
+  };
+  const rows = studies.map(s => {
+    const f = freshness(s);
+    const rotClass = (f && f.level === "rotten") ? " class=\"wl-rotten\""
+      : (f && f.level === "stale") ? " class=\"wl-stale\"" : "";
+    return `
+    <tr data-open-study="${s.id}"${rotClass}>
       <td>${s.irb ? esc(s.irb) : `<span style="color:var(--text2)">—</span>`}</td>
       <td><span class="wl-pill" style="background:${IRB_STATUS_COLORS[s.irbStatus] || "var(--text2)"}">${esc(s.irbStatus || "—")}</span></td>
       <td>${enrollCell(s)}</td>
       <td class="wl-title">${esc(s.title)}</td>
-      <td class="wl-name">${esc(s.nickname || "—")}</td>
+      <td class="wl-name">${esc(s.nickname || "—")}${rotCell(s)}</td>
       <td><span class="badge outline" style="font-size:11px">${esc(DESIGN_SHORT[s.design] || "—")}</span></td>
       <td><span class="wl-pill" style="background:${PHASE_COLORS[s.phase] || "var(--text2)"}">${esc(s.phase)}</span></td>
       <td class="wl-steps">${stepsCell(s)}</td>
-    </tr>`).join("");
+    </tr>`;
+  }).join("");
 
   const sortArrow = (key) => worklistSort.key === key ? (worklistSort.dir === 1 ? " ▲" : " ▼") : "";
   html += `<div class="wl-wrap"><table class="wl">
       <thead><tr>${cols.map(c => `<th data-sort="${c.key}" style="cursor:pointer;user-select:none;white-space:nowrap">${esc(c.label)}${sortArrow(c.key)}</th>`).join("")}</tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
-    <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Swipe sideways to see all columns. Tap a column header to sort, tap a row to open the study. Next steps are the study's open tasks (soonest due first).</div>`;
+    <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Swipe sideways to see all columns. Tap a column header to sort, tap a row to open the study. Next steps are the study's open tasks (soonest due first).${(() => {
+      const rot = studies.filter(x => { const f = freshness(x); return f && f.level === "rotten"; }).length;
+      const st = studies.filter(x => { const f = freshness(x); return f && f.level === "stale"; }).length;
+      if (!rot && !st) return " Nothing on this list has gone off — everything's been touched in the last two weeks.";
+      const bits = [];
+      if (rot) bits.push(`<b>${rot} rotten</b> (nothing for ${ROTTEN_DAYS}+ days)`);
+      if (st) bits.push(`${st} stale (${STALE_DAYS}+ days)`);
+      return ` ${bits.join(" and ")}. On Hold and Published studies are exempt — parked on purpose isn't the same as forgotten.`;
+    })()}</div>`;
 
   $main.innerHTML = html;
   $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
