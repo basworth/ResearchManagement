@@ -5376,26 +5376,31 @@ function bindLoginScreen() {
     const label = btn.textContent;
     btn.disabled = true; btn.textContent = "Checking…";
     setLoginMsg("");
-    let lastErr = null;
+    // Report the FIRST error, not the last. Recovery is the type every code this app sends now
+    // uses, so its error is the meaningful one; the invite fallback only exists for someone still
+    // holding a code from before invites switched to the recovery template. Reporting the last
+    // error meant the message described a type the user never had.
+    let firstErr = null;
     try {
-      for (const type of ["recovery", "invite", "signup", "magiclink", "email"]) {
+      for (const type of ["recovery", "invite"]) {
         const { data, error } = await sb.auth.verifyOtp({ email, token, type });
         if (!error && data && data.session) {
           // A code proves they own the mailbox, exactly like a link would, so hand them
           // straight to the password box rather than bouncing them back to sign in.
           pendingPasswordSetup = true;
-          authLinkType = (type === "invite" || type === "signup") ? "invite" : "recovery";
+          authLinkType = type === "invite" ? "invite" : "recovery";
           authLinkError = null;
           showPasswordSetup(authLinkType === "invite");
           return;
         }
-        lastErr = error;
-        // A wrong/expired code is final — no point trying the other types.
-        if (error && /expired|invalid/i.test(error.message || "") && type !== "recovery") break;
+        if (!firstErr) firstErr = error;
       }
-      setLoginMsg((lastErr && /expired/i.test(lastErr.message || ""))
-        ? "That code has expired. Send a new one below."
-        : "That code didn't match. Check the email and try again, or send a new one.");
+      // ONE message, because Supabase cannot tell us which case it is: a mistyped code, an
+      // expired one and a superseded one all come back as "Token has expired or is invalid".
+      // Two differently-worded messages would just be a guess dressed up as a diagnosis, so this
+      // names all three real causes instead — and leads with the one people hit most, which is
+      // reaching for an older email after asking for a code twice.
+      setLoginMsg("That code didn't work. Only the most recent code works, and codes last an hour — so if you've asked more than once, use the newest email, or tap \"Send a new code\" below. Otherwise check for typos.");
     } catch (e) {
       setLoginMsg(e.message || "Could not check that code.");
     } finally {
@@ -5421,7 +5426,9 @@ function bindLoginScreen() {
     codeEmail = email;
     showLoginPane("code");
     const intro = document.getElementById("code-intro");
-    if (intro) intro.textContent = "Enter the 6-digit code from the email we sent to " + email + ".";
+    // Warn up front, because this button is where the superseded-code trap bites: people reach for
+    // an older email rather than the newest one.
+    if (intro) intro.textContent = "Enter the 6-digit code from the MOST RECENT email sent to " + email + ". If you asked for a code more than once, only the newest one works.";
     setLoginMsg("");
     const input = document.getElementById("login-code-input");
     if (input) { input.value = ""; input.focus(); }
