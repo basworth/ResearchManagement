@@ -2387,7 +2387,10 @@ function studyCardHTML(s) {
   <div class="card study-row" data-study="${s.id}">
     <div class="title-line" style="align-items:center;gap:10px">
       <div style="flex-shrink:0;line-height:0">${studyEmblem(s, 34)}</div>
-      <h3 style="flex:1;min-width:0">${esc(s.title)}</h3>
+      <h3 style="flex:1;min-width:0">
+        ${s.nickname ? `<div style="font-size:12px;font-weight:800;letter-spacing:.03em;color:var(--blue);text-transform:uppercase;margin-bottom:1px">${esc(s.nickname)}</div>` : ""}
+        ${esc(s.title)}
+      </h3>
       <span class="badge" style="background:${PHASE_COLORS[s.phase] || "var(--text2)"}">${esc(s.phase)}</span>
     </div>
     <div class="chip-row">
@@ -3196,7 +3199,10 @@ function renderStudyDetail() {
       <div style="flex-shrink:0;line-height:0">${studyEmblem(s, 56)}</div>
       <div style="flex:1;min-width:0">
         <div class="title-line" style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
-          <h3 style="font-size:20px;font-weight:800;line-height:1.25">${esc(s.title)}</h3>
+          <h3 style="font-size:20px;font-weight:800;line-height:1.25">
+            ${s.nickname ? `<div style="font-size:13px;font-weight:800;letter-spacing:.03em;color:var(--blue);text-transform:uppercase;margin-bottom:2px">${esc(s.nickname)}</div>` : ""}
+            ${esc(s.title)}
+          </h3>
           <span class="badge" style="background:${PHASE_COLORS[s.phase]}">${esc(s.phase)}</span>
         </div>
       </div>
