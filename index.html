@@ -786,7 +786,23 @@ let detailStudyId = null;
 function openStudy(id) { detailStudyId = id; sectionStateForStudy = null; }
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2));
-const todayStr = () => new Date().toISOString().slice(0, 10);
+// LOCAL date, deliberately not toISOString(). toISOString() reports UTC, so in Chicago every
+// evening from 7pm (6pm in winter) it already returns TOMORROW — which made "today" arrive five
+// hours early and pushed anything due today one day into the past. That silently shifted the
+// deadline board, task due colours, note dates and the IRB expiry warnings by a day, every
+// evening. Every date in this app is a calendar date in the user's own timezone, never an instant.
+const todayStr = () => {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+};
+// Same reasoning for "n days from now", used by the due-soon windows.
+const dateStrOffset = (days) => {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+};
 
 /* ============ Persistence (local) ============ */
 function loadLocal() {
@@ -1579,8 +1595,7 @@ function dueClass(d) {
   if (!d) return "";
   const today = todayStr();
   if (d < today) return "due-overdue";
-  const soon = new Date(); soon.setDate(soon.getDate() + 7);
-  if (d <= soon.toISOString().slice(0, 10)) return "due-soon";
+  if (d <= dateStrOffset(7)) return "due-soon";
   return "";
 }
 function dueLabel(d) {
@@ -2120,9 +2135,8 @@ function dashboardHTML() {
   const active = mine.filter(isActive);
   const openTasks = state.tasks.filter(t => !t.done);
   const overdue = openTasks.filter(t => t.due && t.due < todayStr());
-  const soonEnd = new Date(); soonEnd.setDate(soonEnd.getDate() + 14);
   const upcoming = openTasks
-    .filter(t => t.due && t.due >= todayStr() && t.due <= soonEnd.toISOString().slice(0, 10))
+    .filter(t => t.due && t.due >= todayStr() && t.due <= dateStrOffset(14))
     .sort((a, b) => a.due.localeCompare(b.due));
 
   // phase distribution
@@ -3768,13 +3782,13 @@ function visibleFilterSets(tab) {
 }
 function currentFilters(tab) {
   return tab === "worklist"
-    ? { status: worklistStatus === "all" ? "All" : worklistStatus === "going" ? "Going off" : "Active", person: worklistPerson, phase: worklistPhaseFilter, design: worklistDesignFilter, search: worklistSearchQuery }
+    ? { status: worklistStatus === "all" ? "All" : worklistStatus === "going" ? "Stale and Rotten" : "Active", person: worklistPerson, phase: worklistPhaseFilter, design: worklistDesignFilter, search: worklistSearchQuery }
     : { status: studyFilter, person: personFilter, phase: studyPhaseFilter, design: studyDesignFilter, search: studySearchQuery };
 }
 function applyFilters(tab, f) {
   if (!f) return;
   if (tab === "worklist") {
-    worklistStatus = f.status === "All" ? "all" : f.status === "Going off" ? "going" : "active";
+    worklistStatus = f.status === "All" ? "all" : (f.status === "Stale and Rotten" || f.status === "Going off") ? "going" : "active";
     worklistPerson = f.person || "mine";
     worklistPhaseFilter = f.phase || "All phases";
     worklistDesignFilter = f.design || "All designs";
@@ -3891,6 +3905,9 @@ function renderWorkingList() {
     design: s => (s.design || "").toLowerCase(),
     phase: s => PHASES.indexOf(s.phase),
     steps: s => state.tasks.filter(t => t.studyId === s.id && !t.done).length,
+    // Days since anyone touched it. Not a visible column — it's what the Stale and Rotten tab
+    // sorts on by default, so the worst offender is the first thing you read.
+    stale: s => { const f = freshness(s); return f ? f.days : -1; },
   };
 
   if (worklistSort.key && sortKeyFns[worklistSort.key]) {
@@ -3920,7 +3937,7 @@ function renderWorkingList() {
   ];
   let html = `<div class="seg">
       <button class="${worklistStatus === "active" ? "active" : ""}" data-wl="active">Active</button>
-      <button class="${worklistStatus === "going" ? "active" : ""}" data-wl="going">Going off</button>
+      <button class="${worklistStatus === "going" ? "active" : ""}" data-wl="going">Stale &amp; Rotten</button>
       <button class="${worklistStatus === "all" ? "active" : ""}" data-wl="all">All</button>
     </div>`;
   html += searchBoxHTML("worklist-search", worklistSearchQuery, "Search by title, nickname, PI, or IRB #");
@@ -3994,7 +4011,13 @@ function renderWorkingList() {
         <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Each cell shows the stage's status and the date it was submitted, or cleared once passed. <b>N/A</b> counts as cleared. Swipe sideways for more stages.</div>`;
     }
     $main.innerHTML = html;
-    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistStatus = b.dataset.wl; render(); });
+    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistStatus = b.dataset.wl;
+      // Entering the tab sorts worst-first automatically; column headers still override it, and
+      // leaving the tab drops the hidden sort so the other views aren't left ordered by a column
+      // they don't show.
+      if (worklistStatus === "going") worklistSort = { key: "stale", dir: -1 };
+      else if (worklistSort.key === "stale") worklistSort = { key: null, dir: 1 };
+      render(); });
     bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
     bindWorklistFilters();
     $main.querySelectorAll("[data-init-edit]").forEach(b => b.onclick = () => openInitiationSheet(b.dataset.initEdit));
@@ -4069,7 +4092,13 @@ function renderWorkingList() {
       html += `<div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Follow-up is tracked as counts per timepoint, not per patient — no subject-level data is stored here. Anything below 80% complete is flagged.</div>`;
     }
     $main.innerHTML = html;
-    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistStatus = b.dataset.wl; render(); });
+    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistStatus = b.dataset.wl;
+      // Entering the tab sorts worst-first automatically; column headers still override it, and
+      // leaving the tab drops the hidden sort so the other views aren't left ordered by a column
+      // they don't show.
+      if (worklistStatus === "going") worklistSort = { key: "stale", dir: -1 };
+      else if (worklistSort.key === "stale") worklistSort = { key: null, dir: 1 };
+      render(); });
     bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
     bindWorklistFilters();
     $main.querySelectorAll("[data-fu-edit]").forEach(b => b.onclick = () => openFollowUpSheet(b.dataset.fuEdit));
@@ -4081,10 +4110,16 @@ function renderWorkingList() {
     html += worklistSearchQuery
       ? `<div class="empty"><div class="big">🔍</div>No studies match "${esc(worklistSearchQuery)}".</div>`
       : (worklistStatus === "going"
-        ? `<div class="empty"><div class="big">✅</div>Nothing has gone off.<br><span style="font-size:13px">Every active study has been touched in the last ${STALE_DAYS} days.</span></div>`
+        ? `<div class="empty"><div class="big">✅</div>Nothing is stale or rotten.<br><span style="font-size:13px">Every active study has been touched in the last ${STALE_DAYS} days.</span></div>`
         : `<div class="empty"><div class="big">▦</div>No ${worklistStatus === "all" ? "" : "active "}studies yet.<br>Tap <b>+</b> to add one.</div>`);
     $main.innerHTML = html;
-    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistStatus = b.dataset.wl; render(); });
+    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistStatus = b.dataset.wl;
+      // Entering the tab sorts worst-first automatically; column headers still override it, and
+      // leaving the tab drops the hidden sort so the other views aren't left ordered by a column
+      // they don't show.
+      if (worklistStatus === "going") worklistSort = { key: "stale", dir: -1 };
+      else if (worklistSort.key === "stale") worklistSort = { key: null, dir: 1 };
+      render(); });
     bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
     bindWorklistFilters();
     return;
@@ -4141,6 +4176,12 @@ function renderWorkingList() {
   }).join("");
 
   const sortArrow = (key) => worklistSort.key === key ? (worklistSort.dir === 1 ? " ▲" : " ▼") : "";
+  // The segment button has to fit a third of the width on a phone, so it's abbreviated there and
+  // the full name lives here, where there's room for it.
+  if (worklistStatus === "going") {
+    html += `<div class="section-title" style="margin-top:0">Stale and Rotten Studies</div>
+      <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:0 2px 10px 2px">Longest-neglected first. Untouched for ${STALE_DAYS} days is stale; ${ROTTEN_DAYS} days and it's rotten.</div>`;
+  }
   html += `<div class="wl-wrap"><table class="wl">
       <thead><tr>${cols.map(c => `<th data-sort="${c.key}" style="cursor:pointer;user-select:none;white-space:nowrap">${esc(c.label)}${sortArrow(c.key)}</th>`).join("")}</tr></thead>
       <tbody>${rows}</tbody>
@@ -4156,7 +4197,13 @@ function renderWorkingList() {
     })()}</div>`;
 
   $main.innerHTML = html;
-  $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistStatus = b.dataset.wl; render(); });
+  $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistStatus = b.dataset.wl;
+      // Entering the tab sorts worst-first automatically; column headers still override it, and
+      // leaving the tab drops the hidden sort so the other views aren't left ordered by a column
+      // they don't show.
+      if (worklistStatus === "going") worklistSort = { key: "stale", dir: -1 };
+      else if (worklistSort.key === "stale") worklistSort = { key: null, dir: 1 };
+      render(); });
   bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
   bindWorklistFilters();
   $main.querySelectorAll("[data-sort]").forEach(th => th.onclick = () => {
@@ -5006,7 +5053,7 @@ function openMeetingForm(existing) {
 
 /* ============ Sample data ============ */
 function loadSample() {
-  const d = (offset) => { const dt = new Date(); dt.setDate(dt.getDate() + offset); return dt.toISOString().slice(0, 10); };
+  const d = (offset) => dateStrOffset(offset);
   const s1 = { id: uid(), title: "ACL Reconstruction Outcomes Registry", nickname: "ACL Registry", pi: "Yanke", team: "Smith (coord), Lee (fellow)", design: "Prospective (Consented)", phase: "Enrolling", priority: "High", irb: "ORA-24-1102", irbStatus: "Continuing Review Due", start: d(-220), notes: "Monthly enrollment review.", enrollCurrent: "62", enrollTarget: "150", milestones: [{ name: "50% enrollment", date: d(30), done: false }, { name: "IRB continuing review", date: d(75), done: false }] };
   const s2 = { id: uid(), title: "Cartilage Scaffold Biomechanics (Ex Vivo)", nickname: "Scaffold Biomech", pi: "Yanke", team: "Chen (postdoc)", design: "Basic Science / Exempt", phase: "Analysis", priority: "Medium", irb: "Exempt", irbStatus: "Exempt", start: d(-400), notes: "Mechanical testing complete; histology pending.", milestones: [{ name: "Histology complete", date: d(14), done: false }] };
   const s3 = { id: uid(), title: "MPFL Repair vs Reconstruction RCT", nickname: "MPFL RCT", pi: "Yanke", team: "", design: "Prospective (Consented)", phase: "Initiation", priority: "High", irb: "ORA-26-0341", irbStatus: "Submitted - Pending", start: d(-30), notes: "In study initiation — working through approvals.", initiation: { sportsSubmission: true, irbApproved: false, caApproved: false, piqBuilt: false, ready: false }, milestones: [{ name: "IRB approval", date: d(21), done: false }] };
