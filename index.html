@@ -3719,7 +3719,10 @@ function renderTasks() {
 }
 
 /* ============ Working Study List (spreadsheet view) ============ */
-let worklistShowClosed = false;
+// Three-way: "active" (the default working set), "going" (only stale + rotten, so the board
+// becomes a to-chase list), "all" (includes Published and On Hold). Kept as a string rather than
+// a pair of booleans so the three states can't contradict each other.
+let worklistStatus = "active";
 let worklistSort = { key: null, dir: 1 };
 let worklistSearchQuery = "";
 // Worklist keeps its OWN filter state (Adam's call): you can have Studies on your own
@@ -3765,13 +3768,13 @@ function visibleFilterSets(tab) {
 }
 function currentFilters(tab) {
   return tab === "worklist"
-    ? { status: worklistShowClosed ? "All" : "Active", person: worklistPerson, phase: worklistPhaseFilter, design: worklistDesignFilter, search: worklistSearchQuery }
+    ? { status: worklistStatus === "all" ? "All" : worklistStatus === "going" ? "Going off" : "Active", person: worklistPerson, phase: worklistPhaseFilter, design: worklistDesignFilter, search: worklistSearchQuery }
     : { status: studyFilter, person: personFilter, phase: studyPhaseFilter, design: studyDesignFilter, search: studySearchQuery };
 }
 function applyFilters(tab, f) {
   if (!f) return;
   if (tab === "worklist") {
-    worklistShowClosed = f.status === "All";
+    worklistStatus = f.status === "All" ? "all" : f.status === "Going off" ? "going" : "active";
     worklistPerson = f.person || "mine";
     worklistPhaseFilter = f.phase || "All phases";
     worklistDesignFilter = f.design || "All designs";
@@ -3864,7 +3867,11 @@ function renderWorkingList() {
   const wlMyName = me();
   if (worklistPerson === "mine") { if (wlMyName) studies = studies.filter(s => studyInvolvesPerson(s, wlMyName)); }
   else if (worklistPerson !== "all") studies = studies.filter(s => studyInvolvesPerson(s, worklistPerson));
-  if (!worklistShowClosed) studies = studies.filter(isActive);
+  // "Going off" implies active — a Published study can't be neglected, it's finished.
+  if (worklistStatus !== "all") studies = studies.filter(isActive);
+  if (worklistStatus === "going") {
+    studies = studies.filter(x => { const f = freshness(x); return f && (f.level === "stale" || f.level === "rotten"); });
+  }
   if (worklistSearchQuery) studies = studies.filter(s => studyMatchesSearch(s, worklistSearchQuery));
   // Drop a phase/design selection that no longer matches anything, so the table can't end up
   // stuck on an empty view with no obvious way back.
@@ -3912,8 +3919,9 @@ function renderWorkingList() {
     { key: "steps", label: "Next Steps" },
   ];
   let html = `<div class="seg">
-      <button class="${!worklistShowClosed ? "active" : ""}" data-wl="active">Active</button>
-      <button class="${worklistShowClosed ? "active" : ""}" data-wl="all">All</button>
+      <button class="${worklistStatus === "active" ? "active" : ""}" data-wl="active">Active</button>
+      <button class="${worklistStatus === "going" ? "active" : ""}" data-wl="going">Going off</button>
+      <button class="${worklistStatus === "all" ? "active" : ""}" data-wl="all">All</button>
     </div>`;
   html += searchBoxHTML("worklist-search", worklistSearchQuery, "Search by title, nickname, PI, or IRB #");
   html += filterSetsBarHTML("worklist", worklistViewId);
@@ -3986,7 +3994,7 @@ function renderWorkingList() {
         <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Each cell shows the stage's status and the date it was submitted, or cleared once passed. <b>N/A</b> counts as cleared. Swipe sideways for more stages.</div>`;
     }
     $main.innerHTML = html;
-    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
+    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistStatus = b.dataset.wl; render(); });
     bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
     bindWorklistFilters();
     $main.querySelectorAll("[data-init-edit]").forEach(b => b.onclick = () => openInitiationSheet(b.dataset.initEdit));
@@ -4061,7 +4069,7 @@ function renderWorkingList() {
       html += `<div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Follow-up is tracked as counts per timepoint, not per patient — no subject-level data is stored here. Anything below 80% complete is flagged.</div>`;
     }
     $main.innerHTML = html;
-    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
+    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistStatus = b.dataset.wl; render(); });
     bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
     bindWorklistFilters();
     $main.querySelectorAll("[data-fu-edit]").forEach(b => b.onclick = () => openFollowUpSheet(b.dataset.fuEdit));
@@ -4072,9 +4080,11 @@ function renderWorkingList() {
   if (!studies.length) {
     html += worklistSearchQuery
       ? `<div class="empty"><div class="big">🔍</div>No studies match "${esc(worklistSearchQuery)}".</div>`
-      : `<div class="empty"><div class="big">▦</div>No ${worklistShowClosed ? "" : "active "}studies yet.<br>Tap <b>+</b> to add one.</div>`;
+      : (worklistStatus === "going"
+        ? `<div class="empty"><div class="big">✅</div>Nothing has gone off.<br><span style="font-size:13px">Every active study has been touched in the last ${STALE_DAYS} days.</span></div>`
+        : `<div class="empty"><div class="big">▦</div>No ${worklistStatus === "all" ? "" : "active "}studies yet.<br>Tap <b>+</b> to add one.</div>`);
     $main.innerHTML = html;
-    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
+    $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistStatus = b.dataset.wl; render(); });
     bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
     bindWorklistFilters();
     return;
@@ -4100,7 +4110,14 @@ function renderWorkingList() {
   // sideways scrolling — the point of it is to be impossible to miss.
   const rotCell = (s) => {
     const f = freshness(s);
-    if (!f || f.level === "fresh") return "";
+    if (!f) return "";
+    if (f.level === "fresh") {
+      // Show the age from a week out, so the slide towards stale is visible and "nothing is
+      // rotten" can be read as a fact rather than taken on trust. Under a week stays clean.
+      return f.days >= 7
+        ? `<div style="margin-top:3px;font-size:10.5px;color:var(--text2)">quiet ${f.days}d</div>`
+        : "";
+    }
     if (f.level === "rotten") {
       return `<div style="margin-top:3px"><span class="rot-tag rotten" title="${esc(f.note)}">ROTTEN · ${f.days}d</span><span class="stink" aria-hidden="true"><span>〜</span><span>〜</span><span>〜</span></span></div>`;
     }
@@ -4139,7 +4156,7 @@ function renderWorkingList() {
     })()}</div>`;
 
   $main.innerHTML = html;
-  $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistShowClosed = b.dataset.wl === "all"; render(); });
+  $main.querySelectorAll(".seg button").forEach(b => b.onclick = () => { worklistStatus = b.dataset.wl; render(); });
   bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
   bindWorklistFilters();
   $main.querySelectorAll("[data-sort]").forEach(th => th.onclick = () => {
