@@ -560,7 +560,9 @@ function profileFor(userId) { return (state.profiles || []).find(p => p.id === u
 // Empty string until the person sets one (see maybePromptDisplayName()).
 function me() {
   if (!currentUser) return "";
-  const p = profileFor(currentUser.id);
+  // Via the primary, so somebody who has been linked sees the same "Mine" list and owns the same
+  // tasks whichever of their two addresses they signed in with.
+  const p = primaryProfileFor(currentUser.id);
   return p ? p.name : "";
 }
 // What someone does, kept separate from what they're allowed to do — a person can be a
@@ -586,11 +588,45 @@ const DEGREE_POSITIONS = [
   "Research assistant"
 ];
 function positionWantsDegrees(pos) { return DEGREE_POSITIONS.indexOf(pos) >= 0; }
+
+// ---------- Which address gets the alerts ----------
+// The address someone was invited at isn't always the one they read. Rush hands out both a
+// rush.edu and a rushortho.com address, and people live in one of them. So the sign-in email and
+// the notification email are two separate things: sign-in is fixed by the account, notifications
+// are the person's choice, asked the first time they log in and changeable afterwards.
+// Read through the primary, so one linked person gets one stream of alerts at one address rather
+// than the same reminder twice.
+function alertEmailFor(userId) {
+  const p = primaryProfileFor(userId);
+  if (!p) return "";
+  return (p.alertEmail || p.email || "").trim();
+}
+const looksLikeEmail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(s || "").trim());
+
+// ---------- One person, two accounts ----------
+// Somebody invited at two addresses ends up with two accounts once they sign in at both, and
+// neither knows about the other: two org-chart rows for one person, and a "Mine" list that
+// depends on which address they happened to log in with. Linking marks the spare row as
+// belonging to a primary — the chart shows them once, and me() reads through to the primary so
+// both logins see the same work. Deliberately NOT a deletion: the spare account still signs in
+// and still owns whatever is already assigned to it, per the standing rule that data gets hidden,
+// never removed. `linkedTo` holds the primary's id.
+function isLinkedProfile(p) { return !!(p && p.linkedTo && p.linkedTo !== p.id && profileFor(p.linkedTo)); }
+// Follows the chain in case of a link-to-a-link, with a hop cap so a cycle can't hang the render.
+function primaryProfileFor(userId) {
+  let p = profileFor(userId);
+  for (let i = 0; i < 8 && isLinkedProfile(p); i++) p = profileFor(p.linkedTo);
+  return p;
+}
+// Everyone the app should treat as a distinct person: linked spares drop out.
+function activeProfiles() { return (state.profiles || []).filter(p => !isLinkedProfile(p)); }
+function linkedTo(userId) { return (state.profiles || []).filter(p => isLinkedProfile(p) && p.linkedTo === userId); }
+
 function upsertProfile(name, extra) {
   if (!currentUser) return;
   state.profiles = state.profiles || [];
   let p = profileFor(currentUser.id);
-  if (!p) { p = { id: currentUser.id, email: currentUser.email, name: "", position: "", reportsTo: "" }; state.profiles.push(p); }
+  if (!p) { p = { id: currentUser.id, email: currentUser.email, name: "", position: "", reportsTo: "", alertEmail: "", alertEmailAsked: false, linkedTo: "" }; state.profiles.push(p); }
   p.email = currentUser.email;
   if (name != null) p.name = name;
   if (extra) Object.assign(p, extra);
@@ -614,14 +650,16 @@ function positionOf(userId) { const p = profileFor(userId); return (p && p.posit
 // Reporting lines are stored per profile as `reportsTo` (another profile's user id). Anyone
 // whose manager is missing or unset is treated as a root, so a deleted account can never
 // orphan the people under it — they just float to the top rather than vanishing.
+// Both filter out linked spares, so one person appears once. They're still listed further down
+// the Settings page under Linked Accounts, so a link is always visible and always undoable.
 function orgChildren(id) {
-  return (state.profiles || [])
+  return activeProfiles()
     .filter(p => (p.reportsTo || "") === id)
     .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
 }
 function orgRoots() {
-  return (state.profiles || [])
-    .filter(p => !p.reportsTo || !profileFor(p.reportsTo))
+  return activeProfiles()
+    .filter(p => !p.reportsTo || !profileFor(p.reportsTo) || isLinkedProfile(profileFor(p.reportsTo)))
     .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
 }
 function orgChartHTML(canEdit) {
@@ -643,7 +681,7 @@ function orgChartHTML(canEdit) {
         ${canEdit ? `<button class="mini-btn" data-org-edit="${esc(p.id)}" style="margin-top:0;flex:0 0 auto">Edit</button>` : ""}
       </div>${kids}`;
   };
-  const profiles = state.profiles || [];
+  const profiles = activeProfiles();
   if (!profiles.length) return `<div style="color:var(--text2);font-size:14px">Nobody has signed in yet, so there's nothing to chart.</div>`;
   let html = orgRoots().map(p => row(p, 0)).join("");
   // Anyone caught in a reporting loop never gets rendered above. If EVERY profile is in one,
@@ -682,6 +720,10 @@ function openOrgSheet(userId) {
   const descendants = {};
   (function walk(id) { orgChildren(id).forEach(c => { descendants[c.id] = true; walk(c.id); }); })(userId);
   const candidates = (state.profiles || []).filter(x => x.id !== userId && !descendants[x.id]);
+  // Anyone this row could be a duplicate OF. Excludes itself, anything already pointing at it
+  // (which would make a loop), and other spares — a link always ends at a real person.
+  const linkCandidates = activeProfiles().filter(x => x.id !== userId && x.linkedTo !== userId);
+  const spares = linkedTo(userId);
   openSheet("Edit " + (p.name || p.email), `
     <div class="fgroup">
       <div class="frow"><label>Role</label>${selectHTML("f-org-pos", ["— not set —"].concat(POSITIONS), p.position || "— not set —")}</div>
@@ -691,6 +733,24 @@ function openOrgSheet(userId) {
           ${candidates.map(x => `<option value="${esc(x.id)}" ${x.id === p.reportsTo ? "selected" : ""}>${esc(x.name || x.email)}</option>`).join("")}
         </select>
       </div>
+      <div class="frow"><label>Alerts to</label><input id="f-org-alert" type="email" placeholder="${esc(p.email || "")}" value="${esc(p.alertEmail || "")}"></div>
+    </div>
+    <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+      Task and deadline emails go to <b>${esc(alertEmailFor(userId) || p.email || "—")}</b>. Leave the box empty to use their sign-in address. They can change this themselves at the top of Settings.
+    </div>
+
+    <div class="fgroup">
+      <div class="frow"><label>Same person as</label>
+        <select id="f-org-link">
+          <option value="">— a person in their own right —</option>
+          ${linkCandidates.map(x => `<option value="${esc(x.id)}" ${x.id === p.linkedTo ? "selected" : ""}>${esc(x.name || x.email)}</option>`).join("")}
+        </select>
+      </div>
+    </div>
+    <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+      Use this when one person was invited at two addresses. This row then drops out of the chart so they appear once, and whichever address they sign in with they see the same name and the same "Mine" list. Nothing is deleted: both addresses still work, and anything already assigned to this account stays put.
+      ${isLinkedProfile(p) ? `<br><br><b>Currently filed under ${esc(((profileFor(p.linkedTo) || {}).name) || "someone else")}.</b> Set it back to "a person in their own right" to undo.` : ""}
+      ${spares.length ? `<br><br><b>${esc(p.name || "This account")} already covers:</b> ${spares.map(s => esc(s.email || s.name || "?")).join(", ")}` : ""}
     </div>
     ${amApprover() && userId !== (currentUser && currentUser.id) ? `
     <div class="fgroup">
@@ -715,15 +775,35 @@ function openOrgSheet(userId) {
     </div>`,
     () => {
       const pos = document.getElementById("f-org-pos").value;
+      const alertRaw = (document.getElementById("f-org-alert").value || "").trim();
+      if (alertRaw && !looksLikeEmail(alertRaw)) { toast("That alerts address doesn't look like an email — clear it to use their sign-in address"); return false; }
+      const linkRaw = document.getElementById("f-org-link").value;
+      // A link must not point back into this row's own chain, or primaryProfileFor() would spin
+      // until its hop cap and the pair would vanish from the chart together.
+      if (linkRaw) {
+        let hop = profileFor(linkRaw), bad = false;
+        for (let i = 0; i < 8 && hop; i++) {
+          if (hop.id === userId) { bad = true; break; }
+          hop = hop.linkedTo ? profileFor(hop.linkedTo) : null;
+        }
+        if (bad) { toast("Those two are already linked the other way round — undo that one first"); return false; }
+      }
       // Deliberately no `admin` here: the database refuses admin-flag changes from any client,
       // so including it would make every save fail. The flag goes through the edge function
       // below instead, which holds the service role.
       updateProfileFields(userId, {
         position: pos === "— not set —" ? "" : pos,
-        reportsTo: document.getElementById("f-org-boss").value
+        reportsTo: document.getElementById("f-org-boss").value,
+        // Stored empty rather than defaulted to the sign-in address, so "no preference" stays
+        // distinguishable from "chose their sign-in address" and follows the account if it changes.
+        alertEmail: alertRaw,
+        linkedTo: linkRaw
       });
       render();
-      toast("Saved — change it again any time from Settings › Org Chart");
+      const linkedNow = linkRaw ? (profileFor(linkRaw) || {}).name : "";
+      toast(linkRaw
+        ? `Saved — filed under ${linkedNow || "the other account"}. Undo any time from Settings › Linked Accounts`
+        : "Saved — change it again any time from Settings › Org Chart");
 
       const box = document.getElementById("f-org-admin");
       if (box && box.checked !== !!p.admin) {
@@ -1030,6 +1110,12 @@ function migrate() {
     if (typeof p.position !== "string") p.position = "";
     if (typeof p.reportsTo !== "string") p.reportsTo = "";
     if (typeof p.admin !== "boolean") p.admin = ADMIN_NAMES.includes(canonName(p.name || ""));
+    // "" means "use my sign-in address", which is the right default and stays correct if the
+    // account's address ever changes.
+    if (typeof p.alertEmail !== "string") p.alertEmail = "";
+    if (typeof p.linkedTo !== "string") p.linkedTo = "";
+    // Not backfilled to true: everyone who predates this gets asked once, which is the point.
+    if (typeof p.alertEmailAsked !== "boolean") p.alertEmailAsked = false;
   });
   if (!Array.isArray(state.meetings)) state.meetings = [];
   state.meetings.forEach(m => {
@@ -1368,20 +1454,44 @@ function maybePromptDisplayName() {
   // Degrees are asked once, tracked by a flag rather than by "are they empty" — otherwise
   // someone who genuinely holds none would be asked again on every single sign-in.
   const needDegrees = !!p && !!p.position && positionWantsDegrees(p.position) && !p.degreesAsked;
-  if (!needName && !needPosition && !needDegrees) return;
+  // Asked once per account, flag-tracked like degrees: someone who is happy with their sign-in
+  // address has still answered, and shouldn't be asked again every time they log in.
+  const needAlert = !p || !p.alertEmailAsked;
+  if (!needName && !needPosition && !needDegrees && !needAlert) return;
   const title = needName ? "Welcome — tell us who you are"
     : needPosition ? "One more thing — what's your role?"
-    : "What letters go after your name?";
+    : needDegrees ? "What letters go after your name?"
+    : "Where should we send your alerts?";
   openSheet(title, `
     <div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">
       ${needName
         ? `Your name drives the "Mine" filter and task assignments. If you're already in the team roster, use that exact same name so your existing tasks and studies link up automatically instead of needing to be reassigned.`
-        : `We've started tracking what everyone does so the team list and org chart make sense. This only takes a second.`}
+        : (needPosition || needDegrees)
+          ? `We've started tracking what everyone does so the team list and org chart make sense. This only takes a second.`
+          : `One quick question, then you won't see this again.`}
     </div>
     <div class="fgroup">
       ${needName ? `<div class="frow"><label>Your name</label><input id="f-profile-name" list="dl-people-profile" placeholder="e.g. Adam Yanke" value="${esc((p && p.name) || "")}"></div>` : ""}
       <div class="frow"><label>Your role</label>${selectHTML("f-profile-position", ["— select —"].concat(POSITIONS), (p && p.position) || "— select —")}</div>
     </div>
+    ${needAlert ? `
+    <div style="font-size:13.5px;color:var(--text2);margin:14px 2px 8px 2px">
+      You were invited at <b>${esc((currentUser && currentUser.email) || "")}</b>. Task assignments and deadline reminders will go there unless you'd rather read them somewhere else — plenty of people have both a rush.edu and a rushortho.com address.
+    </div>
+    <div class="fgroup">
+      <div class="frow" style="gap:12px;cursor:pointer" id="f-alert-same-row">
+        <input type="radio" name="f-alert-which" id="f-alert-same" value="same" checked style="flex:0;width:20px;height:20px">
+        <label for="f-alert-same" style="flex:1;font-size:15px">Use ${esc((currentUser && currentUser.email) || "this address")}</label>
+      </div>
+      <div class="frow" style="gap:12px;cursor:pointer" id="f-alert-other-row">
+        <input type="radio" name="f-alert-which" id="f-alert-other" value="other" style="flex:0;width:20px;height:20px">
+        <label for="f-alert-other" style="flex:1;font-size:15px">Send them somewhere else</label>
+      </div>
+      <div class="frow" id="f-alert-box-row" style="display:none"><label>Alerts to</label><input id="f-alert-email" type="email" placeholder="you@rush.edu" value="${esc((p && p.alertEmail) || "")}"></div>
+    </div>
+    <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+      This only changes where notifications land. You'll still sign in with ${esc((currentUser && currentUser.email) || "the address you were invited at")}, and you can change this later at the top of Settings.
+    </div>` : ""}
     <div id="f-profile-degrees" style="display:none">
       <div style="font-size:13px;color:var(--text2);margin:0 2px 8px 2px">Tick any degrees that should follow your name on an author list. Skip it if none apply — you won't be asked again.</div>
       <div class="fgroup">
@@ -1416,14 +1526,55 @@ function maybePromptDisplayName() {
         // Recorded either way, so "none" is remembered as an answer rather than a gap.
         extra.degreesAsked = true;
       }
+      let alertMsg = "";
+      if (needAlert) {
+        const other = document.getElementById("f-alert-other");
+        if (other && other.checked) {
+          const typed = (document.getElementById("f-alert-email").value || "").trim();
+          if (!looksLikeEmail(typed)) { toast("Enter the address you'd like alerts sent to"); return false; }
+          // Same address as the account, typed out longhand: store nothing, so the preference
+          // keeps tracking the account rather than freezing today's spelling of it.
+          const sameAsLogin = typed.toLowerCase() === ((currentUser && currentUser.email) || "").toLowerCase();
+          extra.alertEmail = sameAsLogin ? "" : typed;
+          if (!sameAsLogin) alertMsg = " Alerts will go to " + typed + ".";
+        } else {
+          extra.alertEmail = "";
+        }
+        extra.alertEmailAsked = true;
+      }
       upsertProfile(name, extra);
       personFilter = "mine";
       render();
-      toast("Thanks — you're set up. You can change this in Settings." + degreeMsg);
+      toast("Thanks — you're set up. You can change this in Settings." + degreeMsg + alertMsg);
     },
     // afterOpen: the degrees block only applies to some roles, so it follows the role picker
     // rather than being decided once when the sheet is built.
     () => {
+      // The alerts block stands alone — it must get wired even when the degrees block is absent,
+      // so it goes before the early return below.
+      const otherRadio = document.getElementById("f-alert-other");
+      if (otherRadio) {
+        const boxRow = document.getElementById("f-alert-box-row");
+        const emailBox = document.getElementById("f-alert-email");
+        const syncAlert = () => {
+          boxRow.style.display = otherRadio.checked ? "" : "none";
+          if (otherRadio.checked) setTimeout(() => { try { emailBox.focus(); } catch (e) {} }, 30);
+        };
+        [...document.getElementsByName("f-alert-which")].forEach(r => r.addEventListener("change", syncAlert));
+        // Tapping the row, not just the small radio itself — the rest of the app behaves this way.
+        ["f-alert-same-row", "f-alert-other-row"].forEach(id => {
+          const row = document.getElementById(id);
+          if (!row) return;
+          row.addEventListener("click", (ev) => {
+            if (ev.target.tagName === "INPUT") return;
+            const r = row.querySelector("input[type=radio]");
+            if (r) { r.checked = true; syncAlert(); }
+          });
+        });
+        // Someone re-answering who already had a different address keeps it pre-selected.
+        if (emailBox && emailBox.value) { otherRadio.checked = true; }
+        syncAlert();
+      }
       const sel = document.getElementById("f-profile-position");
       const block = document.getElementById("f-profile-degrees");
       if (!sel || !block) return;
@@ -4438,6 +4589,105 @@ function renderTeamNotes() {
   });
 }
 
+/* ============ Invites ============ */
+// One door to the invite function. Sends the caller's OWN access token: the function asks
+// Supabase whose token it is and checks that against its allowlist, so it never takes the
+// browser's word for who is calling.
+async function callInviteFn(payload) {
+  if (!sb) throw new Error("Not connected — try again in a moment.");
+  const { data: sess } = await sb.auth.getSession();
+  const tokenValue = sess && sess.session && sess.session.access_token;
+  if (!tokenValue) throw new Error("Your session expired — sign out and back in.");
+  const res = await fetch(SUPABASE_URL + "/functions/v1/invite-user", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tokenValue },
+    body: JSON.stringify(payload)
+  });
+  const out = await res.json().catch(() => ({}));
+  // This page and the function are deployed separately, so they can be out of step. Say that
+  // plainly instead of surfacing a raw "Unknown action".
+  if (/unknown action/i.test(out.error || "")) {
+    throw new Error("the server hasn't picked up this feature yet — it'll start working on its own once the update lands.");
+  }
+  if (!res.ok || out.error) throw new Error(out.error || ("Failed (" + res.status + ")"));
+  return out;
+}
+// Same person, second address? Ask before spending an invite. Sends again with confirm:true if
+// Adam says go ahead, and points at the linking tool if it really is a duplicate.
+function confirmDuplicateInvite(email, similar, say, input) {
+  openSheet("Is this someone new?", `
+    <div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">
+      <b>${esc(email)}</b> looks like ${similar.length > 1 ? "people" : "someone"} already on the system:
+    </div>
+    <div class="card" style="padding:6px 14px">
+      ${similar.map(s => `
+        <div class="task-row" style="padding:8px 0">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:14.5px;font-weight:600">${esc(s.name || s.email)}</div>
+            <div style="font-size:12px;color:var(--text2)">${esc(s.email)} · ${s.signedIn ? "has signed in" : "invited, never signed in"}</div>
+          </div>
+        </div>`).join("")}
+    </div>
+    <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+      If that's the same person at a second address, invite them anyway — once they sign in you can file the two together under <b>Settings › Org Chart › Same person as</b>, which keeps both addresses working and shows them once. If it's genuinely a different person, go ahead too; matching initials and surnames are common.
+    </div>`,
+    async () => {
+      try {
+        const out = await callInviteFn({ email, confirm: true });
+        say(out.message || "Invite sent.", out.alreadyActive ? "var(--orange)" : "var(--green)");
+        if (out.ok && input) input.value = "";
+        loadPendingInvites();
+        toast(out.message || "Invite sent");
+      } catch (e) {
+        say(e.message || "Could not send the invite.", "var(--red)");
+        toast("Invite failed — " + (e.message || "unknown error"));
+      }
+    }, null, { saveLabel: "Send it anyway" });
+}
+// Invited-but-never-signed-in accounts. Has to come from the server: no profile row exists until
+// someone logs in, so from the browser these accounts are invisible.
+async function loadPendingInvites() {
+  const box = document.getElementById("pending-invites");
+  if (!box) return;
+  try {
+    const out = await callInviteFn({ action: "pending" });
+    const list = out.pending || [];
+    if (!list.length) {
+      box.innerHTML = `<div style="color:var(--text2);font-size:14px;padding:6px 0">Nobody's invite is outstanding — everyone invited has signed in.</div>`;
+      return;
+    }
+    // Oldest first: the ones worth chasing are the ones that have been sitting longest.
+    list.sort((a, b) => String(a.invitedAt || "").localeCompare(String(b.invitedAt || "")));
+    box.innerHTML = list.map(u => {
+      const days = u.invitedAt ? Math.floor((Date.now() - new Date(u.invitedAt).getTime()) / 86400000) : null;
+      const age = days === null ? "" : days <= 0 ? "invited today" : days === 1 ? "invited yesterday" : `invited ${days} days ago`;
+      // A code lasts an hour, so anything older than that needs a fresh one rather than a nudge.
+      const codeStale = !u.codeSentAt || (Date.now() - new Date(u.codeSentAt).getTime()) > 3600e3;
+      return `<div class="task-row" style="padding:9px 0;gap:8px;align-items:flex-start">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis">${esc(u.email)}</div>
+          <div style="font-size:12px;color:${days !== null && days >= 14 ? "var(--orange)" : "var(--text2)"}">${esc(age)}${codeStale ? " · their code has expired" : " · code still valid"}</div>
+        </div>
+        <button class="mini-btn" data-resend="${esc(u.email)}" style="margin-top:0;flex:0 0 auto">Resend</button>
+      </div>`;
+    }).join("");
+    box.querySelectorAll("[data-resend]").forEach(b => b.onclick = async () => {
+      const addr = b.dataset.resend;
+      b.disabled = true; b.textContent = "Sending…";
+      try {
+        const out = await callInviteFn({ action: "resend", email: addr });
+        toast(out.message || "Fresh code sent");
+        loadPendingInvites();
+      } catch (e) {
+        toast("Could not resend — " + (e.message || "unknown error"));
+        b.disabled = false; b.textContent = "Resend";
+      }
+    });
+  } catch (e) {
+    box.innerHTML = `<div style="color:var(--text2);font-size:13px;padding:6px 0">Couldn't check invites: ${esc(e.message || "unknown error")}</div>`;
+  }
+}
+
 /* ============ Settings ============ */
 function renderSettings() {
   $title.textContent = "Settings";
@@ -4450,8 +4700,10 @@ function renderSettings() {
   </div>
   <div class="fgroup">
     <div class="frow"><label>Display name</label><input id="me-name" list="dl-people-set" placeholder="Used for 'Mine' filter &amp; uploads" value="${esc(me())}"></div>
+    <div class="frow"><label>Alerts to</label><input id="me-alert" type="email" placeholder="${esc(currentUser ? currentUser.email : "your sign-in address")}" value="${esc(((currentUser && profileFor(currentUser.id)) || {}).alertEmail || "")}"></div>
   </div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-top:-4px">
+    Task assignments and deadline reminders go to <b>${esc((currentUser && alertEmailFor(currentUser.id)) || "—")}</b>. Clear the box to go back to your sign-in address — you always sign in with ${esc(currentUser ? currentUser.email : "your own address")} either way.<br><br>
     The Studies tab defaults to showing just your projects, and your Society Subscriptions below sync across every device you log into.
   </div>
   <datalist id="dl-people-set">${state.roster.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
@@ -4547,7 +4799,37 @@ function renderSettings() {
       <button id="invite-send" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 16px;font-weight:700;font-size:15px;cursor:pointer">Invite</button>
     </div>
     <div id="invite-msg" style="font-size:13px;line-height:1.45;margin-top:8px"></div>
-  </div>` : ""}
+  </div>
+
+  <div class="section-title">Invites Waiting</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
+    Accounts that were invited but never signed in. The app can't see these on its own — a person only appears in the org chart once they've logged in, which is how someone can end up invited twice at two addresses with nobody noticing.
+  </div>
+  <div id="pending-invites" class="card" style="padding:6px 14px"><div style="color:var(--text2);font-size:14px">Checking…</div></div>
+
+  ${(() => {
+    // Only worth a section when there's something in it — an empty "Linked Accounts" heading on
+    // every visit is just noise.
+    const pairs = (state.profiles || []).filter(p => isLinkedProfile(p));
+    if (!pairs.length) return "";
+    return `
+  <div class="section-title">Linked Accounts</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
+    One person, two addresses. The spare drops out of the chart so they show up once, and either address gets them the same name and the same work. Nothing was deleted — both addresses still sign in, and anything already assigned to either account stays where it is.
+  </div>
+  <div class="card" style="padding:6px 14px">
+    ${pairs.map(sp => {
+      const primary = profileFor(sp.linkedTo) || {};
+      return `<div class="task-row" style="padding:9px 0;gap:8px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14.5px;font-weight:600">${esc(primary.name || primary.email || "Someone")}</div>
+          <div style="font-size:12px;color:var(--text2)">also signs in as ${esc(sp.email || sp.name || "?")}</div>
+        </div>
+        <button class="mini-btn" data-unlink="${esc(sp.id)}" style="margin-top:0;flex:0 0 auto">Unlink</button>
+      </div>`;
+    }).join("")}
+  </div>`;
+  })()}` : ""}
 
   <div class="section-title" id="org-anchor">Org Chart</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
@@ -4608,6 +4890,18 @@ function renderSettings() {
     personFilter = "mine";
     toast("Saved");
     render();
+  };
+  const meAlert = document.getElementById("me-alert");
+  if (meAlert) meAlert.onchange = () => {
+    const typed = (meAlert.value || "").trim();
+    if (typed && !looksLikeEmail(typed)) { toast("That doesn't look like an email address — clear the box to use your sign-in address"); return; }
+    const sameAsLogin = typed.toLowerCase() === ((currentUser && currentUser.email) || "").toLowerCase();
+    // Blank it when it matches the sign-in address, so the preference keeps following the account.
+    upsertProfile(null, { alertEmail: sameAsLogin ? "" : typed, alertEmailAsked: true });
+    render();
+    toast(typed && !sameAsLogin
+      ? "Alerts will go to " + typed + " — clear the box in Settings to switch back"
+      : "Alerts will go to your sign-in address");
   };
   document.getElementById("sign-out-btn").onclick = async () => {
     if (!confirm("Sign out of Team Sync on this device?")) return;
@@ -4764,20 +5058,17 @@ function renderSettings() {
     if (!sb) { say("Not connected — try again in a moment.", "var(--red)"); return; }
     inviteBtn.disabled = true; inviteBtn.textContent = "Sending…"; say("", "");
     try {
-      // Send the caller's OWN access token. The function asks Supabase whose token it is and
-      // checks that against its allowlist — it never takes our word for who we are.
-      const { data: sess } = await sb.auth.getSession();
-      const tokenValue = sess && sess.session && sess.session.access_token;
-      if (!tokenValue) throw new Error("Your session expired — sign out and back in.");
-      const res = await fetch(SUPABASE_URL + "/functions/v1/invite-user", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tokenValue },
-        body: JSON.stringify({ email })
-      });
-      const out = await res.json().catch(() => ({}));
-      if (!res.ok || out.error) throw new Error(out.error || ("Invite failed (" + res.status + ")"));
+      const out = await callInviteFn({ email });
+      // The server spotted an address that looks like somebody already here. Show who, and let
+      // Adam decide — two real people genuinely can be a.smith and asmith, so this asks rather
+      // than refuses.
+      if (out.needsConfirm) {
+        say("", "");
+        confirmDuplicateInvite(email, out.similar || [], say, input);
+        return;
+      }
       say(out.message || "Invite sent.", out.alreadyActive ? "var(--orange)" : "var(--green)");
-      if (out.ok) input.value = "";
+      if (out.ok) { input.value = ""; loadPendingInvites(); }
       toast(out.message || "Invite sent");
     } catch (e) {
       say(e.message || "Could not send the invite.", "var(--red)");
@@ -4785,6 +5076,14 @@ function renderSettings() {
       inviteBtn.disabled = false; inviteBtn.textContent = "Invite";
     }
   };
+  loadPendingInvites();
+  $main.querySelectorAll("[data-unlink]").forEach(b => b.onclick = () => {
+    const sp = profileFor(b.dataset.unlink);
+    if (!sp) return;
+    updateProfileFields(sp.id, { linkedTo: "" });
+    render();
+    toast((sp.email || sp.name || "That account") + " is its own person again — nothing was lost either way");
+  });
   $main.querySelectorAll("[data-org-edit]").forEach(b => b.onclick = () => {
     if (!isAdmin()) { toast("Only admins can change the org chart"); return; }
     openOrgSheet(b.dataset.orgEdit);
@@ -4871,7 +5170,9 @@ function renderSettings() {
 /* ============ Forms (bottom sheets) ============ */
 // afterOpen runs once the sheet is in the DOM, for sheets that need their own handlers wired
 // (repeatable rows, live previews). Optional — most callers don't need it.
-function openSheet(title, bodyHTML, onSave, afterOpen) {
+// `opts.saveLabel` / `opts.cancelLabel` retitle the two buttons. Worth having where "Save" is the
+// wrong word — a confirmation reads much better as "Send it anyway" than as "Save".
+function openSheet(title, bodyHTML, onSave, afterOpen, opts) {
   // Remove any prior sheet instantly — a delayed (animated) removal would leave
   // duplicate element IDs and route the Save button to the wrong handler.
   document.querySelectorAll("#sheet-bd, #sheet").forEach(el => el.remove());
@@ -4879,9 +5180,9 @@ function openSheet(title, bodyHTML, onSave, afterOpen) {
   const sh = document.createElement("div"); sh.className = "sheet"; sh.id = "sheet";
   sh.innerHTML = `
     <div class="sheet-head">
-      <button id="sheet-cancel">Cancel</button>
+      <button id="sheet-cancel">${esc((opts && opts.cancelLabel) || "Cancel")}</button>
       <h2>${esc(title)}</h2>
-      <button id="sheet-save" style="font-weight:800">Save</button>
+      <button id="sheet-save" style="font-weight:800">${esc((opts && opts.saveLabel) || "Save")}</button>
     </div>
     <div class="sheet-body">${bodyHTML}</div>`;
   document.body.appendChild(bd); document.body.appendChild(sh);
