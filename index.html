@@ -430,7 +430,7 @@
          the recipient gets there, which spends the one-time token and leaves the real person
          staring at a dead link. A typed code has nothing for a scanner to consume. -->
     <div id="login-code" style="display:none">
-      <div id="code-intro" style="font-size:13.5px;color:var(--text2);margin-bottom:12px">Check your email for a 6-digit code and enter it below.</div>
+      <div id="code-intro" style="font-size:13.5px;color:var(--text2);margin-bottom:12px">Check your email for the sign-in code and enter it below.</div>
       <div class="fgroup">
         <div class="frow"><label>Code</label><input id="login-code-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456"></div>
       </div>
@@ -1163,7 +1163,7 @@ async function bootApp() {
     // the next retry. And every branch keeps retrying, because the one case we must not create is
     // a user sitting in front of a dead page that has given up.
     if (libLoaded && isAuthFailure(e)) {
-      showLoginScreen("Your session expired — please sign in again. If your password doesn't work, use \"Forgot password?\" for a 6-digit code.");
+      showLoginScreen("Your session expired — please sign in again. If your password doesn't work, use \"Forgot password?\" for a sign-in code.");
     } else {
       // Transport-level failure. Someone with a saved session hasn't been signed out; the app just
       // couldn't reach the server yet, and saying "check your connection" above an empty sign-in
@@ -1200,12 +1200,12 @@ function detectAuthLinkError() {
 function authLinkErrorMessage(e) {
   const c = (e && e.code || "").toLowerCase();
   if (c === "otp_expired" || c.indexOf("expired") >= 0) {
-    return "That link was already opened, most likely by Rush's email scanner before it reached you. Use the 6-digit code in the same email instead — tap \"I already have a code\" below.";
+    return "That link was already opened, most likely by Rush's email scanner before it reached you. Use the code in the same email instead — tap \"I already have a code\" below.";
   }
   if (c === "access_denied") {
-    return "That link is no longer valid — something opened it first. Use the 6-digit code in the same email instead.";
+    return "That link is no longer valid — something opened it first. Use the code in the same email instead.";
   }
-  return (e && e.description) || "That link didn't work. Use the 6-digit code in the same email instead.";
+  return (e && e.description) || "That link didn't work. Use the code in the same email instead.";
 }
 let authLinkType = detectAuthLinkType();
 let authLinkError = detectAuthLinkError();
@@ -4413,7 +4413,7 @@ function renderSettings() {
   ${isAdmin() ? `
   <div class="section-title">Invite a Teammate</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
-    They'll get an email with a 6-digit code to set their own password — a code rather than a link, because Rush's email scanner opens links before people get to them. The server checks you're an admin before sending; the app can't do it on its own.
+    They'll get an email with a sign-in code to set their own password — a code rather than a link, because Rush's email scanner opens links before people get to them. The server checks you're an admin before sending; the app can't do it on its own.
   </div>
   <div class="card">
     <div style="display:flex;gap:8px">
@@ -5358,7 +5358,7 @@ function bindLoginScreen() {
       codeEmail = email;
       showLoginPane("code");
       const intro = document.getElementById("code-intro");
-      if (intro) intro.textContent = "We emailed a 6-digit code to " + email + ". Enter it below — it lasts an hour. Check your junk folder if it's slow to arrive.";
+      if (intro) intro.textContent = "We emailed a sign-in code to " + email + ". Enter it below — it lasts an hour. Check your junk folder if it's slow to arrive.";
       setLoginMsg("");
       const input = document.getElementById("login-code-input");
       if (input) { input.value = ""; input.focus(); }
@@ -5421,7 +5421,10 @@ function bindLoginScreen() {
     const token = (input.value || "").replace(/\s|-/g, "");
     const email = codeEmail || document.getElementById("login-email").value.trim();
     if (!email) { setLoginMsg("Go back and enter your email first."); return; }
-    if (token.length < 6) { setLoginMsg("Enter the 6-digit code from the email."); return; }
+    // Supabase's OTP length is a project setting (8 digits on this project, not the 6 the docs
+    // default to), so nothing here should name a number — it would go stale the moment that
+    // setting changes.
+    if (token.length < 6) { setLoginMsg("Enter the code from the email."); return; }
     const btn = document.getElementById("login-code-submit");
     const label = btn.textContent;
     btn.disabled = true; btn.textContent = "Checking…";
@@ -5478,7 +5481,7 @@ function bindLoginScreen() {
     const intro = document.getElementById("code-intro");
     // Warn up front, because this button is where the superseded-code trap bites: people reach for
     // an older email rather than the newest one.
-    if (intro) intro.textContent = "Enter the 6-digit code from the MOST RECENT email sent to " + email + ". If you asked for a code more than once, only the newest one works.";
+    if (intro) intro.textContent = "Enter the code from the MOST RECENT email sent to " + email + ". If you asked for a code more than once, only the newest one works.";
     setLoginMsg("");
     const input = document.getElementById("login-code-input");
     if (input) { input.value = ""; input.focus(); }
