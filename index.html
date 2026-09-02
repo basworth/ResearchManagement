@@ -2692,14 +2692,16 @@ function openStagesSheet() {
 
 // Per-study editor for the initiation stages: status plus the dates it was submitted and
 // cleared, which is the whole point of the board (when did it go in, when did it pass).
-function openInitiationSheet(studyId) {
+// `focusKey` opens the sheet scrolled to one stage. With 30-odd stages, landing at the top and
+// making someone hunt for the row they just tapped defeats the point of tapping it.
+function openInitiationSheet(studyId, focusKey) {
   const s = studyById(studyId);
   if (!s) return;
   if (blockOfflineEdit("Editing initiation stages")) return;
   const stages = initiationStages();
   openSheet("Initiation — " + (s.nickname || s.title), stages.map(st => {
     const info = stageInfo(s, st.key);
-    return `<div class="fgroup">
+    return `<div class="fgroup" data-stage-group="${esc(st.key)}">
       <div class="frow"><label>${esc(st.label)}</label>${selectHTML("f-st-" + st.key, STAGE_STATUSES, info.status)}</div>
       <div class="frow"><label>Submitted</label><input id="f-sub-${esc(st.key)}" type="date" value="${esc(info.submitted)}"></div>
       <div class="frow"><label>Passed</label><input id="f-pass-${esc(st.key)}" type="date" value="${esc(info.passed)}"></div>
@@ -2719,6 +2721,22 @@ function openInitiationSheet(studyId) {
       s.initiationProgress = p;
       upsertStudy(s);
       toast("Initiation stages saved");
+    },
+    // afterOpen: jump to the stage that was tapped and highlight it briefly, so it's obvious
+    // which row you landed on.
+    () => {
+      if (!focusKey) return;
+      const g = document.querySelector(`[data-stage-group="${focusKey}"]`);
+      if (!g) return;
+      // Guarded: if scrolling isn't available (older WebViews, and jsdom in the tests) an
+      // exception here would skip the highlight and focus below, which are the parts that
+      // actually tell you where you landed.
+      try { if (g.scrollIntoView) g.scrollIntoView({ block: "center" }); } catch (err) { /* non-fatal */ }
+      g.style.transition = "background .25s";
+      g.style.background = "color-mix(in srgb, var(--blue) 14%, transparent)";
+      setTimeout(() => { g.style.background = ""; }, 1400);
+      const sel = document.getElementById("f-st-" + focusKey);
+      if (sel) sel.focus();
     });
 }
 
@@ -2888,8 +2906,11 @@ function initiationBodyHTML(s) {
         info.submitted ? "submitted " + fmtDate(info.submitted) : "",
         info.passed ? "passed " + fmtDate(info.passed) : ""
       ].filter(Boolean).join(" · ");
+      // Tappable. These rows carry a status badge and sit in a list, so they read as controls —
+      // and they weren't, which left the Edit button as the only way in and made the whole
+      // checklist feel dead.
       return `
-      <div class="milestone-row">
+      <div class="milestone-row" data-init-stage="${esc(s.id)}|${esc(st.key)}" style="cursor:pointer">
         <div style="flex:1;min-width:0">
           <div style="font-size:14.5px;font-weight:600">${esc(st.label)}</div>
           ${detail ? `<div style="font-size:12px;color:var(--text2);margin-top:2px">${detail}</div>` : ""}
@@ -3408,6 +3429,13 @@ function renderStudyDetail() {
   // Initiation checklist — the stage grid is edited through the same sheet the Worklist board
   // uses, so there's one editor rather than two that can drift apart.
   $main.querySelectorAll("[data-init-edit]").forEach(b => b.onclick = () => openInitiationSheet(b.dataset.initEdit));
+  // Each stage row opens the editor at that stage. Without this the rows looked like controls
+  // and did nothing, leaving the Edit button as the only way in.
+  $main.querySelectorAll("[data-init-stage]").forEach(el => el.onclick = (e) => {
+    e.stopPropagation();
+    const parts = String(el.dataset.initStage).split("|");
+    openInitiationSheet(parts[0], parts[1]);
+  });
   $main.querySelectorAll("[data-init]").forEach(b => b.onclick = () => {
     s.initiation = s.initiation || { sportsSubmission: false, irbApproved: false, caApproved: false, piqBuilt: false, ready: false };
     const k = b.dataset.init;
@@ -4012,7 +4040,9 @@ function renderWorkingList() {
             ${stages.map(st => {
               const info = stageInfo(s, st.key);
               const when = info.status === "Passed" ? info.passed : info.submitted;
-              return `<td><span class="wl-pill" style="background:${STAGE_COLORS[info.status]}">${esc(info.status)}</span>${when ? `<div style="font-size:11px;color:var(--text2);margin-top:2px">${fmtDate(when)}</div>` : ""}</td>`;
+              // Each cell opens the editor at its own stage, so you can fix one thing from the
+              // board without scrolling the whole sheet.
+              return `<td data-init-stage="${esc(s.id)}|${esc(st.key)}" style="cursor:pointer"><span class="wl-pill" style="background:${STAGE_COLORS[info.status]}">${esc(info.status)}</span>${when ? `<div style="font-size:11px;color:var(--text2);margin-top:2px">${fmtDate(when)}</div>` : ""}</td>`;
             }).join("")}
             <td><button class="mini-btn" data-init-edit="${s.id}" style="margin:0">Edit</button></td>
           </tr>`;
@@ -4030,7 +4060,16 @@ function renderWorkingList() {
     bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
     bindWorklistFilters();
     $main.querySelectorAll("[data-init-edit]").forEach(b => b.onclick = () => openInitiationSheet(b.dataset.initEdit));
-    $main.querySelectorAll("[data-open-study]").forEach(el => el.onclick = () => { openStudy(el.dataset.openStudy); render(); });
+    $main.querySelectorAll("[data-init-stage]").forEach(el => el.onclick = (e) => {
+      e.stopPropagation();
+      const parts = String(el.dataset.initStage).split("|");
+      openInitiationSheet(parts[0], parts[1]);
+    });
+    // tab = "studies" is essential: without it render() just redraws the Worklist, so the click
+    // looks dead AND the study is left silently "open" behind the scenes, which then hijacks the
+    // next visit to the Studies tab. The default table has always done this; these two layouts
+    // were the ones that forgot.
+    $main.querySelectorAll("[data-open-study]").forEach(el => el.onclick = () => { openStudy(el.dataset.openStudy); tab = "studies"; render(); });
     return;
   }
 
@@ -4111,7 +4150,11 @@ function renderWorkingList() {
     bindSearchBox("worklist-search", (v) => { worklistSearchQuery = v; });
     bindWorklistFilters();
     $main.querySelectorAll("[data-fu-edit]").forEach(b => b.onclick = () => openFollowUpSheet(b.dataset.fuEdit));
-    $main.querySelectorAll("[data-open-study]").forEach(el => el.onclick = () => { openStudy(el.dataset.openStudy); render(); });
+    // tab = "studies" is essential: without it render() just redraws the Worklist, so the click
+    // looks dead AND the study is left silently "open" behind the scenes, which then hijacks the
+    // next visit to the Studies tab. The default table has always done this; these two layouts
+    // were the ones that forgot.
+    $main.querySelectorAll("[data-open-study]").forEach(el => el.onclick = () => { openStudy(el.dataset.openStudy); tab = "studies"; render(); });
     return;
   }
 
