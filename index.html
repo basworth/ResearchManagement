@@ -651,6 +651,15 @@ function orgChartHTML(canEdit) {
   }
   return html;
 }
+// Who may grant admin rights directly, rather than approving a request. This is UI-gating only:
+// the admin-requests function checks the caller's verified token against its own ADMIN_APPROVER
+// secret and refuses anyone else, so getting this constant wrong hides a control or shows one
+// that won't work — it can't hand anybody real power.
+const ADMIN_APPROVER_EMAIL = "adam.yanke@rushortho.com";
+function amApprover() {
+  return !!currentUser && (currentUser.email || "").toLowerCase() === ADMIN_APPROVER_EMAIL;
+}
+
 function openOrgSheet(userId) {
   // Refuse before the sheet opens, so a non-admin never types into a form that won't save.
   if (!isAdmin()) { toast("Only admins can change the org chart"); return; }
@@ -671,23 +680,76 @@ function openOrgSheet(userId) {
         </select>
       </div>
     </div>
+    ${amApprover() && userId !== (currentUser && currentUser.id) ? `
+    <div class="fgroup">
+      <div class="frow" style="gap:10px">
+        <input type="checkbox" id="f-org-admin" ${p.admin ? "checked" : ""} style="flex:0;width:20px;height:20px">
+        <label for="f-org-admin" style="flex:1;font-weight:600">Admin — can see and edit every project</label>
+      </div>
+    </div>
     <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
-      ${p.admin
-        ? `<b>${esc(p.name || "They")} is an admin.</b> Admin rights aren't editable here — they're granted only by approving a request, so there's always a record of who asked.`
-        : `Admin rights aren't set here. Someone becomes an admin by requesting it and Adam approving, which the database enforces.`}
+      You can set this directly because you're the approver. Anyone else has to use <b>Request admin access</b> and wait for you — the database refuses admin changes from every other route, so that isn't just wording on a screen.
+      ${p.admin ? `<br><br>Unticking it removes their access to other people's projects. Their own account and studies are untouched.` : ""}
+    </div>` : `
+    <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+      ${userId === (currentUser && currentUser.id)
+        ? `<b>This is you.</b> Your own admin rights aren't editable here — there'd be no way to grant them back.`
+        : p.admin
+          ? `<b>${esc(p.name || "They")} is an admin.</b> Only Adam can change that, so there's always a record of who granted it.`
+          : `Admin rights aren't set here. Someone becomes an admin either by requesting it and Adam approving, or by Adam granting it from this screen.`}
+    </div>`}
+    <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
       Roles and reporting lines are recorded for everyone, but they don't change who can see what until the switch below the chart is on.
     </div>`,
     () => {
       const pos = document.getElementById("f-org-pos").value;
       // Deliberately no `admin` here: the database refuses admin-flag changes from any client,
-      // so including it would make every save fail.
+      // so including it would make every save fail. The flag goes through the edge function
+      // below instead, which holds the service role.
       updateProfileFields(userId, {
         position: pos === "— not set —" ? "" : pos,
         reportsTo: document.getElementById("f-org-boss").value
       });
       render();
       toast("Saved — change it again any time from Settings › Org Chart");
+
+      const box = document.getElementById("f-org-admin");
+      if (box && box.checked !== !!p.admin) {
+        // Fire-and-report: the role/reporting save has already succeeded and been acknowledged,
+        // so a failure here must say so on its own rather than implying nothing saved.
+        setAdminFlag(userId, box.checked, p.name || p.email);
+      }
     });
+}
+// Grant or revoke admin. Goes through the edge function because the database blocks the flag for
+// every client, service role included only there — so this is the single route, whether it starts
+// from an approved request or from Adam ticking the box.
+async function setAdminFlag(userId, makeAdmin, who) {
+  try {
+    if (!sb) throw new Error("Not connected — try again shortly.");
+    const { data: sess } = await sb.auth.getSession();
+    const tok = sess && sess.session && sess.session.access_token;
+    if (!tok) throw new Error("Your session expired — sign out and back in.");
+    const res = await fetch(SUPABASE_URL + "/functions/v1/admin-requests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
+      body: JSON.stringify({ action: "set", userId, admin: makeAdmin })
+    });
+    const out = await res.json().catch(() => ({}));
+    // The server function is deployed separately from this page, so the two can be out of step.
+    // Say that plainly rather than showing a raw "Unknown action", and point at the route that
+    // does work in the meantime.
+    if (/unknown action/i.test(out.error || "")) {
+      throw new Error("the server hasn't picked up this feature yet. Use \"Request admin access\" for now — this box will start working on its own once the update lands.");
+    }
+    if (!res.ok || out.error) throw new Error(out.error || ("Failed (" + res.status + ")"));
+    // The flag lives on the profile row, so pull it back rather than guessing locally.
+    await pullAll().catch(() => {});
+    render();
+    toast(out.message || (makeAdmin ? "Admin rights granted" : "Admin rights removed"));
+  } catch (e) {
+    toast((makeAdmin ? "Could not grant admin — " : "Could not remove admin — ") + (e.message || "failed"));
+  }
 }
 
 // Orthopedic societies for the abstract-deadline board (full names for reference)
