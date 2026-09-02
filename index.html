@@ -574,6 +574,18 @@ const POSITIONS = [
   "Research assistant",
   "Student"
 ];
+// Roles that end up on author lists, so their degrees are worth capturing at sign-up while the
+// person is sitting there and knows the answer. Deliberately not everyone: a CRCM coordinates
+// studies rather than authoring them, and asking a student for degrees they may not hold yet is
+// an awkward first impression. Both can still be filled in from the roster at any time.
+const DEGREE_POSITIONS = [
+  "Clinician",
+  "Scientist",
+  "Sports medicine fellow",
+  "Orthopedic resident",
+  "Research assistant"
+];
+function positionWantsDegrees(pos) { return DEGREE_POSITIONS.indexOf(pos) >= 0; }
 function upsertProfile(name, extra) {
   if (!currentUser) return;
   state.profiles = state.profiles || [];
@@ -1353,8 +1365,13 @@ function maybePromptDisplayName() {
   const p = profileFor(currentUser.id);
   const needName = !p;
   const needPosition = !p || !p.position;
-  if (!needName && !needPosition) return;
-  const title = needName ? "Welcome — tell us who you are" : "One more thing — what's your role?";
+  // Degrees are asked once, tracked by a flag rather than by "are they empty" — otherwise
+  // someone who genuinely holds none would be asked again on every single sign-in.
+  const needDegrees = !!p && !!p.position && positionWantsDegrees(p.position) && !p.degreesAsked;
+  if (!needName && !needPosition && !needDegrees) return;
+  const title = needName ? "Welcome — tell us who you are"
+    : needPosition ? "One more thing — what's your role?"
+    : "What letters go after your name?";
   openSheet(title, `
     <div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">
       ${needName
@@ -1365,6 +1382,19 @@ function maybePromptDisplayName() {
       ${needName ? `<div class="frow"><label>Your name</label><input id="f-profile-name" list="dl-people-profile" placeholder="e.g. Adam Yanke" value="${esc((p && p.name) || "")}"></div>` : ""}
       <div class="frow"><label>Your role</label>${selectHTML("f-profile-position", ["— select —"].concat(POSITIONS), (p && p.position) || "— select —")}</div>
     </div>
+    <div id="f-profile-degrees" style="display:none">
+      <div style="font-size:13px;color:var(--text2);margin:0 2px 8px 2px">Tick any degrees that should follow your name on an author list. Skip it if none apply — you won't be asked again.</div>
+      <div class="fgroup">
+        ${DEGREE_OPTIONS.map(d => `
+          <div class="frow degree-row" style="gap:12px;cursor:pointer">
+            <input type="checkbox" class="f-profile-degree" data-degree="${esc(d)}">
+            <span style="flex:1;font-size:15px">${esc(d)}</span>
+          </div>`).join("")}
+      </div>
+      <div class="fgroup">
+        <div class="frow"><label>Other</label><input id="f-profile-degree-other" placeholder="e.g. MSc — comma-separated"></div>
+      </div>
+    </div>
     <datalist id="dl-people-profile">${state.roster.map(n => `<option value="${esc(n)}">`).join("")}</datalist>`,
     () => {
       const nameEl = document.getElementById("f-profile-name");
@@ -1372,10 +1402,44 @@ function maybePromptDisplayName() {
       if (!name) { toast("Enter your name"); return false; }
       const position = document.getElementById("f-profile-position").value;
       if (!position || position === "— select —") { toast("Pick the role that fits you best"); return false; }
-      upsertProfile(name, { position });
+
+      const extra = { position };
+      let degreeMsg = "";
+      if (positionWantsDegrees(position)) {
+        const picked = [...document.querySelectorAll(".f-profile-degree")].filter(c => c.checked).map(c => c.dataset.degree);
+        const other = (document.getElementById("f-profile-degree-other").value || "")
+          .split(",").map(x => x.trim()).filter(Boolean);
+        const all = [...new Set(picked.concat(other))];
+        // Only write degrees when they picked some — an empty save would wipe anything an admin
+        // had already entered for them from the roster.
+        if (all.length) { setDegreesFor(name, all); degreeMsg = " — " + name + ", " + all.join(", "); }
+        // Recorded either way, so "none" is remembered as an answer rather than a gap.
+        extra.degreesAsked = true;
+      }
+      upsertProfile(name, extra);
       personFilter = "mine";
       render();
-      toast("Thanks — you're set up. You can change this in Settings.");
+      toast("Thanks — you're set up. You can change this in Settings." + degreeMsg);
+    },
+    // afterOpen: the degrees block only applies to some roles, so it follows the role picker
+    // rather than being decided once when the sheet is built.
+    () => {
+      const sel = document.getElementById("f-profile-position");
+      const block = document.getElementById("f-profile-degrees");
+      if (!sel || !block) return;
+      // Pre-tick whatever is already known for them, so re-answering never loses anything.
+      const nameNow = () => {
+        const el = document.getElementById("f-profile-name");
+        return (el ? el.value.trim() : "") || (p && p.name) || "";
+      };
+      const known = degreesFor(nameNow());
+      document.querySelectorAll(".f-profile-degree").forEach(c => {
+        if (known.indexOf(c.dataset.degree) >= 0) c.checked = true;
+      });
+      const sync = () => { block.style.display = positionWantsDegrees(sel.value) ? "block" : "none"; };
+      sel.addEventListener("change", sync);
+      sync();
+      bindRowCheckboxes(".degree-row");
     });
 }
 async function pullAll() {
