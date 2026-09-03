@@ -622,6 +622,26 @@ function primaryProfileFor(userId) {
 function activeProfiles() { return (state.profiles || []).filter(p => !isLinkedProfile(p)); }
 function linkedTo(userId) { return (state.profiles || []).filter(p => isLinkedProfile(p) && p.linkedTo === userId); }
 
+// ---------- Roster vs org chart ----------
+// Two lists that used to show the same people twice. The roster (state.roster) is just names —
+// it predates accounts and still earns its place for colleagues who have never logged in, since
+// tasks and author lists work off names alone. The org chart is real accounts. So once somebody
+// has actually signed in they belong to the chart, and their roster name is redundant clutter.
+//
+// Matched through canonName, so degrees and the merge tool's aliases don't cause a miss and
+// leave "Adam Yanke, MD" sitting in the roster next to Adam Yanke in the chart. Linked spares
+// are excluded, so a duplicate account can't keep a name on the list.
+//
+// Deliberately hides rather than deletes: the name stays in state.roster, so if their account
+// ever goes the name reappears, and nothing that references it by name breaks meanwhile.
+function hasSignedInAccount(name) {
+  const key = canonName(name).toLowerCase();
+  if (!key) return false;
+  return activeProfiles().some(p => p.name && canonName(p.name).toLowerCase() === key);
+}
+// Names worth showing under TEAM MEMBERS: everyone not already represented in the org chart.
+function rosterWithoutAccounts() { return (state.roster || []).filter(n => !hasSignedInAccount(n)); }
+
 function upsertProfile(name, extra) {
   if (!currentUser) return;
   state.profiles = state.profiles || [];
@@ -672,12 +692,14 @@ function orgChartHTML(canEdit) {
       : `<span class="badge" style="background:var(--orange);font-size:9.5px;padding:1px 6px;margin-left:6px">role not set</span>`;
     const admin = p.admin ? `<span class="badge" style="background:var(--blue);font-size:9.5px;padding:1px 6px;margin-left:4px">admin</span>` : "";
     const kids = orgChildren(p.id).map(c => row(c, depth + 1)).join("");
+    const degs = p.name ? degreesFor(p.name) : [];
     return `
       <div class="task-row" style="padding:8px 0;gap:8px;padding-left:${depth * 18}px">
         <div style="flex:1;min-width:0">
           <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis">${depth ? `<span style="color:var(--text2)">└ </span>` : ""}${esc(p.name || p.email || "Unnamed")}${badge}${admin}</div>
-          <div style="font-size:11.5px;color:var(--text2)">${esc(p.email || "")}</div>
+          <div style="font-size:11.5px;color:var(--text2)">${esc(p.email || "")}${degs.length ? " · " + esc(degs.join(", ")) : ""}</div>
         </div>
+        ${canEdit && p.name ? `<button class="mini-btn" data-degrees-for="${esc(p.name)}" style="margin-top:0;flex:0 0 auto">Degrees</button>` : ""}
         ${canEdit ? `<button class="mini-btn" data-org-edit="${esc(p.id)}" style="margin-top:0;flex:0 0 auto">Edit</button>` : ""}
       </div>${kids}`;
   };
@@ -4590,6 +4612,35 @@ function renderTeamNotes() {
 }
 
 /* ============ Invites ============ */
+// Same test the invite function runs before sending, kept here too so the waiting list can say
+// "this is probably Carla" without another round trip. Compares the letters of the local part,
+// ignoring dots, digits and separators: carla.edwards@rush.edu and cedwards@rushortho.com are
+// the same Carla. Advisory only — it labels a row, it never acts on its own, because two real
+// people genuinely can be a.smith and asmith.
+const emailLocalLetters = (e) => String(e || "").split("@")[0].toLowerCase().replace(/[^a-z]/g, "");
+const emailNameParts = (e) => String(e || "").split("@")[0].toLowerCase().split(/[^a-z]+/).filter(Boolean);
+function looksLikeSamePerson(a, b) {
+  if (!a || !b) return false;
+  a = String(a).toLowerCase(); b = String(b).toLowerCase();
+  if (a === b) return false;
+  const la = emailLocalLetters(a), lb = emailLocalLetters(b);
+  if (!la || !lb) return false;
+  if (la === lb) return true;
+  // Containment needs a decent run of letters, or every three-letter address matches half the
+  // directory: "cedwards" inside "carlaedwards" counts, "tj" inside "tjones" does not.
+  const short = la.length <= lb.length ? la : lb;
+  const long = la.length <= lb.length ? lb : la;
+  if (short.length >= 5 && long.indexOf(short) >= 0) return true;
+  const pa = emailNameParts(a), pb = emailNameParts(b);
+  if (pa.length && pb.length) {
+    const surA = pa[pa.length - 1], surB = pb[pb.length - 1];
+    if (surA.length >= 4 && surA === surB) return true;
+    // Same first and last name with anything between them — a middle initial is the common case,
+    // and it's what makes william_k_lee and william.lee look unrelated to the checks above.
+    if (pa.length > 1 && pb.length > 1 && pa[0] === pb[0] && surA === surB && pa[0].length >= 3) return true;
+  }
+  return false;
+}
 // One door to the invite function. Sends the caller's OWN access token: the function asks
 // Supabase whose token it is and checks that against its allowlist, so it never takes the
 // browser's word for who is calling.
@@ -4656,6 +4707,12 @@ async function loadPendingInvites() {
       box.innerHTML = `<div style="color:var(--text2);font-size:14px;padding:6px 0">Nobody's invite is outstanding — everyone invited has signed in.</div>`;
       return;
     }
+    // Everyone who HAS signed in, to match the waiting addresses against. Prefer the server's
+    // list — it sees accounts whose profile row hasn't synced to this device yet — and fall back
+    // to local profiles if an older function version didn't send one.
+    const active = (out.active && out.active.length)
+      ? out.active
+      : activeProfiles().map(p => ({ email: p.email, name: p.name }));
     // Oldest first: the ones worth chasing are the ones that have been sitting longest.
     list.sort((a, b) => String(a.invitedAt || "").localeCompare(String(b.invitedAt || "")));
     box.innerHTML = list.map(u => {
@@ -4663,12 +4720,21 @@ async function loadPendingInvites() {
       const age = days === null ? "" : days <= 0 ? "invited today" : days === 1 ? "invited yesterday" : `invited ${days} days ago`;
       // A code lasts an hour, so anything older than that needs a fresh one rather than a nudge.
       const codeStale = !u.codeSentAt || (Date.now() - new Date(u.codeSentAt).getTime()) > 3600e3;
+      // The useful recommendation: an invite that's never been accepted, sitting next to an
+      // account that has, for what looks like the same person. That's Carla with an open rush.edu
+      // invite and a live rushortho.com login — the reason to bin the invite rather than chase it.
+      const hits = active.filter(a => looksLikeSamePerson(a.email, u.email));
+      const hint = hits.length ? `<div style="font-size:12px;color:var(--blue);margin-top:3px;line-height:1.4">
+          Probably ${hits.map(h => esc(h.name || h.email)).join(" or ")}, who already signed in as ${hits.map(h => esc(h.email)).join(" / ")} — so this invite is likely a spare you can delete.
+        </div>` : "";
       return `<div class="task-row" style="padding:9px 0;gap:8px;align-items:flex-start">
         <div style="flex:1;min-width:0">
           <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis">${esc(u.email)}</div>
           <div style="font-size:12px;color:${days !== null && days >= 14 ? "var(--orange)" : "var(--text2)"}">${esc(age)}${codeStale ? " · their code has expired" : " · code still valid"}</div>
+          ${hint}
         </div>
         <button class="mini-btn" data-resend="${esc(u.email)}" style="margin-top:0;flex:0 0 auto">Resend</button>
+        <button class="mini-btn" data-invite-del="${esc(u.email)}" style="margin-top:0;flex:0 0 auto;color:var(--red)">Delete</button>
       </div>`;
     }).join("");
     box.querySelectorAll("[data-resend]").forEach(b => b.onclick = async () => {
@@ -4682,6 +4748,33 @@ async function loadPendingInvites() {
         toast("Could not resend — " + (e.message || "unknown error"));
         b.disabled = false; b.textContent = "Resend";
       }
+    });
+    box.querySelectorAll("[data-invite-del]").forEach(b => b.onclick = () => {
+      const addr = b.dataset.inviteDel;
+      const hits = active.filter(a => looksLikeSamePerson(a.email, addr));
+      // Deletion gets a sheet rather than a confirm(), because the thing worth reading is WHY
+      // this is safe: an unaccepted invite owns nothing, since a profile — and so any task or
+      // study involvement — only comes into being at first sign-in.
+      openSheet("Delete this invite?", `
+        <div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">
+          <b>${esc(addr)}</b> was invited but never signed in.
+        </div>
+        ${hits.length ? `<div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+          This looks like <b>${hits.map(h => esc(h.name || h.email)).join(" or ")}</b>, who is already in from ${hits.map(h => esc(h.email)).join(" / ")}. Deleting the spare invite won't touch that account.
+        </div>` : ""}
+        <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+          Nothing is lost: an invite that was never accepted has no name, no tasks and no studies attached — all of that only starts existing when someone first signs in. Deleting it also frees ${esc(addr)} so you can invite it again later, which you can't do while the dormant account holds the address.
+          <br><br>If they turn out to want in after all, just invite them again.
+        </div>`,
+        async () => {
+          try {
+            const out = await callInviteFn({ action: "cancel", email: addr });
+            toast(out.message || "Invite deleted");
+            loadPendingInvites();
+          } catch (e) {
+            toast("Could not delete that invite — " + (e.message || "unknown error"));
+          }
+        }, null, { saveLabel: "Delete invite" });
     });
   } catch (e) {
     box.innerHTML = `<div style="color:var(--text2);font-size:13px;padding:6px 0">Couldn't check invites: ${esc(e.message || "unknown error")}</div>`;
@@ -4711,8 +4804,14 @@ function renderSettings() {
 
   <div class="card">
     <div style="font-size:12px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin-bottom:4px">TEAM MEMBERS — used for task assignment &amp; author lists</div>
-    <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-bottom:10px">Tap <b>Degrees</b> to set someone's credentials — they're kept out of the name itself and only appear on author lists.</div>
-    ${state.roster.length ? state.roster.map(n => `
+    <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-bottom:10px">
+      People who haven't signed in yet. Once someone logs in they move to the Org Chart below and drop off this list, so nobody appears twice — their name isn't lost, and they stay assignable exactly as before.
+      Tap <b>Degrees</b> to set someone's credentials — they're kept out of the name itself and only appear on author lists.
+    </div>
+    ${(() => {
+      const unclaimed = rosterWithoutAccounts();
+      const moved = (state.roster || []).length - unclaimed.length;
+      const rows = unclaimed.length ? unclaimed.map(n => `
       <div class="task-row" style="padding:8px 0;gap:10px">
         <div style="flex:1;min-width:0">
           <div style="font-size:14.5px;font-weight:600">${esc(n)}</div>
@@ -4720,7 +4819,14 @@ function renderSettings() {
         </div>
         <button class="mini-btn" data-degrees-for="${esc(n)}" style="margin-top:0;flex:0 0 auto">Degrees</button>
         <span data-roster-del="${esc(n)}" style="cursor:pointer;font-weight:800;color:var(--red);padding:0 4px">×</span>
-      </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No members yet.</div>`}
+      </div>`).join("")
+        : `<div style="color:var(--text2);font-size:14px">${(state.roster || []).length ? "Everyone on the team list has signed in — they're all in the Org Chart below." : "No members yet."}</div>`;
+      // Say how many moved, so a name vanishing from here reads as "they signed in", not "we
+      // lost them". Degrees for those people are still editable from the Org Chart.
+      return rows + (moved > 0 ? `<div style="font-size:12px;color:var(--text2);line-height:1.45;margin-top:10px">
+        ${moved} ${moved === 1 ? "person is" : "people are"} in the Org Chart instead, having signed in.
+      </div>` : "");
+    })()}
     <div style="display:flex;gap:8px;margin-top:12px">
       <input id="roster-name" placeholder="Add team member" style="flex:1;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
       <button id="roster-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:15px;cursor:pointer">Add</button>
