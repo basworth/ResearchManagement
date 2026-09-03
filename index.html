@@ -1554,6 +1554,13 @@ function maybePromptDisplayName() {
         if (other && other.checked) {
           const typed = (document.getElementById("f-alert-email").value || "").trim();
           if (!looksLikeEmail(typed)) { toast("Enter the address you'd like alerts sent to"); return false; }
+          // Refused rather than merely flagged, because this is somebody's first minute in the
+          // app: silently signing them up for notifications that cannot arrive is worse than
+          // one extra tap. They can still pick it from Settings later if they insist.
+          if (domainUndeliverable(typed)) {
+            toast("Mail to " + emailDomain(typed) + " is being quarantined at the moment, so alerts there wouldn't reach you. Use a " + SUGGESTED_DOMAIN + " address, or keep your sign-in address for now.");
+            return false;
+          }
           // Same address as the account, typed out longhand: store nothing, so the preference
           // keeps tracking the account rather than freezing today's spelling of it.
           const sameAsLogin = typed.toLowerCase() === ((currentUser && currentUser.email) || "").toLowerCase();
@@ -4646,6 +4653,37 @@ function renderTeamNotes() {
 }
 
 /* ============ Invites ============ */
+// ---------- Domains our mail doesn't currently reach ----------
+// TEMPORARY, and the whole block should be deleted once sending moves to an authenticated
+// domain. Auth mail goes out from a personal Gmail address wearing the display name
+// "MOR Research Tracker", carrying a sign-in code, telling the reader to type it into a website.
+// That is the exact shape of a credential-phishing email, so Rush University's inbound filter
+// quarantines it — correctly. Supabase reports the send as a success because Gmail accepted the
+// message; it dies silently after that.
+//
+// The evidence, from auth.users on 2026-09-03: rushortho.com 8 of 9 accounts have signed in,
+// gmail.com 4 of 6, rush.edu 1 of 7 — and that one had no code sent to her, so she arrived by
+// another route. No rush.edu recipient has ever used an emailed code.
+//
+// rushortho.com is filtered separately and works, hence the suggestion below.
+const UNDELIVERABLE_DOMAINS = ["rush.edu"];
+const SUGGESTED_DOMAIN = "rushortho.com";
+function emailDomain(e) { return String(e || "").trim().toLowerCase().split("@")[1] || ""; }
+function domainUndeliverable(e) {
+  const d = emailDomain(e);
+  return !!d && UNDELIVERABLE_DOMAINS.indexOf(d) >= 0;
+}
+// The same person's likely working address, offered as a one-tap alternative rather than making
+// them retype it. Returns "" when there's nothing sensible to suggest.
+function suggestedAlternative(e) {
+  const s = String(e || "").trim().toLowerCase();
+  if (!domainUndeliverable(s)) return "";
+  const local = s.split("@")[0];
+  if (!local) return "";
+  // rush.edu uses underscores (hannah_lundberg), rushortho.com uses dots (carla.edwards).
+  return local.replace(/_/g, ".") + "@" + SUGGESTED_DOMAIN;
+}
+
 // Same test the invite function runs before sending, kept here too so the waiting list can say
 // "this is probably Carla" without another round trip. Compares the letters of the local part,
 // ignoring dots, digits and separators: carla.edwards@rush.edu and cedwards@rushortho.com are
@@ -4761,11 +4799,15 @@ async function loadPendingInvites() {
       const hint = hits.length ? `<div style="font-size:12px;color:var(--blue);margin-top:3px;line-height:1.4">
           Probably ${hits.map(h => esc(h.name || h.email)).join(" or ")}, who already signed in as ${hits.map(h => esc(h.email)).join(" / ")} — so this invite is likely a spare you can delete.
         </div>` : "";
+      // Explains a whole cluster of stuck invites at once: they were never going to arrive.
+      const undeliverable = domainUndeliverable(u.email) ? `<div style="font-size:12px;color:var(--red);margin-top:3px;line-height:1.4">
+          Mail to ${esc(emailDomain(u.email))} is being quarantined, so resending won't help — invite them at ${esc(SUGGESTED_DOMAIN)} instead.
+        </div>` : "";
       return `<div class="task-row" style="padding:9px 0;gap:8px;align-items:flex-start">
         <div style="flex:1;min-width:0">
           <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis">${esc(u.email)}</div>
           <div style="font-size:12px;color:${days !== null && days >= 14 ? "var(--orange)" : "var(--text2)"}">${esc(age)}${codeStale ? " · their code has expired" : " · code still valid"}</div>
-          ${hint}
+          ${hint}${undeliverable}
         </div>
         <button class="mini-btn" data-resend="${esc(u.email)}" style="margin-top:0;flex:0 0 auto">Resend</button>
         <button class="mini-btn" data-invite-del="${esc(u.email)}" style="margin-top:0;flex:0 0 auto;color:var(--red)">Delete</button>
@@ -5039,9 +5081,15 @@ function renderSettings() {
     // Blank it when it matches the sign-in address, so the preference keeps following the account.
     upsertProfile(null, { alertEmail: sameAsLogin ? "" : typed, alertEmailAsked: true });
     render();
-    toast(typed && !sameAsLogin
-      ? "Alerts will go to " + typed + " — clear the box in Settings to switch back"
-      : "Alerts will go to your sign-in address");
+    // ONE toast, chosen — not a warning followed by a cheerful confirmation that overwrites it.
+    // Saved either way, because it's their address to choose, but the warning has to be the
+    // thing they actually see: alerts sent there vanish with no sign of failure.
+    toast(
+      typed && !sameAsLogin && domainUndeliverable(typed)
+        ? "Saved — but mail to " + emailDomain(typed) + " is being quarantined, so alerts there won't arrive. A " + SUGGESTED_DOMAIN + " address does work."
+        : typed && !sameAsLogin
+          ? "Alerts will go to " + typed + " — clear the box in Settings to switch back"
+          : "Alerts will go to your sign-in address");
   };
   document.getElementById("sign-out-btn").onclick = async () => {
     if (!confirm("Sign out of Team Sync on this device?")) return;
@@ -5196,9 +5244,27 @@ function renderSettings() {
     const email = (input.value || "").trim();
     if (!email) { say("Enter an email address first.", "var(--red)"); return; }
     if (!sb) { say("Not connected — try again in a moment.", "var(--red)"); return; }
-    inviteBtn.disabled = true; inviteBtn.textContent = "Sending…"; say("", "");
+    // Checked here, before spending a round trip: mail to some domains is being silently
+    // quarantined, and "sent successfully" would be a lie for those.
+    if (domainUndeliverable(email)) {
+      say("", "");
+      warnUndeliverableInvite(email, say, input);
+      return;
+    }
+    doSendInvite(email, {}, say, input);
+  };
+  // Split out so the two pre-send questions — "that domain doesn't receive our mail" and "this
+  // looks like somebody already here" — can each hand off to the same sender rather than
+  // duplicating it.
+  // `opts.expectFiltered` reshapes the success message rather than adding a second toast after
+  // it. An earlier version toasted the warning and then let the normal "Invite sent" overwrite
+  // it a moment later, so the caution was never actually readable.
+  async function doSendInvite(email, extra, say, input, opts) {
+    const expectFiltered = !!(opts && opts.expectFiltered);
+    const btn = document.getElementById("invite-send");
+    if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
     try {
-      const out = await callInviteFn({ email });
+      const out = await callInviteFn(Object.assign({ email }, extra || {}));
       // The server spotted an address that looks like somebody already here. Show who, and let
       // Adam decide — two real people genuinely can be a.smith and asmith, so this asks rather
       // than refuses.
@@ -5207,15 +5273,53 @@ function renderSettings() {
         confirmDuplicateInvite(email, out.similar || [], say, input);
         return;
       }
-      say(out.message || "Invite sent.", out.alreadyActive ? "var(--orange)" : "var(--green)");
-      if (out.ok) { input.value = ""; loadPendingInvites(); }
-      toast(out.message || "Invite sent");
+      const filteredNote = "Sent to " + email + " — but expect it to be filtered, so check with them directly.";
+      say(expectFiltered && out.ok ? filteredNote : (out.message || "Invite sent."),
+        expectFiltered && out.ok ? "var(--orange)" : (out.alreadyActive ? "var(--orange)" : "var(--green)"));
+      if (out.ok) { if (input) input.value = ""; loadPendingInvites(); }
+      toast(expectFiltered && out.ok ? filteredNote : (out.message || "Invite sent"));
     } catch (e) {
       say(e.message || "Could not send the invite.", "var(--red)");
     } finally {
-      inviteBtn.disabled = false; inviteBtn.textContent = "Invite";
+      const b = document.getElementById("invite-send");
+      if (b) { b.disabled = false; b.textContent = "Invite"; }
     }
-  };
+  }
+  // Not a refusal — he may have no other address for the person, and Rush's filtering could be
+  // fixed or inconsistent. It states what's known and offers the address that does work.
+  function warnUndeliverableInvite(email, say, input) {
+    const alt = suggestedAlternative(email);
+    openSheet("That address won't receive it", `
+      <div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">
+        Mail to <b>${esc(emailDomain(email))}</b> isn't getting through at the moment.
+      </div>
+      <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+        Invites send from a Gmail address, and Rush University's mail security quarantines a
+        message from an outside Gmail account that carries a sign-in code — it looks like
+        phishing to them. Of the seven ${esc(emailDomain(email))} people invited so far, none has
+        ever received a code. It's being filed as junk after Gmail accepts it, so the app has no
+        way to know and will still tell you it sent.
+      </div>
+      ${alt ? `<div class="fgroup">
+        <div class="frow"><label>Try instead</label><input id="f-invite-alt" type="email" value="${esc(alt)}"></div>
+      </div>
+      <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+        ${esc(SUGGESTED_DOMAIN)} is filtered separately and does arrive — 43 reminders have reached those addresses without trouble. Correct the guess above if it's wrong, or clear the box to send to the original address anyway.
+      </div>` : ""}`,
+      () => {
+        const altEl = document.getElementById("f-invite-alt");
+        const typed = altEl ? (altEl.value || "").trim() : "";
+        if (typed) {
+          if (!looksLikeEmail(typed)) { toast("That doesn't look like an email address"); return false; }
+          if (input) input.value = typed;
+          doSendInvite(typed, {}, say, input);
+        } else {
+          // Sending to the original anyway is a legitimate choice, so the confirmation itself
+          // says it probably won't land rather than reporting a cheerful success.
+          doSendInvite(email, {}, say, input, { expectFiltered: true });
+        }
+      }, null, { saveLabel: "Send" });
+  }
   loadPendingInvites();
   $main.querySelectorAll("[data-unlink]").forEach(b => b.onclick = () => {
     const sp = profileFor(b.dataset.unlink);
