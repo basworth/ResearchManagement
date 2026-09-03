@@ -1655,7 +1655,41 @@ async function pushItem(kind, obj, rowIdOverride) {
     remoteMeta[rowId] = { kind, updated_at: updatedAt };
     if (editingRef && editingRef.id === rowId) editingRef.baseline = updatedAt;
     setSyncPill(true, realtimeConfirmed ? "Live" : "Synced");
-  } catch (e) { console.warn("push failed", e); setSyncPill(false, "Offline"); }
+  } catch (e) {
+    console.warn("push failed", e);
+    // Two very different failures used to look identical here, and that cost nine days.
+    //
+    // A dropped connection is temporary: the pill goes Offline, the reconnect logic retries, and
+    // saying anything more would be noise. A refusal from the database — a policy, a trigger, a
+    // constraint — will NEVER succeed, no matter how many times it retries. Reporting that as
+    // "Offline" is actively misleading: the app looks like it saved, the pill blames the network,
+    // and the write is simply gone. That is exactly how a broken profile guard silently discarded
+    // every admin's own settings from 2026-08-25 until it was noticed on 2026-09-03.
+    if (isServerRefusal(e)) {
+      setSyncPill(true, "Synced");   // the connection is fine; this one write was rejected
+      toast("That didn't save — " + refusalReason(e));
+    } else {
+      setSyncPill(false, "Offline");
+    }
+  }
+}
+// A refusal carries structured detail from Postgres (code/details/hint). A network failure is a
+// bare TypeError, or one of our own timeouts. Anything ambiguous is treated as a network problem,
+// because wrongly nagging about a blip is worse than staying quiet.
+function isServerRefusal(e) {
+  if (!e) return false;
+  const msg = String(e.message || "");
+  if (/failed to fetch|networkerror|load failed|timed out|timeout|aborted/i.test(msg)) return false;
+  return !!(e.code || e.details || e.hint);
+}
+function refusalReason(e) {
+  const msg = String((e && e.message) || "");
+  if (/Only an admin can change someone else/i.test(msg)) return "only admins can edit someone else's details.";
+  if (/Admin rights are granted by request/i.test(msg)) return "the database blocked a change to admin rights. If you were only editing your own details, tell Adam — that's a bug, not a rule.";
+  if (/Cannot remove the last admin/i.test(msg)) return "there'd be no admins left. Make someone else an admin first.";
+  if (/row-level security|permission denied/i.test(msg)) return "you don't have permission to change that.";
+  if (/duplicate key|unique constraint/i.test(msg)) return "something with that name or id already exists.";
+  return msg || "the server refused the change.";
 }
 async function deleteRemote(id) {
   delete remoteMeta[id];
