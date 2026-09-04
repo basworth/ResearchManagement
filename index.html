@@ -5718,6 +5718,88 @@ function openStudyForm(existing, onCreated) {
   };
 }
 
+// ---------- Who to offer when assigning a task ----------
+// The old field was one text box with a datalist, which autocompleted the first name and then
+// gave up: after "Adam Yanke, " the browser tries to match the whole string. So in practice
+// second and third assignees were typed by hand, and a typo meant that person was silently not
+// assigned and got no email. This turns it into taps.
+//
+// Order is the whole point. People on the study come first because they're who you almost always
+// mean. Then YOUR OWN admins — Adam's words: "they help manage any study I am part of" — who must
+// be offered even when they aren't named on the study. Everyone else follows.
+//
+// "Your own" is the operative part, and it's narrower than "is an admin". It means someone who is
+// an admin AND whose reporting line in the org chart points at you: Adam's research assistants
+// help across everything he's on, but another PI's admin isn't his to assign work to. Read from
+// the chart rather than the shipped ADMIN_NAMES list, because only the chart knows who reports to
+// whom — and that means changing a reporting line updates this on its own.
+// Canonicalise, drop blanks, de-duplicate case-insensitively. Deliberately its own helper: the
+// `uniq` in the merge tool is a local const inside that function, not something callable here.
+function uniqNames(arr) {
+  const seen = new Set();
+  const out = [];
+  (arr || []).map(n => canonName(n)).filter(Boolean).forEach(n => {
+    const k = n.toLowerCase();
+    if (!seen.has(k)) { seen.add(k); out.push(n); }
+  });
+  return out;
+}
+function adminsReportingToMe() {
+  if (!currentUser) return [];
+  // Via the primary, so this still resolves for someone signed in on a linked second account.
+  const mine = primaryProfileFor(currentUser.id);
+  if (!mine) return [];
+  return uniqNames(activeProfiles()
+    .filter(p => p.admin && p.name && p.id !== mine.id && (p.reportsTo || "") === mine.id)
+    .map(p => p.name));
+}
+function assigneeGroupsFor(studyId, picked) {
+  const seen = new Set();
+  // First group to claim a name keeps it, so nobody appears twice.
+  const take = (names) => {
+    const out = [];
+    (names || []).map(n => canonName(n)).filter(Boolean).forEach(n => {
+      const k = n.toLowerCase();
+      if (seen.has(k)) return;
+      seen.add(k);
+      out.push(n);
+    });
+    return out;
+  };
+  const s = studyId ? studyById(studyId) : null;
+  const onStudy = take(s ? namesFromField(s.pi).concat(namesFromField(s.team)) : []);
+  const admins = take(adminsReportingToMe());
+  const others = take(state.roster);
+  // Anyone already on the task who isn't on the roster at all — kept visible and ticked, so
+  // editing a task can't quietly drop an assignee just because they were typed in freehand.
+  //
+  // Usually empty, and that's fine: migrate() folds every task assignee into state.roster on
+  // load, so a freehand name is normally already in "everyone else" by the time you reopen the
+  // task. This is the backstop for the window before that happens (a realtime update arriving
+  // mid-session, say). The invariant it protects — an existing assignee is ALWAYS shown and
+  // ticked — is what stops a save from silently unassigning someone.
+  const offRoster = take(picked);
+  return { onStudy, admins, others, offRoster };
+}
+function assigneePickerHTML(studyId, picked) {
+  const g = assigneeGroupsFor(studyId, picked);
+  const isPicked = (n) => (picked || []).some(p => canonName(p).toLowerCase() === n.toLowerCase());
+  const row = (n) => `
+    <div class="frow assignee-row" style="gap:12px;cursor:pointer;border-bottom:none;padding:5px 0">
+      <input type="checkbox" class="f-tassignee-pick" data-name="${esc(n)}" ${isPicked(n) ? "checked" : ""} style="flex:0;width:20px;height:20px">
+      <span style="flex:1;font-size:15px">${esc(n)}</span>
+    </div>`;
+  const group = (label, names) => names.length ? `
+    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:10px 2px 2px 2px">${esc(label)}</div>
+    ${names.map(row).join("")}` : "";
+  const anyone = g.onStudy.length + g.admins.length + g.others.length + g.offRoster.length;
+  if (!anyone) return `<div style="color:var(--text2);font-size:14px;padding:4px 0">No team members yet — add them in Settings, or type a name below.</div>`;
+  return group("ON THIS STUDY", g.onStudy)
+    + group("MY ADMINS — HELP ON ANY STUDY", g.admins)
+    + group("EVERYONE ELSE", g.others)
+    + group("ALREADY ON THIS TASK", g.offRoster);
+}
+
 function openTaskForm(existing, presetStudyId) {
   if (blockOfflineEdit(existing ? "Editing a task" : "Adding a task")) return;
   const t = existing || { id: uid(), title: "", studyId: presetStudyId || "", due: "", assignees: [], notes: "", done: false };
@@ -5729,7 +5811,12 @@ function openTaskForm(existing, presetStudyId) {
       <div class="frow"><label>Task</label><input id="f-ttitle" placeholder="What needs doing?" value="${esc(t.title)}"></div>
       <div class="frow"><label>Study</label><select id="f-tstudy">${studyOpts}</select></div>
       <div class="frow"><label>Due</label><input id="f-tdue" type="date" value="${esc(t.due || "")}"></div>
-      <div class="frow"><label>Assignees</label><input id="f-tassignee" list="dl-people" placeholder="Who's on it? (comma-separate for more than one)" value="${esc((t.assignees || []).join(", "))}"></div>
+    </div>
+    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:14px 4px 0 4px">ASSIGNEES</div>
+    <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin:2px 4px 6px 4px">Tap everyone who's on it — more than one is fine. Each person gets their own email.</div>
+    <div class="fgroup" id="f-tassignee-box" style="padding:4px 12px"></div>
+    <div class="fgroup">
+      <div class="frow"><label>Someone else</label><input id="f-tassignee-other" list="dl-people" placeholder="Not on the list? Type a name" value=""></div>
     </div>
     <datalist id="dl-people">${state.roster.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
     <div class="fgroup">
@@ -5748,12 +5835,45 @@ function openTaskForm(existing, presetStudyId) {
         title,
         studyId: document.getElementById("f-tstudy").value,
         due: document.getElementById("f-tdue").value,
-        assignees: document.getElementById("f-tassignee").value.split(",").map(a => a.trim()).filter(Boolean),
+        assignees: collectAssignees(),
         notes: document.getElementById("f-tnotes").value.trim()
       });
       upsertTask(t);
-      toast(existing ? "Task updated" : "Task added");
+      const n = (t.assignees || []).length;
+      // Says who, because a mis-tap that assigns the wrong person is easy and otherwise silent —
+      // and because these names drive who gets emailed.
+      toast((existing ? "Task updated" : "Task added")
+        + (n ? " — " + (n <= 3 ? t.assignees.join(", ") : n + " people") + " assigned" : " — nobody assigned yet"));
+    },
+    // afterOpen: the picker depends on which study is selected, so it's rendered here and
+    // re-rendered whenever that dropdown changes.
+    () => {
+      renderAssigneePicker();
+      const studySel = document.getElementById("f-tstudy");
+      if (studySel) studySel.addEventListener("change", () => renderAssigneePicker());
     });
+
+  // Ticked boxes plus anything typed in "Someone else", canonicalised and de-duplicated so the
+  // same person can't land in the list twice under two spellings.
+  function collectAssignees() {
+    const ticked = [...document.querySelectorAll(".f-tassignee-pick")]
+      .filter(c => c.checked).map(c => c.dataset.name);
+    const otherEl = document.getElementById("f-tassignee-other");
+    const typed = otherEl ? otherEl.value.split(",").map(x => x.trim()).filter(Boolean) : [];
+    return uniqNames(ticked.concat(typed));
+  }
+  // Redrawing loses the checkboxes, so the current selection is read first and passed back in.
+  // Anything typed into "Someone else" is folded in too, so switching study mid-edit keeps it.
+  function renderAssigneePicker() {
+    const box = document.getElementById("f-tassignee-box");
+    if (!box) return;
+    const already = box.querySelector(".f-tassignee-pick") ? collectAssignees() : (t.assignees || []);
+    const otherEl = document.getElementById("f-tassignee-other");
+    if (otherEl) otherEl.value = "";
+    const studyId = (document.getElementById("f-tstudy") || {}).value || "";
+    box.innerHTML = assigneePickerHTML(studyId, already);
+    bindRowCheckboxes(".assignee-row");
+  }
   const del = document.getElementById("f-tdel");
   if (del) del.onclick = () => { if (blockOfflineEdit("Deleting a task")) return; removeTask(t.id); closeSheet(); toast("Task deleted"); };
   const gotoStudy = document.getElementById("f-tgoto-study");
