@@ -5781,13 +5781,41 @@ function assigneeGroupsFor(studyId, picked) {
   const offRoster = take(picked);
   return { onStudy, admins, others, offRoster };
 }
+// Will assigning this name actually send anybody an email?
+//
+// Deliberately mirrors what task-emails/index.ts really does in loadProfiles(), rather than
+// guessing: it skips linked spares, requires both a name and an email, and matches the assignee
+// string to a profile by canonName. If no profile resolves, the reminder is silently not sent —
+// which is exactly the invisible failure this marker exists to expose. Keep the two in step.
+function accountForAssignee(name) {
+  const key = canonName(name).toLowerCase();
+  if (!key) return null;
+  return activeProfiles().find(p => p.name && p.email && canonName(p.name).toLowerCase() === key) || null;
+}
+// Three outcomes, not two. "Resolves but the domain is being quarantined" is its own case: the
+// app will genuinely send, so claiming a plain green tick would be the kind of confident-but-
+// wrong signal that's worse than no signal at all.
+function assigneeMailState(name) {
+  const p = accountForAssignee(name);
+  if (!p) return { state: "none" };
+  const to = alertEmailFor(p.id);
+  if (!to) return { state: "none" };
+  return { state: domainUndeliverable(to) ? "filtered" : "ok", to };
+}
 function assigneePickerHTML(studyId, picked) {
   const g = assigneeGroupsFor(studyId, picked);
   const isPicked = (n) => (picked || []).some(p => canonName(p).toLowerCase() === n.toLowerCase());
+  const mark = (n) => {
+    const m = assigneeMailState(n);
+    if (m.state === "ok") return `<span class="asg-mail" data-state="ok" title="Has a login — a task email goes to ${esc(m.to)}" style="flex:0 0 auto;color:var(--green);font-weight:800;font-size:15px">✓</span>`;
+    if (m.state === "filtered") return `<span class="asg-mail" data-state="filtered" title="Has a login, but mail to ${esc(emailDomain(m.to))} is being quarantined — they may not receive it" style="flex:0 0 auto;color:var(--orange);font-weight:800;font-size:14px">✓!</span>`;
+    return `<span class="asg-mail" data-state="none" title="No account yet — they can be assigned, but no email will be sent" style="flex:0 0 auto;color:var(--text2);font-size:11px">no login</span>`;
+  };
   const row = (n) => `
-    <div class="frow assignee-row" style="gap:12px;cursor:pointer;border-bottom:none;padding:5px 0">
+    <div class="frow assignee-row" style="gap:10px;cursor:pointer;border-bottom:none;padding:5px 0">
       <input type="checkbox" class="f-tassignee-pick" data-name="${esc(n)}" ${isPicked(n) ? "checked" : ""} style="flex:0;width:20px;height:20px">
-      <span style="flex:1;font-size:15px">${esc(n)}</span>
+      <span style="flex:1;min-width:0;font-size:15px">${esc(n)}</span>
+      ${mark(n)}
     </div>`;
   const group = (label, names) => names.length ? `
     <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:10px 2px 2px 2px">${esc(label)}</div>
@@ -5813,7 +5841,11 @@ function openTaskForm(existing, presetStudyId) {
       <div class="frow"><label>Due</label><input id="f-tdue" type="date" value="${esc(t.due || "")}"></div>
     </div>
     <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:14px 4px 0 4px">ASSIGNEES</div>
-    <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin:2px 4px 6px 4px">Tap everyone who's on it — more than one is fine. Each person gets their own email.</div>
+    <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin:2px 4px 6px 4px">
+      Tap everyone who's on it — more than one is fine.
+      A green <b style="color:var(--green)">✓</b> means they have a login and will be emailed.
+      <b style="color:var(--text2)">no login</b> means they can still be assigned, but nobody gets a message.
+    </div>
     <div class="fgroup" id="f-tassignee-box" style="padding:4px 12px"></div>
     <div class="fgroup">
       <div class="frow"><label>Someone else</label><input id="f-tassignee-other" list="dl-people" placeholder="Not on the list? Type a name" value=""></div>
@@ -5841,9 +5873,16 @@ function openTaskForm(existing, presetStudyId) {
       upsertTask(t);
       const n = (t.assignees || []).length;
       // Says who, because a mis-tap that assigns the wrong person is easy and otherwise silent —
-      // and because these names drive who gets emailed.
+      // and because these names drive who gets emailed. Anyone without a login is named
+      // explicitly: assigning them works, but they'll never hear about it, and finding that out
+      // now beats wondering next week why nothing happened.
+      const silent = (t.assignees || []).filter(a => assigneeMailState(a).state === "none");
       toast((existing ? "Task updated" : "Task added")
-        + (n ? " — " + (n <= 3 ? t.assignees.join(", ") : n + " people") + " assigned" : " — nobody assigned yet"));
+        + (n ? " — " + (n <= 3 ? t.assignees.join(", ") : n + " people") + " assigned" : " — nobody assigned yet")
+        + (silent.length
+            ? ". No email for " + (silent.length <= 2 ? silent.join(" or ") : silent.length + " of them")
+              + " — no login yet, so tell them directly."
+            : ""));
     },
     // afterOpen: the picker depends on which study is selected, so it's rendered here and
     // re-rendered whenever that dropdown changes.
