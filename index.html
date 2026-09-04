@@ -3383,15 +3383,72 @@ function meetingRowHTML(m) {
 }
 
 function linkFieldRow(label, id, value) {
+  // Open stays a real anchor rather than becoming a menu item: one tap, and the browser's own
+  // long-press / middle-click / open-in-new-window behaviours keep working. Copy sits beside it
+  // because these are Google Docs and SharePoint links, and the browser you're holding is often
+  // signed into the wrong account — pasting into another browser or profile is the fix, and
+  // selecting a long URL out of a text box on a phone is miserable.
   return `
   <div class="milestone-row" style="gap:8px;align-items:flex-end">
     <div style="flex:1;min-width:0">
       <div style="font-size:12px;color:var(--text2);font-weight:600;margin-bottom:4px">${esc(label)}</div>
       <input id="${id}" placeholder="Paste link…" value="${esc(value || "")}" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14.5px;font-family:inherit;color:var(--text);outline:none">
     </div>
-    ${value ? `<a href="${esc(value)}" target="_blank" rel="noopener" style="flex:none;color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:9px 2px">Open ↗</a>` : ""}
+    ${value ? `
+    <a href="${esc(value)}" target="_blank" rel="noopener" style="flex:none;color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:9px 2px">Open ↗</a>
+    <button type="button" data-copy-link="${esc(value)}" data-copy-label="${esc(label)}" style="flex:none;border:none;background:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:9px 2px">Copy</button>` : ""}
   </div>`;
 }
+// Clipboard, with a fallback that matters here. navigator.clipboard needs a secure context and
+// a user gesture; it's absent when the page is opened as a local file and can reject on older
+// iOS. The textarea + execCommand path is deprecated but still works in exactly those cases, so
+// it's the fallback rather than the primary. Returns true only if something actually copied —
+// claiming success on a silent failure is worse than saying it didn't work.
+async function copyToClipboard(text) {
+  const s = String(text == null ? "" : text);
+  if (!s) return false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(s);
+      return true;
+    }
+  } catch (e) { /* fall through to the legacy path */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = s;
+    // Kept on-screen but invisible: iOS Safari refuses to copy from a display:none element.
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
+    document.body.appendChild(ta);
+    // focus() before select(): execCommand("copy") takes the selection of the FOCUSED element,
+    // and select() alone doesn't reliably move focus. Without this the copy silently no-ops.
+    ta.focus();
+    ta.select();
+    ta.setSelectionRange(0, s.length);
+    const ok = document.execCommand && document.execCommand("copy");
+    ta.remove();
+    return !!ok;
+  } catch (e) { return false; }
+}
+// Wired once, at the document level, so every link row gets it — including the ones inside
+// sheets, and any added later — without each caller having to remember.
+document.addEventListener("click", async (ev) => {
+  const btn = ev.target && ev.target.closest && ev.target.closest("[data-copy-link]");
+  if (!btn) return;
+  ev.preventDefault();
+  const url = btn.dataset.copyLink;
+  const label = btn.dataset.copyLabel || "Link";
+  const ok = await copyToClipboard(url);
+  if (ok) {
+    toast(label + " link copied — paste it into whichever browser you're signed into");
+  } else {
+    // Can't copy: select it in the field instead, so it's one keystroke away rather than a
+    // dead end. Better than a toast that only says "sorry".
+    const input = btn.parentElement && btn.parentElement.querySelector("input");
+    if (input) { try { input.focus(); input.select(); } catch (e) {} }
+    toast("Couldn't reach the clipboard — the link is selected, so copy it with ⌘C / long-press");
+  }
+});
 function authorsBodyHTML(s) {
   const authors = authorsFor(s);
   const custom = Array.isArray(s.authors) && s.authors.length;
@@ -3630,7 +3687,8 @@ function renderStudyDetail() {
           <div style="font-size:14.5px;font-weight:600">${esc(n.label || "Meeting Notes")}</div>
           ${n.date ? `<div style="font-size:12px;color:var(--text2)">${fmtDate(n.date)}</div>` : ""}
         </div>
-        ${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:8px 4px">Open ↗</a>` : ""}
+        ${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:8px 4px">Open ↗</a>
+        <button type="button" data-copy-link="${esc(n.link)}" data-copy-label="Meeting notes" style="border:none;background:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:8px 4px">Copy</button>` : ""}
         <button data-mnote-del="${n.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
       </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No meeting notes linked yet. Add one every time this study comes up in a meeting.</div>`}
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
@@ -4622,7 +4680,8 @@ function renderTeamNotes() {
           <div style="font-size:14.5px;font-weight:600">${esc(n.label || "Meeting Notes")}</div>
           ${n.date ? `<div style="font-size:12px;color:var(--text2)">${fmtDate(n.date)}</div>` : ""}
         </div>
-        ${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:8px 4px">Open ↗</a>` : ""}
+        ${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:8px 4px">Open ↗</a>
+        <button type="button" data-copy-link="${esc(n.link)}" data-copy-label="Meeting notes" style="border:none;background:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:8px 4px">Copy</button>` : ""}
         <button data-note-del="${n.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
       </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No meeting notes logged yet.</div>`;
   html += `
