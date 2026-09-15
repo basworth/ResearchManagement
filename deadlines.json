@@ -1,6 +1,6 @@
 {
   "_comment": "Abstract-deadline feed for Research Tracker. The biweekly scheduled task rewrites this file after checking each society. The app fetches it on load and merges any entry whose verifiedOn is newer. 'key' must stay stable so updates match the right meeting. Set unconfirmed=false only when a date is verified from the society's official call for abstracts.",
-  "updatedOn": "2026-09-01",
+  "updatedOn": "2026-09-15",
   "removedKeys": [
     "ICRS|8th ICRS Summit (Porto)"
   ],
@@ -126,13 +126,14 @@
     {
       "key": "ICRS|19th World Congress",
       "society": "ICRS",
+      "type": "abstract",
       "name": "19th World Congress",
-      "deadline": "",
-      "dates": "May 1\u20133, 2027, Rotterdam; registration now open; abstract call not yet open (more details to follow)",
+      "deadline": "2026-10-15",
+      "dates": "May 1\u20133, 2027, Rotterdam. Abstracts open online Aug 15, 2026 through Oct 15, 2026 at midnight CEST \u2014 the ICRS site states this deadline will NOT be extended. Notifications sent early Jan 2027. 300-word limit, up to 2 figures/tables; ethics approval required for experimental clinical/animal studies. Full details at cartilage.org/icrs2027/call-for-abstracts/.",
       "location": "Rotterdam, NL",
-      "link": "https://cartilage.org/events/19worldcongress/",
+      "link": "https://cartilage.org/icrs2027/important-dates-deadlines/",
       "unconfirmed": false,
-      "verifiedOn": "2026-09-01T10:30"
+      "verifiedOn": "2026-09-15T13:30"
     },
     {
       "key": "AOSSM|2026 Annual Meeting",
