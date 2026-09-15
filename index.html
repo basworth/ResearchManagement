@@ -2191,6 +2191,13 @@ function studyInvolvesPerson(s, name) {
     return A === n || canonName(a).toLowerCase() === canon;
   }));
 }
+// True if `name` is PI/team/assignee on at least one study in `scope`. Some roles (e.g. a
+// coordinator or manager) are never individually named on any study, so for them "Mine" would
+// be a permanently empty, confusing list -- callers use this to fall back to showing everything
+// instead, without changing behavior for anyone who genuinely does have studies of their own.
+function hasStudyFootprint(scope, name) {
+  return scope.some(s => studyInvolvesPerson(s, name));
+}
 // Free-text search across the fields someone would actually search by: title, nickname,
 // PI, IRB/ORA number, and the free-text team field. Used by both the Studies list and the
 // Worklist search boxes.
@@ -2759,7 +2766,7 @@ function renderStudies() {
   // the status/phase/design filters below, so their counts reflect the selected person.
   // Start from what this person is allowed to see at all, then apply the Who filter on top.
   let base = visibleStudies();
-  if (personFilter === "mine") { if (myName) base = base.filter(s => studyInvolvesPerson(s, myName)); }
+  if (personFilter === "mine") { if (myName && hasStudyFootprint(base, myName)) base = base.filter(s => studyInvolvesPerson(s, myName)); }
   else if (personFilter !== "all") base = base.filter(s => studyInvolvesPerson(s, personFilter));
   if (studyFilter === "Active") base = base.filter(isActive);
   else if (studyFilter !== "All") base = base.filter(s => s.phase === studyFilter);
@@ -4317,7 +4324,7 @@ function renderWorkingList() {
   $title.textContent = "Working Study List";
   let studies = visibleStudies();
   const wlMyName = me();
-  if (worklistPerson === "mine") { if (wlMyName) studies = studies.filter(s => studyInvolvesPerson(s, wlMyName)); }
+  if (worklistPerson === "mine") { if (wlMyName && hasStudyFootprint(studies, wlMyName)) studies = studies.filter(s => studyInvolvesPerson(s, wlMyName)); }
   else if (worklistPerson !== "all") studies = studies.filter(s => studyInvolvesPerson(s, worklistPerson));
   // "Going off" implies active — a Published study can't be neglected, it's finished.
   if (worklistStatus !== "all") studies = studies.filter(isActive);
