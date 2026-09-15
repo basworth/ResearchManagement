@@ -2129,13 +2129,16 @@ function namesFromField(v) {
 // shared table, so treat it as "keeps people focused on their own work", not as a security
 // boundary against a determined user.
 const ADMIN_NAMES = ["Adam Yanke", "William Lee", "Thomas Turinske"];
-// Two sources of truth, deliberately: the hardcoded list is what ships, and the org chart's
-// per-person admin ticks only take over once state.orgPermissions is switched on in Settings.
-// That way the chart can be filled in and reviewed without changing anyone's access.
+// Two sources of truth: the hardcoded list is a break-glass fallback, and a person's own
+// profile.admin flag is authoritative the moment it's set, independent of state.orgPermissions.
+// That flag can ONLY be changed via the audited request/approve flow or the service role (see
+// admin-rights-setup.sql) -- it is no longer editable from the org chart -- so there is nothing
+// left for orgPermissions to gate here. orgPermissions still separately controls the "managers
+// see their reports' studies" feature below (namesIManage/visibleStudies), which is unrelated.
 function isAdmin() {
-  if (state.orgPermissions && currentUser) {
+  if (currentUser) {
     const p = profileFor(currentUser.id);
-    if (p) return !!p.admin;
+    if (p && p.admin) return true;
   }
   return ADMIN_NAMES.includes(canonName(me()));
 }
