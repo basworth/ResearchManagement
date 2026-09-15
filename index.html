@@ -3293,9 +3293,9 @@ const PHASE_SECTIONS = {
   "Experiments":        ["workingDocs", "notes", "tasks", "milestones"],
   "Analysis":           ["workingDocs", "authors", "notes", "tasks", "milestones"],
   "Manuscript":         ["docs", "authors", "workingDocs", "abstracts", "notes", "tasks"],
-  "Submitted":          ["docs", "authors", "abstracts", "notes", "tasks"],
-  "Revisions Required": ["revisionDocs", "docs", "authors", "notes", "tasks"],
-  "Published":          ["docs", "abstracts", "authors", "notes"],
+  "Submitted":          ["docs", "authors", "abstracts", "manuscript", "notes", "tasks"],
+  "Revisions Required": ["revisionDocs", "manuscript", "docs", "authors", "notes", "tasks"],
+  "Published":          ["docs", "abstracts", "manuscript", "authors", "notes"],
   "On Hold":            ["notes", "tasks"]
 };
 function sectionsForPhase(phase) { return PHASE_SECTIONS[phase] || PHASE_SECTIONS["Concept"]; }
@@ -3398,6 +3398,34 @@ function linkFieldRow(label, id, value) {
     <a href="${esc(value)}" target="_blank" rel="noopener" style="flex:none;color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:9px 2px">Open ↗</a>
     <button type="button" data-copy-link="${esc(value)}" data-copy-label="${esc(label)}" style="flex:none;border:none;background:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:9px 2px">Copy</button>` : ""}
   </div>`;
+}
+// Plain label+input row for the study detail page, styled like linkFieldRow but for a text/date
+// value rather than a link (no Open/Copy affordances).
+function plainFieldRow(label, id, value, opts) {
+  opts = opts || {};
+  const listAttr = opts.list ? ` list="${esc(opts.list)}"` : "";
+  return `
+  <div class="milestone-row" style="gap:8px;align-items:flex-end">
+    <div style="flex:1;min-width:0">
+      <div style="font-size:12px;color:var(--text2);font-weight:600;margin-bottom:4px">${esc(label)}</div>
+      <input id="${id}" type="${opts.type || "text"}"${listAttr} placeholder="${esc(opts.placeholder || "")}" value="${esc(value || "")}" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14.5px;font-family:inherit;color:var(--text);outline:none">
+    </div>
+  </div>`;
+}
+// Manuscript submission tracking -- which journal, when, and its status through review. Lives
+// on the study page next to Abstract Submissions (both are day-to-day progress, not structural
+// study setup) instead of the Edit Study sheet, at Adam's explicit request (2026-09-15): "day to
+// day tracking and updates" should not require opening Edit Study.
+function manuscriptBodyHTML(s) {
+  return `
+    ${plainFieldRow("Journal", "ms-journal", s.journal, { list: "dl-journals-ms", placeholder: "e.g. AJSM, Arthroscopy" })}
+    <datalist id="dl-journals-ms">${JOURNALS.map(j => `<option value="${esc(j)}">`).join("")}</datalist>
+    ${plainFieldRow("Submitted on", "ms-submitted-date", s.submittedDate, { type: "date" })}
+    ${plainFieldRow("Tracking ID", "ms-tracking-id", s.journalTrackingId, { placeholder: "Journal manuscript ID (e.g. AJSM-26-1234)" })}
+    ${plainFieldRow("Revisions received", "ms-revisions-received", s.revisionsReceivedDate, { type: "date" })}
+    ${plainFieldRow("Revisions due", "ms-revisions-deadline", s.revisionsDeadline, { type: "date" })}
+    <div style="font-size:12px;color:var(--orange);line-height:1.4;padding:6px 2px 0 2px">⚠︎ Reminder: once a manuscript is submitted, update this study's Title above (in Edit Study) to match the exact title used in the journal's submission system -- the project tracker should mirror the submitted title, not just the IRB title.</div>
+  `;
 }
 // Clipboard, with a fallback that matters here. navigator.clipboard needs a secure context and
 // a user gesture; it's absent when the page is opened as a local file and can reject on older
@@ -3537,6 +3565,16 @@ function bindLinkFieldRow(root, id, s, key) {
     toast(val ? "Link saved" : "Link cleared");
   };
 }
+function bindPlainFieldRow(root, id, s, key) {
+  const el = root.querySelector("#" + id);
+  if (!el) return;
+  el.onchange = (e) => {
+    const val = e.target.value.trim();
+    s[key] = val;
+    upsertStudy(s);
+    toast(val ? "Saved" : "Cleared");
+  };
+}
 
 function renderStudyDetail() {
   const s = studyById(detailStudyId);
@@ -3578,6 +3616,7 @@ function renderStudyDetail() {
     docs: docs.length > 0,
     revisionDocs: revisionDocs.length > 0 || !!s.revisedManuscriptLink || !!s.responseToReviewersLink,
     abstracts: abstracts.length > 0 || linkedAbstractMeetings.length > 0,
+    manuscript: !!(s.journal || s.submittedDate || s.journalTrackingId || s.revisionsReceivedDate || s.revisionsDeadline),
     deadlines: linkedGrantMeetings.length > 0,
     tasks: tasks.length > 0
   };
@@ -3604,6 +3643,7 @@ function renderStudyDetail() {
     docs: docs.length || "",
     revisionDocs: revisionDocs.length || "",
     abstracts: (abstracts.length + linkedAbstractMeetings.length) || "",
+    manuscript: s.journal || "",
     deadlines: linkedGrantMeetings.length || "",
     tasks: tasks.filter(t => !t.done).length || "",
     enrollment: hasContent.enrollment ? (s.enrollCurrent || 0) + "/" + (s.enrollTarget || "?") : "",
@@ -3787,6 +3827,8 @@ function renderStudyDetail() {
       </div>
     </div>
   `, sectionBadge.abstracts)}
+
+  ${collapsibleSection("manuscript", "Manuscript Submission", manuscriptBodyHTML(s), sectionBadge.manuscript)}
 
   ${collapsibleSection("deadlines", "Grant Deadlines", `
     ${linkedGrantMeetings.length ? linkedGrantMeetings.map(meetingRowHTML).join("") : `<div style="color:var(--text2);font-size:14px">No linked grant deadlines.</div>`}
@@ -3994,6 +4036,13 @@ function renderStudyDetail() {
   bindLinkFieldRow($main, "wd-sheet", s, "dataCollectionSheetLink");
   bindLinkFieldRow($main, "wd-process", s, "dataProcessDocLink");
   bindLinkFieldRow($main, "wd-tracking", s, "trackingSheetLink");
+
+  // Manuscript submission tracking (own section, see manuscriptBodyHTML)
+  bindPlainFieldRow($main, "ms-journal", s, "journal");
+  bindPlainFieldRow($main, "ms-submitted-date", s, "submittedDate");
+  bindPlainFieldRow($main, "ms-tracking-id", s, "journalTrackingId");
+  bindPlainFieldRow($main, "ms-revisions-received", s, "revisionsReceivedDate");
+  bindPlainFieldRow($main, "ms-revisions-deadline", s, "revisionsDeadline");
 
   // Study notes. Each handler gates on blockOfflineEdit BEFORE mutating `s` — upsertStudy
   // gates too, but by then the in-memory study would already be dirty with a change that
@@ -5565,8 +5614,6 @@ function openStudyForm(existing, onCreated) {
   const s = existing || { id: uid(), title: "", nickname: "", pi: "", team: "", design: "Prospective (Consented)", phase: "Concept", priority: "Medium", irb: "", irbStatus: "Not Submitted", start: todayStr(), notes: "", journal: "", submittedDate: "", journalTrackingId: "", revisionsReceivedDate: "", revisionsDeadline: "", milestones: [] };
   if (!s.grant) s.grant = { enabled: false, amount: "", source: "", awardDate: "", balance: "", expirationDate: "", balanceUpdatedDate: "" };
   editingRef = existing ? { kind: "study", id: s.id, baseline: remoteMeta[s.id] ? remoteMeta[s.id].updated_at : null } : null;
-  const showJournal = SUBMITTED_PHASES.includes(s.phase);
-  const showRevisions = s.phase === "Revisions Required";
   const g = s.grant;
   openSheet(existing ? "Edit Study" : "New Study", `
     <div class="fgroup">
@@ -5595,17 +5642,9 @@ function openStudyForm(existing, onCreated) {
       <div class="frow"><label>Phase</label>${selectHTML("f-phase", TRACK_PHASES[s.design] || TRACK_PHASES[DESIGNS[0]], s.phase)}</div>
       <div class="frow"><label>Priority</label>${selectHTML("f-priority", PRIORITIES, s.priority)}</div>
     </div>
-    <div class="fgroup" id="journal-row" style="display:${showJournal ? "flex" : "none"};flex-direction:column">
-      <div class="frow"><label>Journal</label><input id="f-journal" list="dl-journals" placeholder="e.g. AJSM, Arthroscopy" value="${esc(s.journal || "")}"></div>
-      <div class="frow"><label>Submitted on</label><input id="f-submitted-date" type="date" value="${esc(s.submittedDate || "")}"></div>
-      <div class="frow"><label>Tracking ID</label><input id="f-tracking-id" placeholder="Journal manuscript ID (e.g. AJSM-26-1234)" value="${esc(s.journalTrackingId || "")}"></div>
-      <div style="font-size:12px;color:var(--orange);line-height:1.4;padding:4px 2px 0 2px">⚠︎ Reminder: once a manuscript is submitted, update this study's Title above to match the exact title used in the journal's submission system — the project tracker should mirror the submitted title, not just the IRB title.</div>
-    </div>
-    <datalist id="dl-journals">${JOURNALS.map(j => `<option value="${esc(j)}">`).join("")}</datalist>
-    <div class="fgroup" id="revisions-row" style="display:${showRevisions ? "flex" : "none"};flex-direction:column">
-      <div class="frow"><label>Revisions received</label><input id="f-revisions-received" type="date" value="${esc(s.revisionsReceivedDate || "")}"></div>
-      <div class="frow"><label>Revisions due</label><input id="f-revisions-deadline" type="date" value="${esc(s.revisionsDeadline || "")}"></div>
-    </div>
+    <!-- Journal / revisions tracking moved to the study page's own "Manuscript Submission"
+         section (manuscriptBodyHTML) -- day-to-day submission status shouldn't require opening
+         Edit Study. See renderStudyDetail(). -->
     <div class="fgroup">
       <div class="frow"><label>ORA / IRB #</label><input id="f-irb" placeholder="Protocol #, Exempt, or N/A" value="${esc(s.irb || "")}"></div>
       <div class="frow"><label>IRB status</label>${selectHTML("f-irbstatus", IRB_STATUSES, s.irbStatus || "Not Submitted")}</div>
@@ -5653,11 +5692,6 @@ function openStudyForm(existing, onCreated) {
         start: document.getElementById("f-start").value,
         // `notes` is deliberately absent: notes now live in s.noteEntries, edited inline in
         // the study page's Notes section. The old blob is left untouched on existing records.
-        journal: document.getElementById("f-journal").value.trim(),
-        submittedDate: document.getElementById("f-submitted-date").value,
-        journalTrackingId: document.getElementById("f-tracking-id").value.trim(),
-        revisionsReceivedDate: document.getElementById("f-revisions-received").value,
-        revisionsDeadline: document.getElementById("f-revisions-deadline").value,
         enrollCurrent: document.getElementById("f-enroll-cur").value.trim(),
         enrollTarget: document.getElementById("f-enroll-tgt").value.trim(),
         grant: {
@@ -5705,14 +5739,7 @@ function openStudyForm(existing, onCreated) {
     const current = phaseSel.value;
     phaseSel.innerHTML = phases.map(p => `<option ${p === current ? "selected" : ""}>${esc(p)}</option>`).join("");
     if (!phases.includes(current)) phaseSel.value = phases[0];
-    togglePhaseRows();
   };
-  const togglePhaseRows = () => {
-    const phase = document.getElementById("f-phase").value;
-    document.getElementById("journal-row").style.display = SUBMITTED_PHASES.includes(phase) ? "flex" : "none";
-    document.getElementById("revisions-row").style.display = phase === "Revisions Required" ? "flex" : "none";
-  };
-  document.getElementById("f-phase").onchange = togglePhaseRows;
   document.getElementById("f-grant-enabled").onchange = (e) => {
     document.getElementById("grant-row").style.display = e.target.checked ? "flex" : "none";
   };
