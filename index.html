@@ -2830,14 +2830,19 @@ function enrollmentBodyHTML(s) {
   const tgt = parseInt(s.enrollTarget, 10);
   const cur = parseInt(s.enrollCurrent, 10);
   const hasAny = s.enrollTarget !== "" || s.enrollCurrent !== "";
-  if (!hasAny) return `<div style="color:var(--text2);font-size:14px">No enrollment numbers yet. Tap Edit Study to add a target and current count.</div>`;
-  const pct = (tgt > 0 && !isNaN(cur)) ? Math.min(100, Math.round(100 * cur / tgt)) : 0;
+  const numAttrs = 'min="0" inputmode="numeric"';
   return `
-    <div style="display:flex;justify-content:space-between;align-items:baseline">
-      <div style="font-size:26px;font-weight:800">${isNaN(cur) ? "—" : cur}<span style="font-size:15px;color:var(--text2);font-weight:600"> / ${isNaN(tgt) ? "—" : tgt}</span></div>
-      <div style="font-size:13px;color:var(--text2);font-weight:600">${tgt > 0 && !isNaN(cur) ? pct + "% of target" : "enrolled / target"}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <div style="flex:1;min-width:110px">${plainFieldRow("Enrolled", "en-current", s.enrollCurrent, { type: "number", attrs: numAttrs, placeholder: "current # enrolled" })}</div>
+      <div style="flex:1;min-width:110px">${plainFieldRow("Target", "en-target", s.enrollTarget, { type: "number", attrs: numAttrs, placeholder: "enrollment goal" })}</div>
     </div>
-    ${tgt > 0 ? `<div class="progressbar" style="margin-top:8px;height:7px"><div style="width:${pct}%;background:${pct >= 100 ? "var(--green)" : "var(--blue)"}"></div></div>` : ""}`;
+    ${hasAny ? `
+    <div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:10px">
+      <div style="font-size:26px;font-weight:800">${isNaN(cur) ? "—" : cur}<span style="font-size:15px;color:var(--text2);font-weight:600"> / ${isNaN(tgt) ? "—" : tgt}</span></div>
+      <div style="font-size:13px;color:var(--text2);font-weight:600">${tgt > 0 && !isNaN(cur) ? pct(tgt, cur) + "% of target" : "enrolled / target"}</div>
+    </div>
+    ${tgt > 0 ? `<div class="progressbar" style="margin-top:8px;height:7px"><div style="width:${pct(tgt, cur)}%;background:${pct(tgt, cur) >= 100 ? "var(--green)" : "var(--blue)"}"></div></div>` : ""}` : ""}`;
+  function pct(t, c) { return (t > 0 && !isNaN(c)) ? Math.min(100, Math.round(100 * c / t)) : 0; }
 }
 function enrollmentHasContent(s) { return s.enrollTarget !== "" || s.enrollCurrent !== ""; }
 
@@ -3207,22 +3212,24 @@ function notesBodyHTML(s, inputStyle) {
 // archived should open collapsed, since that's the whole point of archiving them.
 function notesHasContent(s) { return (s.noteEntries || []).some(n => !n.archivedOn); }
 
+// Inline-editable, like manuscriptBodyHTML -- Adam asked (2026-09-15) that this move out of
+// Edit Study too. No more "enabled" toggle: the section is just always present (collapsed by
+// default when empty, same as every other section) and having ANY field filled in is what makes
+// it count as "grant-funded" -- there's nothing left to separately turn on.
 function grantBodyHTML(s) {
   const g = s.grant || {};
   return `
-    <div class="meta" style="font-size:13.5px;color:var(--text2);line-height:1.7">
-      ${g.amount ? `<b>Amount awarded:</b> ${esc(g.amount)}<br>` : ""}
-      ${g.source ? `<b>Awarded by:</b> ${esc(g.source)}<br>` : ""}
-      ${g.awardDate ? `<b>Date of award:</b> ${fmtDate(g.awardDate)}<br>` : ""}
-      ${g.balance ? `<b>Current balance:</b> ${esc(g.balance)}<br>` : ""}
-      ${g.expirationDate ? `<b>Award expires:</b> ${fmtDate(g.expirationDate)}<br>` : ""}
-      ${g.balanceUpdatedDate ? `<b>Balance last updated:</b> ${fmtDate(g.balanceUpdatedDate)}` : ""}
-    </div>
-    ${!g.amount && !g.source && !g.awardDate && !g.balance && !g.expirationDate && !g.balanceUpdatedDate ? `<div style="color:var(--text2);font-size:14px">No grant details entered yet. Tap Edit Study to add them.</div>` : ""}`;
+    ${plainFieldRow("Amount awarded", "gr-amount", g.amount, { placeholder: "e.g. $25,000" })}
+    ${plainFieldRow("Awarded by", "gr-source", g.source, { list: "dl-grant-sources-gr", placeholder: "e.g. OREF, AOSSM, NIH" })}
+    <datalist id="dl-grant-sources-gr">${GRANT_SOURCES.map(gs => `<option value="${esc(gs)}">`).join("")}</datalist>
+    ${plainFieldRow("Date of award", "gr-award-date", g.awardDate, { type: "date" })}
+    ${plainFieldRow("Current balance", "gr-balance", g.balance, { placeholder: "e.g. $18,200" })}
+    ${plainFieldRow("Expiration date (if applicable)", "gr-expiration", g.expirationDate, { type: "date" })}
+    ${plainFieldRow("Balance last updated", "gr-balance-updated", g.balanceUpdatedDate, { type: "date" })}`;
 }
 function grantHasContent(s) {
   const g = s.grant;
-  return !!(g && g.enabled && (g.amount || g.source || g.awardDate || g.balance || g.expirationDate || g.balanceUpdatedDate));
+  return !!(g && (g.amount || g.source || g.awardDate || g.balance || g.expirationDate || g.balanceUpdatedDate));
 }
 
 // Shows the dated stages (status, submitted, passed) rather than the old tick boxes — the same
@@ -3404,11 +3411,12 @@ function linkFieldRow(label, id, value) {
 function plainFieldRow(label, id, value, opts) {
   opts = opts || {};
   const listAttr = opts.list ? ` list="${esc(opts.list)}"` : "";
+  const extraAttrs = opts.attrs ? ` ${opts.attrs}` : "";
   return `
   <div class="milestone-row" style="gap:8px;align-items:flex-end">
     <div style="flex:1;min-width:0">
       <div style="font-size:12px;color:var(--text2);font-weight:600;margin-bottom:4px">${esc(label)}</div>
-      <input id="${id}" type="${opts.type || "text"}"${listAttr} placeholder="${esc(opts.placeholder || "")}" value="${esc(value || "")}" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14.5px;font-family:inherit;color:var(--text);outline:none">
+      <input id="${id}" type="${opts.type || "text"}"${listAttr}${extraAttrs} placeholder="${esc(opts.placeholder || "")}" value="${esc(value || "")}" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14.5px;font-family:inherit;color:var(--text);outline:none">
     </div>
   </div>`;
 }
@@ -3570,7 +3578,15 @@ function bindPlainFieldRow(root, id, s, key) {
   if (!el) return;
   el.onchange = (e) => {
     const val = e.target.value.trim();
-    s[key] = val;
+    // Supports one level of nesting ("grant.amount") for fields that live on a sub-object,
+    // same idea as the flat case but writing through to s[obj][prop] instead of s[key].
+    if (key.includes(".")) {
+      const [obj, prop] = key.split(".");
+      if (!s[obj]) s[obj] = {};
+      s[obj][prop] = val;
+    } else {
+      s[key] = val;
+    }
     upsertStudy(s);
     toast(val ? "Saved" : "Cleared");
   };
@@ -3703,7 +3719,7 @@ function renderStudyDetail() {
   <button class="btn secondary" id="edit-study-btn">Edit Study</button>
   ${collapsibleSection("notes", "Notes", notesBodyHTML(s, inputStyle), sectionBadge.notes)}
   ${collapsibleSection("enrollment", "Enrollment", enrollmentBodyHTML(s), sectionBadge.enrollment)}
-  ${s.grant && s.grant.enabled ? collapsibleSection("grant", "Grant & Award Funding", grantBodyHTML(s), sectionBadge.grant) : ""}
+  ${collapsibleSection("grant", "Grant & Award Funding", grantBodyHTML(s), sectionBadge.grant)}
   <!-- Kept once there's recorded progress, not just during Initiation: the submitted/passed
        dates are the audit trail of how the study got started, and losing sight of them the
        moment it begins enrolling is exactly the disappearing-data problem. -->
@@ -4043,6 +4059,19 @@ function renderStudyDetail() {
   bindPlainFieldRow($main, "ms-tracking-id", s, "journalTrackingId");
   bindPlainFieldRow($main, "ms-revisions-received", s, "revisionsReceivedDate");
   bindPlainFieldRow($main, "ms-revisions-deadline", s, "revisionsDeadline");
+
+  // Enrollment (own section, see enrollmentBodyHTML)
+  bindPlainFieldRow($main, "en-current", s, "enrollCurrent");
+  bindPlainFieldRow($main, "en-target", s, "enrollTarget");
+
+  // Grant & Award Funding (own section, see grantBodyHTML)
+  if (!s.grant) s.grant = { amount: "", source: "", awardDate: "", balance: "", expirationDate: "", balanceUpdatedDate: "" };
+  bindPlainFieldRow($main, "gr-amount", s, "grant.amount");
+  bindPlainFieldRow($main, "gr-source", s, "grant.source");
+  bindPlainFieldRow($main, "gr-award-date", s, "grant.awardDate");
+  bindPlainFieldRow($main, "gr-balance", s, "grant.balance");
+  bindPlainFieldRow($main, "gr-expiration", s, "grant.expirationDate");
+  bindPlainFieldRow($main, "gr-balance-updated", s, "grant.balanceUpdatedDate");
 
   // Study notes. Each handler gates on blockOfflineEdit BEFORE mutating `s` — upsertStudy
   // gates too, but by then the in-memory study would already be dirty with a change that
@@ -5614,7 +5643,6 @@ function openStudyForm(existing, onCreated) {
   const s = existing || { id: uid(), title: "", nickname: "", pi: "", team: "", design: "Prospective (Consented)", phase: "Concept", priority: "Medium", irb: "", irbStatus: "Not Submitted", start: todayStr(), notes: "", journal: "", submittedDate: "", journalTrackingId: "", revisionsReceivedDate: "", revisionsDeadline: "", milestones: [] };
   if (!s.grant) s.grant = { enabled: false, amount: "", source: "", awardDate: "", balance: "", expirationDate: "", balanceUpdatedDate: "" };
   editingRef = existing ? { kind: "study", id: s.id, baseline: remoteMeta[s.id] ? remoteMeta[s.id].updated_at : null } : null;
-  const g = s.grant;
   openSheet(existing ? "Edit Study" : "New Study", `
     <div class="fgroup">
       <div class="frow"><label>Title</label><input id="f-title" placeholder="IRB study name / title" value="${esc(s.title)}"></div>
@@ -5652,25 +5680,9 @@ function openStudyForm(existing, onCreated) {
       <div class="frow"><label>NCT number</label><input id="f-nct" placeholder="NCT01234567" value="${esc(s.nct || "")}"></div>
       <div class="frow"><label>Start</label><input id="f-start" type="date" value="${esc(s.start || "")}"></div>
     </div>
-    <div class="fgroup">
-      <div class="frow"><label>Enrolled</label><input id="f-enroll-cur" type="number" inputmode="numeric" min="0" placeholder="current # enrolled" value="${esc(s.enrollCurrent === 0 ? "0" : (s.enrollCurrent || ""))}"></div>
-      <div class="frow"><label>Target</label><input id="f-enroll-tgt" type="number" inputmode="numeric" min="0" placeholder="enrollment goal" value="${esc(s.enrollTarget === 0 ? "0" : (s.enrollTarget || ""))}"></div>
-    </div>
-    <div class="fgroup">
-      <div class="frow" style="gap:10px">
-        <input type="checkbox" id="f-grant-enabled" ${g.enabled ? "checked" : ""} style="flex:0;width:20px;height:20px">
-        <label for="f-grant-enabled" style="flex:1">This study has grant / award funding</label>
-      </div>
-      <div id="grant-row" style="display:${g.enabled ? "flex" : "none"};flex-direction:column">
-        <div class="frow"><label>Amount awarded</label><input id="f-grant-amount" placeholder="e.g. $25,000" value="${esc(g.amount || "")}"></div>
-        <div class="frow"><label>Awarded by</label><input id="f-grant-source" list="dl-grant-sources" placeholder="e.g. OREF, AOSSM, NIH" value="${esc(g.source || "")}"></div>
-        <datalist id="dl-grant-sources">${GRANT_SOURCES.map(gs => `<option value="${esc(gs)}">`).join("")}</datalist>
-        <div class="frow"><label>Date of award</label><input id="f-grant-award-date" type="date" value="${esc(g.awardDate || "")}"></div>
-        <div class="frow"><label>Current balance</label><input id="f-grant-balance" placeholder="e.g. $18,200" value="${esc(g.balance || "")}"></div>
-        <div class="frow"><label>Expiration date (if applicable)</label><input id="f-grant-expiration" type="date" value="${esc(g.expirationDate || "")}"></div>
-        <div class="frow"><label>Balance last updated</label><input id="f-grant-balance-updated" type="date" value="${esc(g.balanceUpdatedDate || "")}"></div>
-      </div>
-    </div>`,
+    <!-- Enrollment numbers and Grant & Award Funding both moved to their own inline-editable
+         sections on the study page (enrollmentBodyHTML / grantBodyHTML) -- Adam's day-to-day
+         tracking shouldn't require opening Edit Study. See renderStudyDetail(). -->`,
     () => {
       const title = document.getElementById("f-title").value.trim();
       if (!title) { toast("Title is required"); return false; }
@@ -5692,17 +5704,6 @@ function openStudyForm(existing, onCreated) {
         start: document.getElementById("f-start").value,
         // `notes` is deliberately absent: notes now live in s.noteEntries, edited inline in
         // the study page's Notes section. The old blob is left untouched on existing records.
-        enrollCurrent: document.getElementById("f-enroll-cur").value.trim(),
-        enrollTarget: document.getElementById("f-enroll-tgt").value.trim(),
-        grant: {
-          enabled: document.getElementById("f-grant-enabled").checked,
-          amount: document.getElementById("f-grant-amount").value.trim(),
-          source: document.getElementById("f-grant-source").value.trim(),
-          awardDate: document.getElementById("f-grant-award-date").value,
-          balance: document.getElementById("f-grant-balance").value.trim(),
-          expirationDate: document.getElementById("f-grant-expiration").value,
-          balanceUpdatedDate: document.getElementById("f-grant-balance-updated").value
-        }
       });
       delete s.type;
       upsertStudy(s);
@@ -5739,9 +5740,6 @@ function openStudyForm(existing, onCreated) {
     const current = phaseSel.value;
     phaseSel.innerHTML = phases.map(p => `<option ${p === current ? "selected" : ""}>${esc(p)}</option>`).join("");
     if (!phases.includes(current)) phaseSel.value = phases[0];
-  };
-  document.getElementById("f-grant-enabled").onchange = (e) => {
-    document.getElementById("grant-row").style.display = e.target.checked ? "flex" : "none";
   };
 }
 
