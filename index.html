@@ -2129,13 +2129,16 @@ function namesFromField(v) {
 // shared table, so treat it as "keeps people focused on their own work", not as a security
 // boundary against a determined user.
 const ADMIN_NAMES = ["Adam Yanke", "William Lee", "Thomas Turinske"];
-// Two sources of truth, deliberately: the hardcoded list is what ships, and the org chart's
-// per-person admin ticks only take over once state.orgPermissions is switched on in Settings.
-// That way the chart can be filled in and reviewed without changing anyone's access.
+// Two sources of truth: the hardcoded list is a break-glass fallback, and a person's own
+// profile.admin flag is authoritative the moment it's set, independent of state.orgPermissions.
+// That flag can ONLY be changed via the audited request/approve flow or the service role (see
+// admin-rights-setup.sql) -- it is no longer editable from the org chart -- so there is nothing
+// left for orgPermissions to gate here. orgPermissions still separately controls the "managers
+// see their reports' studies" feature below (namesIManage/visibleStudies), which is unrelated.
 function isAdmin() {
-  if (state.orgPermissions && currentUser) {
+  if (currentUser) {
     const p = profileFor(currentUser.id);
-    if (p) return !!p.admin;
+    if (p && p.admin) return true;
   }
   return ADMIN_NAMES.includes(canonName(me()));
 }
@@ -2187,6 +2190,13 @@ function studyInvolvesPerson(s, name) {
     const A = (a || "").trim().toLowerCase();
     return A === n || canonName(a).toLowerCase() === canon;
   }));
+}
+// True if `name` is PI/team/assignee on at least one study in `scope`. Some roles (e.g. a
+// coordinator or manager) are never individually named on any study, so for them "Mine" would
+// be a permanently empty, confusing list -- callers use this to fall back to showing everything
+// instead, without changing behavior for anyone who genuinely does have studies of their own.
+function hasStudyFootprint(scope, name) {
+  return scope.some(s => studyInvolvesPerson(s, name));
 }
 // Free-text search across the fields someone would actually search by: title, nickname,
 // PI, IRB/ORA number, and the free-text team field. Used by both the Studies list and the
@@ -2756,7 +2766,7 @@ function renderStudies() {
   // the status/phase/design filters below, so their counts reflect the selected person.
   // Start from what this person is allowed to see at all, then apply the Who filter on top.
   let base = visibleStudies();
-  if (personFilter === "mine") { if (myName) base = base.filter(s => studyInvolvesPerson(s, myName)); }
+  if (personFilter === "mine") { if (myName && hasStudyFootprint(base, myName)) base = base.filter(s => studyInvolvesPerson(s, myName)); }
   else if (personFilter !== "all") base = base.filter(s => studyInvolvesPerson(s, personFilter));
   if (studyFilter === "Active") base = base.filter(isActive);
   else if (studyFilter !== "All") base = base.filter(s => s.phase === studyFilter);
@@ -4392,7 +4402,7 @@ function renderWorkingList() {
   $title.textContent = "Working Study List";
   let studies = visibleStudies();
   const wlMyName = me();
-  if (worklistPerson === "mine") { if (wlMyName) studies = studies.filter(s => studyInvolvesPerson(s, wlMyName)); }
+  if (worklistPerson === "mine") { if (wlMyName && hasStudyFootprint(studies, wlMyName)) studies = studies.filter(s => studyInvolvesPerson(s, wlMyName)); }
   else if (worklistPerson !== "all") studies = studies.filter(s => studyInvolvesPerson(s, worklistPerson));
   // "Going off" implies active — a Published study can't be neglected, it's finished.
   if (worklistStatus !== "all") studies = studies.filter(isActive);
