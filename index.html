@@ -496,21 +496,25 @@
 const DESIGNS = ["Prospective (Consented)", "Retrospective (Non-Consented)", "Basic Science / Exempt"];
 const DESIGN_SHORT = { "Prospective (Consented)": "Prospective", "Retrospective (Non-Consented)": "Retrospective", "Basic Science / Exempt": "Basic Science" };
 const TRACK_PHASES = {
-  "Prospective (Consented)": ["Concept", "Initiation", "Enrolling", "Data Collection", "Analysis", "Manuscript", "Submitted", "Revisions Required", "Published", "On Hold"],
-  "Retrospective (Non-Consented)": ["Concept", "Initiation", "Data Extraction", "Analysis", "Manuscript", "Submitted", "Revisions Required", "Published", "On Hold"],
-  "Basic Science / Exempt": ["Concept", "Initiation", "Experiments", "Analysis", "Manuscript", "Submitted", "Revisions Required", "Published", "On Hold"]
+  "Prospective (Consented)": ["Concept", "Initiation", "Enrolling", "Data Collection", "Analysis", "Manuscript", "Submitted", "Revisions Required", "Accepted / In Press", "Published", "On Hold"],
+  "Retrospective (Non-Consented)": ["Concept", "Initiation", "Data Extraction", "Analysis", "Manuscript", "Submitted", "Revisions Required", "Accepted / In Press", "Published", "On Hold"],
+  "Basic Science / Exempt": ["Concept", "Initiation", "Experiments", "Analysis", "Manuscript", "Submitted", "Revisions Required", "Accepted / In Press", "Published", "On Hold"]
 };
 // Master ordered list of all phases (for pipeline display & sorting)
 const PHASES = [
   "Concept", "Initiation", "Enrolling", "Data Extraction", "Experiments", "Data Collection",
-  "Analysis", "Manuscript", "Submitted", "Revisions Required", "Published", "On Hold"
+  "Analysis", "Manuscript", "Submitted", "Revisions Required", "Accepted / In Press", "Published", "On Hold"
 ];
 const PHASE_COLORS = {
   "Concept": "var(--text2)", "Initiation": "var(--orange)",
   "Enrolling": "var(--blue)", "Data Extraction": "var(--blue)", "Experiments": "var(--blue)",
   "Data Collection": "var(--blue)",
   "Analysis": "var(--purple)", "Manuscript": "var(--purple)",
-  "Submitted": "var(--orange)", "Revisions Required": "var(--indigo)", "Published": "var(--green)", "On Hold": "var(--red)"
+  // Teal, not green: accepted is not published. The colour difference is the point — an accepted
+  // paper still needs proofs chased, and it stays subject to the stale/rotten nagging that
+  // Published is exempt from.
+  "Submitted": "var(--orange)", "Revisions Required": "var(--indigo)",
+  "Accepted / In Press": "var(--teal)", "Published": "var(--green)", "On Hold": "var(--red)"
 };
 // Old (pre-Initiation) phases → new, for migrating existing/imported data
 const PHASE_MIGRATE = {
@@ -538,7 +542,38 @@ function phasesFor(s) { return TRACK_PHASES[s.design] || TRACK_PHASES["Prospecti
 const PIS = ["Yanke", "Cole", "Chahla", "Verma", "Forsythe", "Nicholson", "Garrigues"];
 // Sports-medicine / orthopaedic journals (abbreviated). "journal" becomes relevant once a study is Submitted.
 const JOURNALS = ["AJSM", "OJSM", "Arthroscopy", "ASMAR", "Cartilage", "JCJP", "JKS", "VJSM", "KSSTA", "Sports Health", "JBJS", "JSES", "JISAKOS", "AOSSM Other"];
-const SUBMITTED_PHASES = ["Submitted", "Revisions Required", "Published"];
+const SUBMITTED_PHASES = ["Submitted", "Revisions Required", "Accepted / In Press", "Published"];
+
+// ---------- What the journal came back with ----------
+// The decision is the spine of the manuscript section. Everything about revisions hangs off it,
+// because asking for a revision deadline on a paper that was rejected outright is noise, and
+// worse, it implies work that doesn't exist.
+//
+// "Awaiting decision" is the starting state rather than an empty string, so a submitted paper
+// reads as genuinely pending rather than as a field somebody forgot to fill in.
+const DECISIONS = ["Awaiting decision", "Minor revision", "Major revision", "Accepted", "Rejected"];
+const DECISION_COLORS = {
+  "Awaiting decision": "var(--orange)",
+  "Minor revision": "var(--indigo)",
+  "Major revision": "var(--indigo)",
+  "Accepted": "var(--teal)",
+  "Rejected": "var(--red)"
+};
+// The two outcomes that mean there is revision work to do. Used to gate the revision fields and
+// the Revision Documents section, so "only if applicable" is decided in ONE place.
+const REVISION_DECISIONS = ["Minor revision", "Major revision"];
+function decisionWantsRevision(d) { return REVISION_DECISIONS.indexOf(d) >= 0; }
+// Terminal for THIS journal. Rejected is an endpoint for the submission, not for the paper —
+// which is exactly why recording it offers to file the round away and start a new one.
+function decisionIsFinal(d) { return d === "Accepted" || d === "Rejected"; }
+// What phase a decision implies. Only ever offered, never applied on its own (Adam's call):
+// the real situation is often more complicated than a dropdown, and a tracker that overrides a
+// deliberate choice stops being trusted.
+const DECISION_SUGGESTS_PHASE = {
+  "Minor revision": "Revisions Required",
+  "Major revision": "Revisions Required",
+  "Accepted": "Accepted / In Press"
+};
 // Funding sources seen so far (free text still allowed via the datalist input)
 const GRANT_SOURCES = ["OREF", "AOSSM", "AANA", "AAOS", "NIH", "Industry", "Institutional"];
 const ABS_STATUSES = ["Planned", "Submitted", "Accepted", "Rejected", "Presented"];
@@ -1055,6 +1090,20 @@ function migrate() {
     if (s.journalTrackingId == null) s.journalTrackingId = "";
     if (s.revisionsReceivedDate == null) s.revisionsReceivedDate = "";
     if (s.revisionsDeadline == null) s.revisionsDeadline = "";
+    // Journal decision. Backfilled from what the study already tells us rather than defaulting
+    // everything to "Awaiting decision", because a study sitting in Revisions Required with a
+    // revisions-received date plainly HAS had a decision — it just predates this field. Guessing
+    // "Major revision" over "Minor" would be inventing detail nobody recorded, so the generic
+    // label is used and Adam can sharpen it; an unsubmitted study gets nothing at all.
+    if (s.decision == null) {
+      if (s.phase === "Revisions Required" || s.revisionsReceivedDate) s.decision = "Major revision";
+      else if (s.phase === "Published") s.decision = "Accepted";
+      else if (SUBMITTED_PHASES.indexOf(s.phase) >= 0 || s.submittedDate) s.decision = "Awaiting decision";
+      else s.decision = "";
+    }
+    if (s.decisionDate == null) s.decisionDate = s.revisionsReceivedDate || "";
+    // Earlier rounds at other journals. Append-only; nothing is ever removed from it.
+    if (!Array.isArray(s.priorSubmissions)) s.priorSubmissions = [];
     if (s.revisedManuscriptLink == null) s.revisedManuscriptLink = "";
     if (s.responseToReviewersLink == null) s.responseToReviewersLink = "";
     if (s.workingAbstractLink == null) s.workingAbstractLink = "";
@@ -2344,6 +2393,33 @@ function toast(msg) {
   t.textContent = msg; t.classList.add("show");
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2200);
 }
+// A toast with one tappable action — how the app OFFERS a change instead of making it. Nothing
+// happens if it's ignored, which is the point: the suggestion expires silently rather than
+// becoming a decision nobody made.
+//
+// Held longer than a plain toast because it has to be read and acted on, not just noticed.
+function toastAction(msg, actionLabel, onAction) {
+  const t = document.getElementById("toast");
+  t.textContent = "";
+  const span = document.createElement("span");
+  span.textContent = msg;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "toast-action";
+  btn.textContent = actionLabel;
+  btn.style.cssText = "margin-left:10px;border:none;background:rgba(255,255,255,.22);color:inherit;"
+    + "font:inherit;font-weight:700;border-radius:7px;padding:4px 10px;cursor:pointer";
+  btn.onclick = () => {
+    clearTimeout(t._h);
+    t.classList.remove("show");
+    try { onAction(); } catch (e) { console.warn("toast action failed", e); }
+  };
+  t.appendChild(span);
+  t.appendChild(btn);
+  t.classList.add("show");
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove("show"), 7000);
+}
 
 /* ============ Rendering ============ */
 const $main = document.getElementById("main");
@@ -3335,6 +3411,9 @@ const PHASE_SECTIONS = {
   "Manuscript":         ["docs", "authors", "workingDocs", "abstracts", "notes", "tasks"],
   "Submitted":          ["docs", "authors", "abstracts", "manuscript", "notes", "tasks"],
   "Revisions Required": ["revisionDocs", "manuscript", "docs", "authors", "notes", "tasks"],
+  // Tasks stay open here on purpose: accepted is not done. Proofs, page charges and copyright
+  // forms all land in this window, and it's the phase where a paper most easily goes quiet.
+  "Accepted / In Press": ["manuscript", "docs", "authors", "abstracts", "notes", "tasks"],
   "Published":          ["docs", "abstracts", "manuscript", "authors", "notes"],
   "On Hold":            ["notes", "tasks"]
 };
@@ -3453,18 +3532,126 @@ function plainFieldRow(label, id, value, opts) {
     </div>
   </div>`;
 }
+// Recording a decision. Three things happen, in this order, and the order matters: save it,
+// re-render so the revision fields appear or vanish, then OFFER the matching phase.
+//
+// The phase is offered as a tappable toast rather than applied, per Adam's choice. A tracker that
+// silently moves a study underneath you is one you stop trusting the moment it guesses wrong —
+// and "accepted" can mean a dozen things about where the paper really is.
+function bindDecisionRow(root, s) {
+  const sel = root.querySelector("#ms-decision");
+  if (!sel) return;
+  sel.onchange = () => {
+    const picked = sel.value === "— not yet submitted —" ? "" : sel.value;
+    const was = s.decision || "";
+    if (picked === was) return;
+    s.decision = picked;
+    // Stamp the date on first recording a real decision, so the common case needs no typing.
+    // Never overwritten — a date already entered is Adam's, not ours to correct.
+    if (picked && picked !== "Awaiting decision" && !s.decisionDate) s.decisionDate = todayStr();
+    if (!picked || picked === "Awaiting decision") s.decisionDate = "";
+    upsertStudy(s);
+    render();
+
+    const suggested = DECISION_SUGGESTS_PHASE[picked];
+    if (suggested && s.phase !== suggested && s.phase !== "On Hold") {
+      toastAction(
+        `Recorded: ${picked}. Move this study to "${suggested}"?`,
+        "Move it",
+        () => {
+          s.phase = suggested;
+          upsertStudy(s);
+          render();
+          toast(`Now in ${suggested} — change it any time from Edit Study`);
+        });
+      return;
+    }
+    if (picked === "Rejected") {
+      toast("Recorded: Rejected. Use “File this away & submit elsewhere” to keep the record and start a new journal.");
+      return;
+    }
+    toast(picked ? "Recorded: " + picked : "Cleared the decision");
+  };
+
+  const resub = root.querySelector("#ms-resubmit");
+  if (resub) resub.onclick = () => {
+    if (blockOfflineEdit("Filing a submission away")) return;
+    // Append-only. The round moves into the history and the live fields are cleared for the next
+    // journal — the record of where the paper has been is the whole point, so nothing is dropped.
+    s.priorSubmissions = Array.isArray(s.priorSubmissions) ? s.priorSubmissions : [];
+    s.priorSubmissions.push({
+      id: uid(),
+      journal: s.journal || "",
+      submittedDate: s.submittedDate || "",
+      trackingId: s.journalTrackingId || "",
+      decision: s.decision || "",
+      decisionDate: s.decisionDate || "",
+      filedOn: todayStr()
+    });
+    const wasJournal = s.journal || "that journal";
+    s.journal = "";
+    s.submittedDate = "";
+    s.journalTrackingId = "";
+    s.decision = "";
+    s.decisionDate = "";
+    s.revisionsReceivedDate = "";
+    s.revisionsDeadline = "";
+    upsertStudy(s);
+    render();
+    toast(`${wasJournal} filed under Previous Submissions — the fields are clear for the next journal.`);
+  };
+}
 // Manuscript submission tracking -- which journal, when, and its status through review. Lives
 // on the study page next to Abstract Submissions (both are day-to-day progress, not structural
 // study setup) instead of the Edit Study sheet, at Adam's explicit request (2026-09-15): "day to
 // day tracking and updates" should not require opening Edit Study.
 function manuscriptBodyHTML(s) {
+  const d = s.decision || "";
+  const showRevision = decisionWantsRevision(d);
+  const prior = Array.isArray(s.priorSubmissions) ? s.priorSubmissions : [];
   return `
     ${plainFieldRow("Journal", "ms-journal", s.journal, { list: "dl-journals-ms", placeholder: "e.g. AJSM, Arthroscopy" })}
     <datalist id="dl-journals-ms">${JOURNALS.map(j => `<option value="${esc(j)}">`).join("")}</datalist>
     ${plainFieldRow("Submitted on", "ms-submitted-date", s.submittedDate, { type: "date" })}
     ${plainFieldRow("Tracking ID", "ms-tracking-id", s.journalTrackingId, { placeholder: "Journal manuscript ID (e.g. AJSM-26-1234)" })}
-    ${plainFieldRow("Revisions received", "ms-revisions-received", s.revisionsReceivedDate, { type: "date" })}
-    ${plainFieldRow("Revisions due", "ms-revisions-deadline", s.revisionsDeadline, { type: "date" })}
+
+    <div class="milestone-row" style="gap:8px;align-items:flex-end">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;color:var(--text2);font-weight:600;margin-bottom:4px">Decision</div>
+        ${selectHTML("ms-decision", ["— not yet submitted —"].concat(DECISIONS), d || "— not yet submitted —")}
+      </div>
+      ${d && d !== "Awaiting decision"
+        ? `<span class="badge" style="background:${DECISION_COLORS[d] || "var(--text2)"};flex:none;margin-bottom:9px">${esc(d)}</span>`
+        : ""}
+    </div>
+    ${d && d !== "Awaiting decision" ? plainFieldRow("Decision on", "ms-decision-date", s.decisionDate, { type: "date" }) : ""}
+
+    <!-- Revision dates appear ONLY for the two outcomes that create revision work. A deadline
+         field on a rejected paper implies work that doesn't exist. -->
+    <div id="ms-revision-fields" style="display:${showRevision ? "block" : "none"}">
+      ${plainFieldRow("Revisions received", "ms-revisions-received", s.revisionsReceivedDate, { type: "date" })}
+      ${plainFieldRow("Revisions due", "ms-revisions-deadline", s.revisionsDeadline, { type: "date" })}
+    </div>
+
+    ${d === "Rejected" ? `
+    <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5;margin-top:10px">
+      Rejected closes out this journal, not the paper. Filing it away keeps the record of where it's been and clears the fields for the next submission — nothing is deleted.
+      <button type="button" class="btn secondary" id="ms-resubmit" style="margin-top:10px">File this away &amp; submit elsewhere</button>
+    </div>` : ""}
+
+    ${prior.length ? `
+    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:14px 2px 4px 2px">PREVIOUS SUBMISSIONS</div>
+    ${prior.slice().reverse().map(p => `
+      <div class="task-row" style="padding:7px 0;gap:8px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;font-weight:600">${esc(p.journal || "Unnamed journal")}</div>
+          <div style="font-size:12px;color:var(--text2)">
+            ${p.submittedDate ? "Submitted " + fmtDate(p.submittedDate) : "No submission date"}${p.trackingId ? " · " + esc(p.trackingId) : ""}
+          </div>
+        </div>
+        <span class="badge" style="background:${DECISION_COLORS[p.decision] || "var(--text2)"};flex:none">${esc(p.decision || "—")}${p.decisionDate ? " · " + fmtDate(p.decisionDate) : ""}</span>
+      </div>`).join("")}` : ""}
+
     <div style="font-size:12px;color:var(--orange);line-height:1.4;padding:6px 2px 0 2px">⚠︎ Reminder: once a manuscript is submitted, update this study's Title above (in Edit Study) to match the exact title used in the journal's submission system -- the project tracker should mirror the submitted title, not just the IRB title.</div>
   `;
 }
@@ -3665,7 +3852,8 @@ function renderStudyDetail() {
     docs: docs.length > 0,
     revisionDocs: revisionDocs.length > 0 || !!s.revisedManuscriptLink || !!s.responseToReviewersLink,
     abstracts: abstracts.length > 0 || linkedAbstractMeetings.length > 0,
-    manuscript: !!(s.journal || s.submittedDate || s.journalTrackingId || s.revisionsReceivedDate || s.revisionsDeadline),
+    manuscript: !!(s.journal || s.submittedDate || s.journalTrackingId || s.revisionsReceivedDate
+      || s.revisionsDeadline || s.decision || (s.priorSubmissions || []).length),
     deadlines: linkedGrantMeetings.length > 0,
     tasks: tasks.length > 0
   };
@@ -3692,7 +3880,10 @@ function renderStudyDetail() {
     docs: docs.length || "",
     revisionDocs: revisionDocs.length || "",
     abstracts: (abstracts.length + linkedAbstractMeetings.length) || "",
-    manuscript: s.journal || "",
+    // The decision is what you want to see without opening the section — "AJSM · Major revision"
+    // answers the question the collapsed header is really being asked.
+    manuscript: [s.journal, s.decision && s.decision !== "Awaiting decision" ? s.decision : ""]
+      .filter(Boolean).join(" · ") || (s.decision === "Awaiting decision" ? "awaiting decision" : ""),
     deadlines: linkedGrantMeetings.length || "",
     tasks: tasks.filter(t => !t.done).length || "",
     enrollment: hasContent.enrollment ? (s.enrollCurrent || 0) + "/" + (s.enrollTarget || "?") : "",
@@ -3721,6 +3912,7 @@ function renderStudyDetail() {
       <b>Design:</b> ${esc(s.design || "—")} · <b>Priority:</b> <span style="color:${PRIORITY_COLORS[s.priority] || "inherit"}">${esc(s.priority || "Medium")}</span>
       ${s.journal ? `<br><b>Journal:</b> ${esc(s.journal)}` : ""}
       ${s.submittedDate ? `<br><b>Submitted on:</b> ${fmtDate(s.submittedDate)}` : ""}
+      ${s.decision ? `<br><b>Decision:</b> <span style="color:${DECISION_COLORS[s.decision] || "inherit"};font-weight:600">${esc(s.decision)}</span>${s.decisionDate && s.decision !== "Awaiting decision" ? " · " + fmtDate(s.decisionDate) : ""}` : ""}
       ${s.journalTrackingId ? `<br><b>Tracking ID:</b> ${esc(s.journalTrackingId)}` : ""}
       ${s.revisionsReceivedDate ? `<br><b>Revisions received:</b> ${fmtDate(s.revisionsReceivedDate)}` : ""}
       ${s.revisionsDeadline ? `<br><b>Revisions due:</b> ${fmtDate(s.revisionsDeadline)}` : ""}
@@ -3825,6 +4017,17 @@ function renderStudyDetail() {
   `, sectionBadge.docs)}
 
   ${collapsibleSection("revisionDocs", "Revision Documents", `
+    <!-- Not hidden when it doesn't apply, and that's deliberate: this section can already hold
+         uploaded files, and a section that vanishes is indistinguishable from data that was lost.
+         Instead it says plainly why it's quiet — which also stops "revision submitted" reading as
+         an option on a paper that was accepted outright or rejected. -->
+    ${!decisionWantsRevision(s.decision) && !revisionDocs.length && !s.revisedManuscriptLink && !s.responseToReviewersLink ? `
+      <div style="color:var(--text2);font-size:13px;line-height:1.5;margin-bottom:10px">
+        ${s.decision === "Accepted" ? "Accepted without revisions — nothing to respond to."
+          : s.decision === "Rejected" ? "Rejected, so there are no reviewer comments to answer here. If you resubmit elsewhere and get a revision decision, this fills in."
+          : s.decision === "Awaiting decision" ? "Waiting on the journal. This becomes relevant if the decision is a minor or major revision."
+          : "This fills in once the journal returns a minor or major revision decision."}
+      </div>` : ""}
     ${revisionDocs.length ? revisionDocs.map(dc => `
       <div class="milestone-row">
         <div style="flex:1;cursor:pointer;min-width:0" data-doc="${dc.id}">
@@ -4092,6 +4295,8 @@ function renderStudyDetail() {
   bindPlainFieldRow($main, "ms-tracking-id", s, "journalTrackingId");
   bindPlainFieldRow($main, "ms-revisions-received", s, "revisionsReceivedDate");
   bindPlainFieldRow($main, "ms-revisions-deadline", s, "revisionsDeadline");
+  bindPlainFieldRow($main, "ms-decision-date", s, "decisionDate");
+  bindDecisionRow($main, s);
 
   // Enrollment (own section, see enrollmentBodyHTML)
   bindPlainFieldRow($main, "en-current", s, "enrollCurrent");
