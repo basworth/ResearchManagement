@@ -995,6 +995,26 @@ let detailStudyId = null;
 // per section from scratch — including reopening the SAME study after leaving it — while
 // incidental re-renders during an active viewing session (e.g. adding a milestone) don't touch it.
 function openStudy(id) { detailStudyId = id; sectionStateForStudy = null; }
+// Spends the ?study=<id> captured from an email link, once the studies are actually loaded.
+// Returns whether the view changed, so the caller knows whether to re-render.
+//
+// The id is consumed whether or not it resolves. A link to a study that has since been archived,
+// or that this person can't see, would otherwise re-fire on every sign-in for the rest of time —
+// and saying so once is more use to them than a tap that silently does nothing.
+function openPendingStudy() {
+  if (!pendingStudyId) return false;
+  const id = pendingStudyId;
+  pendingStudyId = "";
+  try { history.replaceState(null, "", window.location.pathname); } catch (e) { /* non-fatal */ }
+  const s = studyById(id);
+  if (!s || !canSeeStudy(s)) {
+    toast(s ? "That study isn't shared with you — ask whoever sent the link" : "That study link didn't open — the study may have been removed");
+    return false;
+  }
+  openStudy(id);
+  tab = "studies";
+  return true;
+}
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2));
 // LOCAL date, deliberately not toISOString(). toISOString() reports UTC, so in Chicago every
@@ -1104,6 +1124,8 @@ function migrate() {
     if (s.decisionDate == null) s.decisionDate = s.revisionsReceivedDate || "";
     // Earlier rounds at other journals. Append-only; nothing is ever removed from it.
     if (!Array.isArray(s.priorSubmissions)) s.priorSubmissions = [];
+    // Every time someone chases the study team for an update. Append-only, same rule.
+    if (!Array.isArray(s.updateRequests)) s.updateRequests = [];
     if (s.revisedManuscriptLink == null) s.revisedManuscriptLink = "";
     if (s.responseToReviewersLink == null) s.responseToReviewersLink = "";
     if (s.workingAbstractLink == null) s.workingAbstractLink = "";
@@ -1440,6 +1462,11 @@ function authLinkErrorMessage(e) {
 }
 let authLinkType = detectAuthLinkType();
 let authLinkError = detectAuthLinkError();
+// "Open this study" links in emails arrive as ?study=<id>. Whoever taps one is usually signed
+// out, so the id has to outlive the sign-in screen — and it has to be read HERE, at parse time,
+// because both createClient() and the auth screens rewrite the URL out from under us. Held
+// until there is actually a study list to open it against; see openPendingStudy().
+let pendingStudyId = authLinkParam("study");
 // A dead link carries no session, so there is nothing to set a password against. Offering the
 // password box anyway would fail on save and read as a second, unrelated fault.
 let pendingPasswordSetup = !authLinkError && ["invite", "recovery", "signup"].indexOf(authLinkType) >= 0;
@@ -1495,6 +1522,9 @@ async function handleAuthChange(event, session) {
       await withTimeout(pullAll(), 12000, "Connecting to Team Sync");
       setSyncPill(true, "Synced");
       subscribeRealtime();
+      // Before the name/position prompts, so someone arriving from an "update please" email
+      // lands on the study rather than behind a setup sheet with no idea why they're here.
+      if (openPendingStudy()) render();
       maybePromptDisplayName();
     } catch (e) {
       console.warn("pull after sign-in failed", e);
@@ -3941,7 +3971,10 @@ function renderStudyDetail() {
     })()}
     ${s.phase === "Submitted" ? `<div style="font-size:12px;color:var(--orange);line-height:1.4;margin-top:10px">⚠︎ Make sure the Title above matches the manuscript title exactly as submitted to the journal.</div>` : ""}
   </div>
-  <button class="btn secondary" id="edit-study-btn">Edit Study</button>
+  <div style="display:flex;gap:8px;align-items:stretch">
+    <button class="btn secondary" id="edit-study-btn" style="flex:1">Edit Study</button>
+    <button class="btn secondary" id="ask-update-btn" style="flex:1">${esc(updateRequestLabel(s))}</button>
+  </div>
   ${collapsibleSection("notes", "Notes", notesBodyHTML(s, inputStyle), sectionBadge.notes)}
   ${collapsibleSection("enrollment", "Enrollment", enrollmentBodyHTML(s), sectionBadge.enrollment)}
   ${collapsibleSection("grant", "Grant & Award Funding", grantBodyHTML(s), sectionBadge.grant)}
@@ -4113,6 +4146,7 @@ function renderStudyDetail() {
   $main.innerHTML = html;
   document.getElementById("back-btn").onclick = () => { detailStudyId = null; render(); };
   document.getElementById("edit-study-btn").onclick = () => openStudyForm(s);
+  document.getElementById("ask-update-btn").onclick = () => openUpdateRequestSheet(s.id);
   document.getElementById("del-study-btn").onclick = () => {
     if (blockOfflineEdit("Deleting a study")) return;
     if (confirm(`Delete "${s.title}" and its tasks? This can't be undone.`)) { detailStudyId = null; removeStudy(s.id); toast("Study deleted"); }
@@ -4924,6 +4958,14 @@ function renderWorkingList() {
     }
     return `<div style="margin-top:3px"><span class="rot-tag stale" title="${esc(f.note)}">STALE · ${f.days}d</span></div>`;
   };
+  // Far right of every row: chase this study's team without opening it first. Greyed once it's
+  // been asked in the last three days — still tappable, because sometimes you do mean to nudge
+  // again, but no longer looking like the obvious next thing to do.
+  const askCell = (s) => {
+    const d = daysSinceUpdateRequest(s);
+    const recent = d !== null && d <= 3;
+    return `<button class="mini-btn" data-ask-update="${s.id}" style="margin:0;white-space:nowrap${recent ? ";opacity:.55" : ""}">${esc(updateRequestLabel(s))}</button>`;
+  };
   const rows = studies.map(s => {
     const f = freshness(s);
     const rotClass = (f && f.level === "rotten") ? " class=\"wl-rotten\""
@@ -4938,6 +4980,7 @@ function renderWorkingList() {
       <td><span class="badge outline" style="font-size:11px">${esc(DESIGN_SHORT[s.design] || "—")}</span></td>
       <td><span class="wl-pill" style="background:${PHASE_COLORS[s.phase] || "var(--text2)"}">${esc(s.phase)}</span></td>
       <td class="wl-steps">${stepsCell(s)}</td>
+      <td style="white-space:nowrap">${askCell(s)}</td>
     </tr>`;
   }).join("");
 
@@ -4949,7 +4992,7 @@ function renderWorkingList() {
       <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:0 2px 10px 2px">Longest-neglected first. Untouched for ${STALE_DAYS} days is stale; ${ROTTEN_DAYS} days and it's rotten.</div>`;
   }
   html += `<div class="wl-wrap"><table class="wl">
-      <thead><tr>${cols.map(c => `<th data-sort="${c.key}" style="cursor:pointer;user-select:none;white-space:nowrap">${esc(c.label)}${sortArrow(c.key)}</th>`).join("")}</tr></thead>
+      <thead><tr>${cols.map(c => `<th data-sort="${c.key}" style="cursor:pointer;user-select:none;white-space:nowrap">${esc(c.label)}${sortArrow(c.key)}</th>`).join("")}<th style="white-space:nowrap">Study Team</th></tr></thead>
       <tbody>${rows}</tbody>
     </table></div>
     <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Swipe sideways to see all columns. Tap a column header to sort, tap a row to open the study. Next steps are the study's open tasks (soonest due first).${(() => {
@@ -4977,6 +5020,13 @@ function renderWorkingList() {
     if (worklistSort.key === key) worklistSort.dir *= -1;
     else { worklistSort.key = key; worklistSort.dir = 1; }
     render();
+  });
+  // Registered before the row handler runs, and stops the event there: the button sits INSIDE a
+  // row whose own click opens the study, so without this every chase would also navigate away
+  // from the list you were working down.
+  $main.querySelectorAll("[data-ask-update]").forEach(b => b.onclick = (e) => {
+    e.stopPropagation();
+    openUpdateRequestSheet(b.dataset.askUpdate);
   });
   $main.querySelectorAll("[data-open-study]").forEach(el => el.onclick = () => {
     openStudy(el.dataset.openStudy); tab = "studies"; render();
@@ -6065,6 +6115,170 @@ function assigneeMailState(name) {
   if (!to) return { state: "none" };
   return { state: domainUndeliverable(to) ? "filtered" : "ok", to };
 }
+
+/* ============ "Ask the study team for an update" ============ */
+// Chasing a study by hand means finding who's on it, looking up which address each of them
+// actually reads, and writing the same message again. This does all three from one tap, and
+// records that it happened so the next person to look at the Worklist can see the study has
+// already been chased rather than chasing it again a day later.
+
+// Who a request for this study would actually reach, and who it would silently miss.
+//
+// The reach/skip split is the whole point: someone on the team with no account can't be emailed
+// at all, and that has to be said out loud BEFORE sending. Otherwise you tap the button, see
+// "sent", and assume the coordinator who never signed up has been told.
+function updateRequestAudience(studyId) {
+  const mine = canonName(me()).toLowerCase();
+  const reach = [], skip = [];
+  assigneeGroupsFor(studyId).onStudy.forEach(n => {
+    // No point emailing yourself a request for an update on your own study.
+    if (mine && canonName(n).toLowerCase() === mine) return;
+    const m = assigneeMailState(n);
+    if (m.state === "none") skip.push(n);
+    else reach.push({ name: n, to: m.to, filtered: m.state === "filtered" });
+  });
+  return { reach, skip };
+}
+// Most recent request, or null. The log is append-only, so this sorts rather than trusting order.
+function lastUpdateRequest(s) {
+  const log = (s && Array.isArray(s.updateRequests)) ? s.updateRequests : [];
+  if (!log.length) return null;
+  return log.slice().sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")))[0];
+}
+// Whole days since a request went out. Null when there's never been one.
+function daysSinceUpdateRequest(s) {
+  const last = lastUpdateRequest(s);
+  if (!last || !last.at) return null;
+  const then = new Date(last.at).getTime();
+  if (isNaN(then)) return null;
+  return Math.max(0, Math.floor((Date.now() - then) / 86400000));
+}
+// Short label for the button. "Asked today" matters more than it looks: it's the difference
+// between one nudge and three in an afternoon when several people are working the same list.
+function updateRequestLabel(s) {
+  const d = daysSinceUpdateRequest(s);
+  if (d === null) return "Ask for update";
+  if (d === 0) return "Asked today";
+  if (d === 1) return "Asked 1d ago";
+  return "Asked " + d + "d ago";
+}
+async function callUpdateFn(payload) {
+  if (!sb) throw new Error("Not connected — try again in a moment.");
+  const { data: sess } = await sb.auth.getSession();
+  const tokenValue = sess && sess.session && sess.session.access_token;
+  if (!tokenValue) throw new Error("Your session expired — sign out and back in.");
+  const res = await fetch(SUPABASE_URL + "/functions/v1/request-update", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tokenValue },
+    body: JSON.stringify(payload)
+  });
+  const out = await res.json().catch(() => ({}));
+  // The page and the function deploy separately, so a browser can be ahead of the server. Say
+  // that plainly rather than surfacing a raw 404 that reads like the feature is broken.
+  if (res.status === 404) {
+    throw new Error("the server hasn't picked up this feature yet — it'll start working on its own once the update lands.");
+  }
+  if (!res.ok || out.error) throw new Error(out.error || ("Failed (" + res.status + ")"));
+  return out;
+}
+// Append-only, like priorSubmissions: a request that went out is a fact about the past, so
+// nothing here ever overwrites or removes an earlier entry.
+function logUpdateRequest(studyId, entry) {
+  const s = studyById(studyId);
+  if (!s) return;
+  if (!Array.isArray(s.updateRequests)) s.updateRequests = [];
+  s.updateRequests.push(entry);
+  upsertStudy(s);
+}
+function openUpdateRequestSheet(studyId) {
+  const s = studyById(studyId);
+  if (!s) return;
+  if (blockOfflineEdit("Asking for an update")) return;
+  const aud = updateRequestAudience(studyId);
+  const last = lastUpdateRequest(s);
+  const d = daysSinceUpdateRequest(s);
+
+  if (!aud.reach.length) {
+    // Nothing to send. Which of the two reasons it is changes what you'd do about it, so say which.
+    openSheet("Ask for an update", `
+      <div class="card" style="font-size:14px;line-height:1.55;color:var(--text2)">
+        ${aud.skip.length
+          ? `Nobody on this study can be emailed yet. ${esc(aud.skip.join(", "))} ${aud.skip.length === 1 ? "is" : "are"} on the team but ${aud.skip.length === 1 ? "hasn't" : "haven't"} signed in, so there's no address to write to. Invite ${aud.skip.length === 1 ? "them" : "them"} under <b>Settings &rsaquo; Invite teammate</b> and this will start working.`
+          : `No one is listed on this study yet apart from you. Add the team under <b>Edit Study</b> and you'll be able to chase them from here.`}
+      </div>`, () => true, null, { saveLabel: "OK", cancelLabel: "Close" });
+    return;
+  }
+
+  const filtered = aud.reach.filter(r => r.filtered);
+  const defaultNote = "";
+  openSheet("Ask for an update", `
+    <div style="font-size:13.5px;color:var(--text2);margin:2px 2px 10px 2px;line-height:1.5">
+      An email goes to the ${aud.reach.length === 1 ? "person" : aud.reach.length + " people"} on
+      <b>${esc(s.nickname || s.title)}</b>, with a button that opens this study.
+    </div>
+    <div class="card" style="padding:8px 14px">
+      ${aud.reach.map(r => `<div style="display:flex;align-items:center;gap:8px;font-size:14px;padding:4px 0">
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</span>
+        <span style="font-size:11.5px;color:var(--text2);white-space:nowrap">${esc(r.to)}</span>
+        ${r.filtered ? `<span style="color:var(--orange);font-weight:800">!</span>` : `<span style="color:var(--green);font-weight:800">✓</span>`}
+      </div>`).join("")}
+    </div>
+    ${filtered.length ? `<div style="font-size:12.5px;color:var(--orange);line-height:1.5;margin:0 2px 10px 2px">
+      Mail to ${esc(filtered.map(r => emailDomain(r.to)).filter((v, i, a) => a.indexOf(v) === i).join(", "))} is being quarantined at the moment, so ${filtered.length === 1 ? esc(filtered[0].name) + " may not see it" : "some of these may not arrive"}.
+    </div>` : ""}
+    ${aud.skip.length ? `<div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:0 2px 10px 2px">
+      Not included: <b>${esc(aud.skip.join(", "))}</b> — on the team, but ${aud.skip.length === 1 ? "hasn't" : "haven't"} signed in, so there's no address to write to.
+    </div>` : ""}
+    ${last ? `<div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:0 2px 10px 2px">
+      Last asked ${d === 0 ? "today" : d === 1 ? "yesterday" : d + " days ago"}${last.by ? " by " + esc(last.by) : ""}.${last.note ? ` They were asked: "${esc(last.note)}"` : ""}
+    </div>` : ""}
+    <div class="fld">
+      <label for="ur-note">Anything specific to ask? <span style="font-weight:400;color:var(--text2)">(optional)</span></label>
+      <textarea id="ur-note" rows="3" placeholder="e.g. where are we on the IRB amendment?">${esc(defaultNote)}</textarea>
+    </div>
+    <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px">Leave it blank and they'll get a plain request for a status update. Replies come back to you by email either way.</div>
+  `, () => {
+    const noteEl = document.getElementById("ur-note");
+    const note = noteEl ? noteEl.value.trim().slice(0, 500) : "";
+    sendUpdateRequest(studyId, note, aud);
+    return true;
+  }, (sh) => { const t = sh.querySelector("#ur-note"); if (t) t.focus(); },
+     { saveLabel: "Send" });
+}
+// Fires the send, then records it. The log is written from what the SERVER says it sent, not
+// from what the sheet showed — the two can differ if a profile changed between opening the
+// sheet and tapping Send, and the log is meant to be a record of what actually happened.
+async function sendUpdateRequest(studyId, note, aud) {
+  toast("Sending…");
+  try {
+    const out = await callUpdateFn({ studyId, note });
+    const sent = Array.isArray(out.sent) ? out.sent : aud.reach.map(r => r.name);
+    const failed = Array.isArray(out.failed) ? out.failed : [];
+    logUpdateRequest(studyId, {
+      id: uid(),
+      at: new Date().toISOString(),
+      by: me() || "",
+      note: note || "",
+      sentTo: sent,
+      skipped: aud.skip.slice(),
+      failed: failed
+    });
+    render();
+    if (failed.length) {
+      toast(sent.length
+        ? "Sent to " + sent.length + ", but couldn't reach " + failed.join(", ")
+        : "Couldn't reach " + failed.join(", "));
+    } else {
+      toastAction(
+        "Asked " + (sent.length === 1 ? sent[0] : sent.length + " people") + " for an update",
+        "Open study",
+        () => { openStudy(studyId); tab = "studies"; render(); });
+    }
+  } catch (e) {
+    toast("Couldn't send that — " + (e.message || "try again"));
+  }
+}
+
 function assigneePickerHTML(studyId, picked) {
   const g = assigneeGroupsFor(studyId, picked);
   const isPicked = (n) => (picked || []).some(p => canonName(p).toLowerCase() === n.toLowerCase());
