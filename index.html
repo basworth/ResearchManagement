@@ -1017,23 +1017,38 @@ const DOC_SLOTS = [
 // Not shown in Working Documents: these two live in Manuscript Submission, beside the journal and
 // the dates they belong to.
 const SUBMISSION_SLOTS = [
-  { key: "submitted", label: "Submitted Manuscript" },
-  // `multi`: this slot holds several DIFFERENT documents, not successive drafts of one. Reviewer
-  // comments, the revised manuscript and the point-by-point response all belong to the same
-  // revision and none supersedes the others, so they all stay visible. Treating them as a version
-  // stack hid two of the three behind "show earlier versions", which read as data loss.
-  { key: "revision",  label: "Revision Documents", multi: true }
+  { key: "submitted", label: "Submitted Manuscript" }
 ];
+// A revision produces three DIFFERENT documents, so each gets its own named slot rather than one
+// shared pile. Piling them together meant reading filenames to tell the reviewers' letter from
+// your reply to it — and a second round of revisions made that worse, not better.
+//
+// Each is versioned in its own right: round 2's reviewer comments become the current ones and
+// round 1's fold into that slot's history, where they stay.
+const REVISION_SLOTS = [
+  { key: "revComments",   label: "Reviewer Comments" },
+  { key: "revManuscript", label: "Revised Manuscript" },
+  { key: "revResponse",   label: "Response to Reviewers" }
+];
+// Retired, kept only so the first migration's output isn't orphaned. Drained into the three above
+// by migration v2; never written to again, and never rendered as a slot of its own.
+const LEGACY_REVISION_SLOT = { key: "revision", label: "Revision Documents", multi: true };
 const OTHER_SLOT = { key: "other", label: "Other Documents", multi: true };
+const EVERY_SLOT = DOC_SLOTS.concat(SUBMISSION_SLOTS, REVISION_SLOTS, [OTHER_SLOT, LEGACY_REVISION_SLOT]);
 function slotIsMulti(key) {
-  const hit = DOC_SLOTS.concat(SUBMISSION_SLOTS, [OTHER_SLOT]).find(x => x.key === key);
+  const hit = EVERY_SLOT.find(x => x.key === key);
   return !!(hit && hit.multi);
 }
-const ALL_SLOT_KEYS = DOC_SLOTS.map(x => x.key).concat(SUBMISSION_SLOTS.map(x => x.key), [OTHER_SLOT.key]);
+const ALL_SLOT_KEYS = EVERY_SLOT.map(x => x.key);
+const REVISION_SLOT_KEYS = REVISION_SLOTS.map(x => x.key);
 function slotLabel(key) {
-  const all = DOC_SLOTS.concat(SUBMISSION_SLOTS, [OTHER_SLOT]);
-  const hit = all.find(x => x.key === key);
+  const hit = EVERY_SLOT.find(x => x.key === key);
   return hit ? hit.label : key;
+}
+// Anything filed against this revision, across the three slots. Used to decide whether to show
+// documents from an earlier round on a study whose decision is no longer a revision.
+function anyRevisionDocs(s) {
+  return REVISION_SLOT_KEYS.some(k => slotEntries(s, k).length > 0);
 }
 // Where an already-uploaded file most likely belongs, read from the label and filename people
 // actually typed. Only confident matches move; anything ambiguous goes to Other Documents, where
@@ -1041,7 +1056,8 @@ function slotLabel(key) {
 // misfiled document looks filed.
 function guessDocSlot(dc) {
   const t = ((dc.label || "") + " " + (dc.name || "")).toLowerCase();
-  if (/revision|reviewer|response to review|rebuttal|point-by-point|point by point/.test(t)) return "revision";
+  const r = guessRevisionSlot(dc);
+  if (r) return r;
   if (/abstract/.test(t)) return "abstract";
   if (/manuscript|\bms\b|draft|paper/.test(t)) return "manuscript";
   if (/overview|protocol|proposal|concept/.test(t)) return "overview";
@@ -1050,6 +1066,21 @@ function guessDocSlot(dc) {
   if (/spreadsheet|data collection|datasheet|\bdata\b/.test(t)) return "sheet";
   return "other";
 }
+// Which of the three revision documents this is, or "" if it isn't one of them.
+//
+// Order matters. "Response to reviewer comments" contains the word "reviewer", and "revised
+// manuscript" contains "revis" — so the most specific wording is tested first, or everything
+// collapses into whichever pattern happens to be checked earliest. A revision-ish document that
+// can't be placed goes to Reviewer Comments, because that is what the great majority of them are
+// and the alternative (Other Documents) buries it away from the decision it belongs to.
+function guessRevisionSlot(dc) {
+  const t = ((dc.label || "") + " " + (dc.name || "")).toLowerCase();
+  if (/response|rebuttal|point-by-point|point by point|reply to/.test(t)) return "revResponse";
+  if (/revised|revision.*(manuscript|draft)|(manuscript|draft).*revis/.test(t)) return "revManuscript";
+  if (/reviewer|referee|comments|critique/.test(t)) return "revComments";
+  if (/revision/.test(t)) return "revComments";
+  return "";
+}
 const docEntryLink = (url, label, date) => ({ id: uid(), kind: "link", url: url, label: label || "", by: "", date: date || "" });
 // Migration. Runs on every load and is idempotent: a study already migrated has the flag and is
 // left alone. Legacy fields are NOT cleared — they stay exactly as they were, so if anything here
@@ -1057,36 +1088,51 @@ const docEntryLink = (url, label, date) => ({ id: uid(), kind: "link", url: url,
 function migrateDocSlots(s) {
   if (!s.docSlots || typeof s.docSlots !== "object") s.docSlots = {};
   ALL_SLOT_KEYS.forEach(k => { if (!Array.isArray(s.docSlots[k])) s.docSlots[k] = []; });
-  if (s.docSlotsMigrated) return;
 
-  // 1. The six working-document link fields, and the two revision link fields.
-  DOC_SLOTS.forEach(sl => {
-    const v = (s[sl.legacy] || "").trim();
-    if (v) s.docSlots[sl.key].push(docEntryLink(v, "", s.updatedAt || ""));
-  });
-  const rev = (s.revisedManuscriptLink || "").trim();
-  if (rev) s.docSlots.revision.push(docEntryLink(rev, "Revised manuscript", ""));
-  const resp = (s.responseToReviewersLink || "").trim();
-  if (resp) s.docSlots.revision.push(docEntryLink(resp, "Response to reviewers", ""));
-
-  // 2. Every uploaded file. A file already tagged "revision" is not re-guessed — that tag was set
-  //    deliberately by whoever uploaded it, and it beats anything a filename suggests.
-  (s.docs || []).forEach(dc => {
-    const key = dc.category === "revision" ? "revision" : guessDocSlot(dc);
-    s.docSlots[key].push({
-      id: dc.id, kind: "file", name: dc.name, label: dc.label || "",
-      by: dc.by || "", date: dc.date || "", size: dc.size || 0,
-      // Remembered so the mapping can be reviewed later, and so a wrong guess is identifiable
-      // rather than indistinguishable from a deliberate filing.
-      movedFrom: dc.category === "revision" ? "Revision Documents" : "Manuscript & Documents"
+  if (!s.docSlotsMigrated) {
+    // 1. The six working-document link fields, and the two revision link fields. The revision
+    //    pair go straight to their own named slots — we know exactly what each of them is.
+    DOC_SLOTS.forEach(sl => {
+      const v = (s[sl.legacy] || "").trim();
+      if (v) s.docSlots[sl.key].push(docEntryLink(v, "", s.updatedAt || ""));
     });
-  });
+    const rev = (s.revisedManuscriptLink || "").trim();
+    if (rev) s.docSlots.revManuscript.push(docEntryLink(rev, "", ""));
+    const resp = (s.responseToReviewersLink || "").trim();
+    if (resp) s.docSlots.revResponse.push(docEntryLink(resp, "", ""));
+
+    // 2. Every uploaded file. A file tagged "revision" is known to belong to the revision, but
+    //    WHICH of the three it is still has to be read off the label — the old tag didn't record
+    //    that distinction, because the old section didn't make it.
+    (s.docs || []).forEach(dc => {
+      const key = dc.category === "revision" ? (guessRevisionSlot(dc) || "revComments") : guessDocSlot(dc);
+      s.docSlots[key].push({
+        id: dc.id, kind: "file", name: dc.name, label: dc.label || "",
+        by: dc.by || "", date: dc.date || "", size: dc.size || 0,
+        // Remembered so the mapping can be reviewed later, and so a wrong guess is identifiable
+        // rather than indistinguishable from a deliberate filing.
+        movedFrom: dc.category === "revision" ? "Revision Documents" : "Manuscript & Documents"
+      });
+    });
+    s.docSlotsMigrated = true;
+  }
+
+  // v2: split the single "Revision Documents" pile written by the first version of this migration
+  // into the three named slots. Studies loaded between the two deploys have entries sitting in the
+  // retired key; this moves them rather than leaving them invisible. A move, not a delete — the
+  // entries keep their ids and every field.
+  if (s.docSlots.revision.length) {
+    s.docSlots.revision.forEach(e => {
+      const key = guessRevisionSlot({ label: e.label, name: e.name }) || "revComments";
+      s.docSlots[key].push(e);
+    });
+    s.docSlots.revision = [];
+  }
 
   // Newest first within each slot, so the top row is the current document.
   ALL_SLOT_KEYS.forEach(k => {
     s.docSlots[k].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
   });
-  s.docSlotsMigrated = true;
 }
 function slotEntries(s, key) {
   return (s.docSlots && Array.isArray(s.docSlots[key])) ? s.docSlots[key] : [];
@@ -2578,7 +2624,92 @@ const $sidebarBody = document.getElementById("sidebar-body");
 const $sidebarToggle = document.getElementById("sidebar-toggle");
 const $sidebarResizer = document.getElementById("sidebar-resizer");
 
+/* ============ Keeping half-typed text ============ */
+// Every render() rebuilds the page from innerHTML, which destroys whatever anyone was in the
+// middle of typing. That happens more often than it sounds: a teammate's change arriving over
+// realtime sync re-renders the page under you, and a paragraph of notes is simply gone.
+//
+// So before the rebuild we take the in-progress text out, and afterwards we put it back —
+// including the cursor position, because restoring the text but sending the caret to the end is
+// its own small insult when you were editing the middle of a sentence.
+//
+// "In progress" means value !== defaultValue: defaultValue is what the HTML was rendered with, so
+// anything else is something a person typed and hasn't saved.
+let formDrafts = {};
+try {
+  const saved = sessionStorage.getItem("rt-drafts");
+  if (saved) formDrafts = JSON.parse(saved) || {};
+} catch (e) { formDrafts = {}; }   // private mode, or corrupt — start clean rather than throwing
+function persistDrafts() {
+  // sessionStorage, not localStorage, deliberately: unsaved text should survive a re-render and an
+  // accidental reload, but it should NOT still be sitting there next week on a shared computer.
+  try { sessionStorage.setItem("rt-drafts", JSON.stringify(formDrafts)); } catch (e) { /* non-fatal */ }
+}
+// A key that survives the rebuild. The id when there is one, otherwise the data-attribute that
+// identifies the field — both are regenerated identically by the next render.
+function draftKey(el) {
+  if (el.id) return el.id;
+  const d = el.dataset || {};
+  for (const k of ["slotLink", "absLink", "initNote", "stageNote"]) {
+    if (d[k]) return k + ":" + d[k];
+  }
+  return "";
+}
+function captureDrafts(root) {
+  (root || document).querySelectorAll("input, textarea").forEach(el => {
+    const type = (el.type || "text").toLowerCase();
+    if (type === "checkbox" || type === "radio" || type === "file") return;
+    const key = draftKey(el);
+    if (!key) return;
+    if (el.value !== el.defaultValue) {
+      formDrafts[key] = {
+        v: el.value,
+        // Caret, but only for the field actually being typed in.
+        s: document.activeElement === el ? el.selectionStart : null,
+        e: document.activeElement === el ? el.selectionEnd : null,
+        f: document.activeElement === el
+      };
+    } else {
+      // Back to what was rendered — either saved, or undone. Either way it isn't a draft.
+      delete formDrafts[key];
+    }
+  });
+  persistDrafts();
+}
+function restoreDrafts(root) {
+  let focusEl = null, focusAt = null;
+  (root || document).querySelectorAll("input, textarea").forEach(el => {
+    const key = draftKey(el);
+    if (!key) return;
+    const d = formDrafts[key];
+    if (!d) return;
+    // The rendered value already matches — it got saved in the meantime, so the draft is spent.
+    if (el.value === d.v) { delete formDrafts[key]; return; }
+    el.value = d.v;
+    if (d.f) { focusEl = el; focusAt = [d.s, d.e]; }
+  });
+  if (focusEl) {
+    try {
+      focusEl.focus();
+      if (focusAt[0] != null) focusEl.setSelectionRange(focusAt[0], focusAt[1]);
+    } catch (e) { /* number/date inputs refuse setSelectionRange; the text is restored regardless */ }
+  }
+  persistDrafts();
+}
+// Called by any handler that consumes a field's contents, so the now-sent text isn't put back on
+// the next render. Without this, "Add link" would clear the box and the draft would refill it.
+function clearDraft(el) {
+  if (!el) return;
+  const key = draftKey(el);
+  if (key) { delete formDrafts[key]; persistDrafts(); }
+  // Also blank the live element. Callers clear the draft and then call render(), and render()
+  // re-captures before it rebuilds — so leaving the consumed text sitting in the box would put
+  // the draft straight back, and the field would never empty.
+  try { el.value = el.defaultValue || ""; } catch (e) { /* non-fatal */ }
+}
+
 function render() {
+  captureDrafts(document);
   document.querySelectorAll("nav.tabbar button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
   const addBtn = document.getElementById("add-btn");
   addBtn.style.visibility = (tab === "settings" || tab === "notes") ? "hidden" : "visible";
@@ -2589,6 +2720,7 @@ function render() {
   else if (tab === "notes") renderTeamNotes();
   else renderSettings();
   renderSidebar(); // desktop-only collapsible dashboard panel, kept in sync with every render
+  restoreDrafts(document);
 }
 
 // Expandable deadline row used on both boards (abstracts & grants)
@@ -3842,17 +3974,21 @@ function manuscriptBodyHTML(s) {
     <div id="ms-revision-fields" style="display:${showRevision ? "block" : "none"}">
       ${plainFieldRow("Revisions received", "ms-revisions-received", s.revisionsReceivedDate, { type: "date" })}
       ${plainFieldRow("Revisions due", "ms-revisions-deadline", s.revisionsDeadline, { type: "date" })}
-      <!-- Reviewer comments, the revised manuscript and the point-by-point response all belong to
-           this decision, so they sit inside it rather than in a section of their own. -->
-      ${docSlotHTML(s, "revision", { empty: "Reviewer comments, the revised manuscript, your point-by-point response — link or upload each." })}
+      <!-- Three separate documents, three separate slots. They belong to this decision, so they
+           sit inside it rather than in a section of their own. -->
+      ${REVISION_SLOTS.map(sl => docSlotHTML(s, sl.key, {
+        empty: sl.key === "revComments" ? "The letter from the journal — link or upload it."
+             : sl.key === "revManuscript" ? "The manuscript as revised for this round."
+             : "Your point-by-point reply to the reviewers."
+      })).join("")}
     </div>
     <!-- Revision documents already on file when the decision ISN'T a revision. Shown anyway: a
          section that hides existing documents is indistinguishable from one that lost them. -->
-    ${(!showRevision && slotEntries(s, "revision").length) ? `
+    ${(!showRevision && anyRevisionDocs(s)) ? `
       <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:10px 2px 4px 2px">
         Revision documents from an earlier round — kept here because the current decision isn't a revision.
       </div>
-      ${docSlotHTML(s, "revision")}` : ""}
+      ${REVISION_SLOTS.filter(sl => slotEntries(s, sl.key).length).map(sl => docSlotHTML(s, sl.key)).join("")}` : ""}
 
     ${d === "Rejected" ? `
     <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5;margin-top:10px">
@@ -4088,7 +4224,7 @@ function renderStudyDetail() {
     abstracts: abstracts.length > 0 || linkedAbstractMeetings.length > 0,
     manuscript: !!(s.journal || s.submittedDate || s.journalTrackingId || s.revisionsReceivedDate
       || s.revisionsDeadline || s.decision || (s.priorSubmissions || []).length
-      || slotEntries(s, "submitted").length || slotEntries(s, "revision").length),
+      || slotEntries(s, "submitted").length || anyRevisionDocs(s)),
     deadlines: linkedGrantMeetings.length > 0,
     tasks: tasks.length > 0
   };
@@ -4485,6 +4621,9 @@ function renderStudyDetail() {
     const input = $main.querySelector(`[data-slot-link="${key}"]`);
     const url = input ? input.value.trim() : "";
     if (!url) { toast("Paste a link first, or use Upload"); return; }
+    // Cleared BEFORE the save, not after: addSlotEntry saves, which re-renders, which restores
+    // drafts — so a draft still alive at that moment gets put straight back into the fresh box.
+    clearDraft(input);
     addSlotEntry(s, key, { id: uid(), kind: "link", url, label: "", by: me(), date: todayStr() });
     render();
     toast(!slotIsMulti(key) && slotEntries(s, key).length > 1
@@ -4529,6 +4668,7 @@ function renderStudyDetail() {
     const input = $main.querySelector(`[data-abs-link="${a.id}"]`);
     const url = input ? input.value.trim() : "";
     if (!url) { toast("Paste a link first, or use Upload"); return; }
+    clearDraft(input);   // before the save, for the same reason as the slot handler above
     if (!Array.isArray(a.docs)) a.docs = [];
     a.docs.unshift({ id: uid(), kind: "link", url, label: "Submitted abstract", by: me(), date: todayStr() });
     upsertStudy(s);
@@ -4641,6 +4781,8 @@ function renderStudyDetail() {
     const link = document.getElementById("mnote-link").value.trim();
     const date = document.getElementById("mnote-date").value;
     if (!link) { toast("Paste a link to the notes"); return; }
+    // Consumed, so the drafts mustn't refill the boxes on the render that follows.
+    ["mnote-label", "mnote-link", "mnote-date"].forEach(id => clearDraft(document.getElementById(id)));
     s.meetingNotes = s.meetingNotes || [];
     s.meetingNotes.push({ id: uid(), label, link, date });
     upsertStudy(s);
@@ -4670,6 +4812,7 @@ function renderStudyDetail() {
     if (!meeting) { toast("Enter the meeting name"); return; }
     s.abstracts = s.abstracts || [];
     s.abstracts.push({ id: uid(), meeting, date: document.getElementById("abs-date").value, status: "Submitted" });
+    ["abs-meeting", "abs-date"].forEach(id => clearDraft(document.getElementById(id)));
     upsertStudy(s);
     toast("Abstract added");
   };
@@ -5307,6 +5450,7 @@ function renderTeamNotes() {
     const link = document.getElementById("note-link").value.trim();
     const date = document.getElementById("note-date").value;
     if (!link) { toast("Paste a link to the notes"); return; }
+    ["note-label", "note-link", "note-date"].forEach(id => clearDraft(document.getElementById(id)));
     upsertTeamNote({ id: uid(), label, link, date });
     toast("Meeting notes added");
   };
