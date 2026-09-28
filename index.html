@@ -2655,7 +2655,7 @@ function persistDrafts() {
 function draftKey(el) {
   if (el.id) return el.id;
   const d = el.dataset || {};
-  for (const k of ["slotLink", "absLink", "initNote", "stageNote"]) {
+  for (const k of ["slotLink", "absLink", "noteEditText", "noteEditDate", "initNote", "stageNote"]) {
     if (d[k]) return k + ":" + d[k];
   }
   return "";
@@ -3545,13 +3545,31 @@ function followUpTotals(s) {
 let openNoteArchives = {};
 const NOTE_ICON_BTN = "border:none;background:none;color:var(--text2);cursor:pointer;padding:5px 7px;line-height:1;font-size:16px";
 
+// A note being edited in place. View state only, and only ever one at a time — an id, or "".
+let editingNoteId = "";
 function noteRowHTML(n, actions) {
+  // Editing in place rather than in a sheet: a note is usually a sentence, and putting a sentence
+  // behind a modal makes fixing a typo feel like filing paperwork. The date is editable too,
+  // because a note written up days later should be able to carry the date it's about.
+  if (editingNoteId === n.id) {
+    return `
+    <div class="milestone-row" style="align-items:flex-start;flex-direction:column;gap:8px">
+      <textarea data-note-edit-text="${esc(n.id)}" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14.5px;font-family:inherit;color:var(--text);outline:none">${esc(n.text || "")}</textarea>
+      <div style="display:flex;gap:8px;align-items:center;width:100%;flex-wrap:wrap">
+        <input type="date" data-note-edit-date="${esc(n.id)}" value="${esc(n.date || "")}" style="border:none;background:var(--bg);border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none;max-width:135px">
+        <div style="flex:1"></div>
+        <button class="mini-btn" data-note-edit-cancel="${esc(n.id)}" style="margin:0">Cancel</button>
+        <button class="mini-btn" data-note-edit-save="${esc(n.id)}" style="margin:0;color:var(--blue);font-weight:700">Save</button>
+      </div>
+    </div>`;
+  }
   return `
     <div class="milestone-row" style="align-items:flex-start">
       <div style="flex:1;min-width:0">
         ${n.date ? `<div style="font-size:12px;color:var(--text2);font-weight:600">${fmtDate(n.date)}</div>` : ""}
-        <div style="font-size:14.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word">${esc(n.text || "")}</div>
+        <div data-note-open="${esc(n.id)}" title="Tap to edit" style="font-size:14.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;cursor:text">${esc(n.text || "")}</div>
       </div>
+      <button data-note-open="${esc(n.id)}" title="Edit this note" style="${NOTE_ICON_BTN};font-size:13px;font-weight:700;color:var(--blue)">Edit</button>
       ${actions}
     </div>`;
 }
@@ -4237,6 +4255,7 @@ function renderStudyDetail() {
   // expand/collapse choices survive the re-renders that follow an inline edit.
   if (sectionStateForStudy !== s.id) {
     openNoteArchives = {};
+    editingNoteId = "";
     studySectionState = {};
     Object.keys(hasContent).forEach(id => {
       // Phase decides. A section that isn't part of this phase's work starts collapsed even if
@@ -4734,6 +4753,40 @@ function renderStudyDetail() {
     upsertStudy(s);
     toast("Note added");
   };
+  // Tapping the text (or Edit) opens that note in place. Only one at a time: two open editors on
+  // the same screen makes it ambiguous which one Save belongs to.
+  $main.querySelectorAll("[data-note-open]").forEach(el => el.onclick = () => {
+    if (blockOfflineEdit("Editing a note")) return;
+    editingNoteId = el.dataset.noteOpen;
+    render();
+    const box = $main.querySelector(`[data-note-edit-text="${editingNoteId}"]`);
+    if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+  });
+  $main.querySelectorAll("[data-note-edit-cancel]").forEach(b => b.onclick = () => {
+    const box = $main.querySelector(`[data-note-edit-text="${b.dataset.noteEditCancel}"]`);
+    // Drop the draft too, or the abandoned text would be restored the next time this note is opened.
+    clearDraft(box);
+    editingNoteId = "";
+    render();
+  });
+  $main.querySelectorAll("[data-note-edit-save]").forEach(b => b.onclick = () => {
+    const id = b.dataset.noteEditSave;
+    const n = (s.noteEntries || []).find(x => x.id === id);
+    if (!n || blockOfflineEdit("Editing a note")) return;
+    const box = $main.querySelector(`[data-note-edit-text="${id}"]`);
+    const dateEl = $main.querySelector(`[data-note-edit-date="${id}"]`);
+    const text = box ? box.value.trim() : "";
+    // An empty note would render as a blank row with no way back into it. Deleting is a separate,
+    // deliberate act with its own confirmation, so this refuses rather than quietly deleting.
+    if (!text) { toast("A note can't be empty — use × to delete it"); return; }
+    clearDraft(box);
+    n.text = text;
+    if (dateEl) n.date = dateEl.value || n.date;
+    editingNoteId = "";
+    upsertStudy(s);
+    render();
+    toast("Note updated");
+  });
   $main.querySelectorAll("[data-note-arch]").forEach(b => b.onclick = () => {
     const n = (s.noteEntries || []).find(x => x.id === b.dataset.noteArch);
     if (!n || blockOfflineEdit("Archiving a note")) return;
