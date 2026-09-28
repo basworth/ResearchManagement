@@ -4017,6 +4017,7 @@ function renderStudyDetail() {
         </div>
         ${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:8px 4px">Open ↗</a>
         <button type="button" data-copy-link="${esc(n.link)}" data-copy-label="Meeting notes" style="border:none;background:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:8px 4px">Copy</button>` : ""}
+        <button type="button" data-mnote-edit="${n.id}" style="border:none;background:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:8px 4px">Edit</button>
         <button data-mnote-del="${n.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
       </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No meeting notes linked yet. Add one every time this study comes up in a meeting.</div>`}
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
@@ -4448,6 +4449,16 @@ function renderStudyDetail() {
     upsertStudy(s);
     toast("Meeting notes added");
   };
+  $main.querySelectorAll("[data-mnote-edit]").forEach(b => b.onclick = () => {
+    const n = (s.meetingNotes || []).find(x => x.id === b.dataset.mnoteEdit);
+    if (!n) return;
+    openMeetingNoteSheet(n, (updated) => {
+      // Replaced by id, in place, so the entry keeps its position and identity.
+      s.meetingNotes = s.meetingNotes.map(x => x.id === updated.id ? updated : x);
+      upsertStudy(s);
+      render();
+    });
+  });
   $main.querySelectorAll("[data-mnote-del]").forEach(b => b.onclick = () => {
     const n = (s.meetingNotes || []).find(x => x.id === b.dataset.mnoteDel);
     if (!n) return;
@@ -5080,6 +5091,7 @@ function renderTeamNotes() {
         </div>
         ${n.link ? `<a href="${esc(n.link)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:8px 4px">Open ↗</a>
         <button type="button" data-copy-link="${esc(n.link)}" data-copy-label="Meeting notes" style="border:none;background:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:8px 4px">Copy</button>` : ""}
+        <button type="button" data-note-edit="${n.id}" style="border:none;background:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:8px 4px">Edit</button>
         <button data-note-del="${n.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
       </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No meeting notes logged yet.</div>`;
   html += `
@@ -5101,6 +5113,12 @@ function renderTeamNotes() {
     upsertTeamNote({ id: uid(), label, link, date });
     toast("Meeting notes added");
   };
+  $main.querySelectorAll("[data-note-edit]").forEach(b => b.onclick = () => {
+    const n = notes.find(x => x.id === b.dataset.noteEdit);
+    if (!n) return;
+    // upsertTeamNote replaces by id and syncs, so passing the edited copy is the whole update.
+    openMeetingNoteSheet(n, (updated) => upsertTeamNote(updated));
+  });
   $main.querySelectorAll("[data-note-del]").forEach(b => b.onclick = () => {
     const n = notes.find(x => x.id === b.dataset.noteDel);
     if (!n || !confirm(`Remove "${n.label || "these meeting notes"}"?`)) return;
@@ -5892,6 +5910,39 @@ function openSheet(title, bodyHTML, onSave, afterOpen, opts) {
   document.getElementById("sheet-cancel").onclick = closeSheet;
   document.getElementById("sheet-save").onclick = () => { if (onSave() !== false) closeSheet(); };
   if (typeof afterOpen === "function") afterOpen(sh);
+}
+// Editing a meeting-notes entry — the study list and the team-wide list share this, because they
+// hold the same three fields and a typo in either wants fixing the same way.
+//
+// Until now the only correction available was × and retype, which meant destroying the record to
+// fix a misspelt label. Editing in place keeps the entry (and its id, so nothing linked to it
+// breaks) and changes only what you change.
+function openMeetingNoteSheet(note, onSave) {
+  if (blockOfflineEdit("Editing meeting notes")) return;
+  const inputStyle = "border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;width:100%;box-sizing:border-box";
+  openSheet("Edit meeting notes", `
+    <div class="fld"><label for="mn-edit-label">What was it?</label>
+      <input id="mn-edit-label" placeholder="e.g. Weekly Research Meeting 7/29" value="${esc(note.label || "")}" style="${inputStyle}"></div>
+    <div class="fld"><label for="mn-edit-date">Date</label>
+      <input id="mn-edit-date" type="date" value="${esc(note.date || "")}" style="${inputStyle}"></div>
+    <div class="fld"><label for="mn-edit-link">Link to the notes</label>
+      <input id="mn-edit-link" placeholder="Paste link to the notes…" value="${esc(note.link || "")}" style="${inputStyle}"></div>
+    <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px">Leave the label blank and it shows as "Meeting Notes". Clearing the date is fine; clearing the link isn't, since the entry would then point at nothing.</div>
+  `, () => {
+    const link = document.getElementById("mn-edit-link").value.trim();
+    // Held open rather than closed, for the same reason as everywhere else: closing on a refusal
+    // looks exactly like saving.
+    if (!link) { toast("Paste a link, or Cancel to leave it as it was"); return false; }
+    onSave({
+      // Spread first so any field this sheet doesn't show survives untouched.
+      ...note,
+      label: document.getElementById("mn-edit-label").value.trim(),
+      date: document.getElementById("mn-edit-date").value,
+      link
+    });
+    toast("Meeting notes updated");
+    return true;
+  }, (sh) => { const el = sh.querySelector("#mn-edit-label"); if (el) { el.focus(); el.select(); } });
 }
 function closeSheet() {
   const bd = document.getElementById("sheet-bd"), sh = document.getElementById("sheet");
