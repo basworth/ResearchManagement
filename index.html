@@ -978,7 +978,7 @@ function setSub(soc, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [] };
+let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [] };
 let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
@@ -1334,6 +1334,7 @@ function migrate() {
   if (!Array.isArray(state.userPrefs)) state.userPrefs = [];
   if (!Array.isArray(state.profiles)) state.profiles = [];
   if (!Array.isArray(state.filterSets)) state.filterSets = [];
+  if (!Array.isArray(state.suggestions)) state.suggestions = [];
   if (!state.nameAliases || typeof state.nameAliases !== "object") state.nameAliases = {};
   // A customised stage list won't contain stages added to the defaults later, so splice them in
   // once. The "once" matters: the stage editor lets people deliberately remove stages, and
@@ -1878,6 +1879,7 @@ async function pullAll() {
     state.userPrefs = data.filter(r => r.kind === "userPref").map(r => r.data);
     state.profiles = data.filter(r => r.kind === "profile").map(r => r.data);
     state.filterSets = data.filter(r => r.kind === "filterSet").map(r => r.data);
+    state.suggestions = data.filter(r => r.kind === "suggestion").map(r => r.data);
     const meta = data.find(r => r.kind === "meta");
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
     if (meta && meta.data.degrees && typeof meta.data.degrees === "object") state.rosterDegrees = meta.data.degrees;
@@ -1992,7 +1994,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
     if (Array.isArray(data.names)) { state.roster = data.names; saveLocal(); render(); }
     return;
   }
-  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : kind === "filterSet" ? state.filterSets : null;
+  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : kind === "filterSet" ? state.filterSets : kind === "suggestion" ? state.suggestions : null;
   if (!arr) return;
   // Match on the payload's own id, not the row id: for userPref the two differ (see
   // prefRowId), and matching on the row id would never find the existing entry — so every
@@ -2009,7 +2011,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
 function applyRealtimeDelete(id) {
   if (!id) return;
   let hitOpenRecord = false;
-  ["studies", "tasks", "meetings", "teamNotes", "userPrefs", "profiles", "filterSets"].forEach(key => {
+  ["studies", "tasks", "meetings", "teamNotes", "userPrefs", "profiles", "filterSets", "suggestions"].forEach(key => {
     const before = state[key].length;
     // userPref rows live under a derived row id, so also check that mapping — otherwise a
     // deleted preferences row would linger in local state forever.
@@ -2054,6 +2056,7 @@ async function pushAllLocal() {
     ...(state.userPrefs || []).map(p => ({ id: prefRowId(p.id), kind: "userPref", data: p, updated_at: now() })),
     ...(state.profiles || []).map(p => ({ id: p.id, kind: "profile", data: p, updated_at: now() })),
     ...(state.filterSets || []).map(f => ({ id: f.id, kind: "filterSet", data: f, updated_at: now() })),
+    ...(state.suggestions || []).map(g => ({ id: g.id, kind: "suggestion", data: g, updated_at: now() })),
     // Must carry every meta field, not just names — an earlier version dropped degrees and
     // would silently wipe them on a full re-push.
     { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null, nameAliases: state.nameAliases || {}, stageAdds: state.stageAdds || [] }, updated_at: now() }
@@ -5044,6 +5047,329 @@ function bindFilterSetsBar(tab, setActive) {
     deleteFilterSet(id);
   };
 }
+/* ============ Suggested Updates ============ */
+// Journal and IRB emails already say what changed. Today somebody reads one, remembers to open the
+// tracker, finds the study, and retypes it — and the step that gets skipped is the last one. So an
+// email can be forwarded here instead, and the tracker proposes the update.
+//
+// It PROPOSES. The only things applied without asking are additions that can't destroy anything:
+// a note, or a date written into a field that was empty. Anything that overwrites a value, moves a
+// phase, or changes IRB status waits for a person — those are the ones that are expensive to get
+// wrong, and a parser reading free text will get some of them wrong.
+
+// ---------- Protected health information ----------
+// The tracker is deliberately study-level and holds no PHI. A forwarded email might, so it is
+// scrubbed BEFORE anything is stored — not before it is displayed, which would leave it in the
+// database. Conservative on purpose: it would rather redact a grant number that looks like an MRN
+// than store an MRN that looks like a grant number.
+const PHI_PATTERNS = [
+  { re: /\b\d{3}-\d{2}-\d{4}\b/g,                              as: "[ssn removed]" },
+  { re: /\bMRN[:# ]*\d{4,12}\b/gi,                             as: "[mrn removed]" },
+  { re: /\b(?:medical record(?: number)?|patient id)[:# ]*\d{4,12}\b/gi, as: "[mrn removed]" },
+  // A bare 7–12 digit run. Journal tracking IDs carry letters and hyphens, and IRB numbers are
+  // matched before this runs, so what's left at this length is usually an identifier.
+  { re: /\b\d{7,12}\b/g,                                       as: "[number removed]" },
+  { re: /\b(?:dob|date of birth)[:\s]*\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}\b/gi, as: "[dob removed]" },
+  { re: /\b\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b/g,                as: "[phone removed]" }
+];
+function stripPHI(text) {
+  let out = String(text || "");
+  const found = [];
+  PHI_PATTERNS.forEach(p => {
+    out = out.replace(p.re, () => { found.push(p.as); return p.as; });
+  });
+  return { text: out, redacted: found.length, kinds: [...new Set(found)] };
+}
+
+// ---------- Which study is this about? ----------
+// Ordered by how specific the evidence is. A journal tracking ID identifies one study and nothing
+// else; a nickname appearing in prose might be a coincidence. Returning HOW it matched matters as
+// much as the match: a suggestion you can't audit is one you have to re-check by hand anyway.
+function matchStudyFromText(text) {
+  const t = String(text || "");
+  const studies = state.studies || [];
+  const tryField = (field, label, minLen) => {
+    for (const s of studies) {
+      const v = String(s[field] || "").trim();
+      if (!v || v.length < (minLen || 4)) continue;
+      // Escaped: IRB numbers and tracking IDs contain characters that are regex syntax.
+      const re = new RegExp("(^|[^A-Za-z0-9])" + v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^A-Za-z0-9]|$)", "i");
+      if (re.test(t)) return { study: s, basis: `${label} ${v}` };
+    }
+    return null;
+  };
+  return tryField("journalTrackingId", "tracking ID", 4)
+      || tryField("irb", "IRB number", 4)
+      || tryField("nct", "ClinicalTrials.gov number", 6)
+      // Title before nickname: a full IRB title appearing in an email is unambiguous, whereas a
+      // nickname like "Meniscus" could be any of several studies or just a word in a sentence.
+      || tryField("title", "study title", 12)
+      || tryField("nickname", "nickname", 6)
+      || null;
+}
+
+// ---------- What is this email telling us? ----------
+const DECISION_PATTERNS = [
+  { re: /\b(?:major revision|revise and resubmit|major revisions? (?:are )?required)\b/i, decision: "Major revision" },
+  { re: /\b(?:minor revision|minor revisions? (?:are )?required)\b/i,                     decision: "Minor revision" },
+  { re: /\b(?:we are pleased to (?:accept|inform)|has been accepted|accepted for publication)\b/i, decision: "Accepted" },
+  { re: /\b(?:we regret|unable to accept|has been rejected|decline(?:d)? (?:to publish|your))\b/i,  decision: "Rejected" }
+];
+// A date in any of the shapes these emails actually use, returned as YYYY-MM-DD.
+function parseLooseDate(str) {
+  const s = String(str || "").trim();
+  let m = /\b(\d{4})-(\d{2})-(\d{2})\b/.exec(s);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+  m = /\b(\d{1,2})\s+([A-Za-z]{3,9})\.?\s+(\d{4})\b/.exec(s);
+  if (m && MONTHS[m[2].slice(0, 3).toLowerCase()]) {
+    return `${m[3]}-${String(MONTHS[m[2].slice(0, 3).toLowerCase()]).padStart(2, "0")}-${String(+m[1]).padStart(2, "0")}`;
+  }
+  m = /\b([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})\b/.exec(s);
+  if (m && MONTHS[m[1].slice(0, 3).toLowerCase()]) {
+    return `${m[3]}-${String(MONTHS[m[1].slice(0, 3).toLowerCase()]).padStart(2, "0")}-${String(+m[2]).padStart(2, "0")}`;
+  }
+  // US order assumed for the ambiguous numeric form — these are American journals and an American
+  // IRB. Flagged as a guess so it never auto-applies.
+  m = /\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/.exec(s);
+  if (m) return `${m[3]}-${String(+m[1]).padStart(2, "0")}-${String(+m[2]).padStart(2, "0")}`;
+  return "";
+}
+// A proposed change. `safe` decides whether it can apply itself: true only for additions that
+// destroy nothing. Anything replacing an existing value is never safe, whatever the field.
+function proposal(field, label, to, safe, why) {
+  return { field, label, to, safe: !!safe, why: why || "" };
+}
+function readEmail(text, subject) {
+  const body = String(subject || "") + "\n" + String(text || "");
+  const hit = matchStudyFromText(body);
+  const changes = [];
+  if (hit) {
+    const s = hit.study;
+    const dec = DECISION_PATTERNS.find(p => p.re.test(body));
+    if (dec && s.decision !== dec.decision) {
+      // Never safe. A decision drives which fields the manuscript section even shows, and a parser
+      // that reads "we regret we cannot offer minor revisions" backwards would be expensive.
+      changes.push(proposal("decision", "Journal decision", dec.decision, false,
+        "the email reads like a " + dec.decision.toLowerCase()));
+    }
+    const dueM = /\b(?:revisions?|revised manuscript|response)[^.\n]{0,40}?\b(?:due|by|no later than|within)\b[^.\n]{0,30}?([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{4})/i.exec(body);
+    if (dueM) {
+      const d = parseLooseDate(dueM[1]);
+      // Safe only into an empty field: filling a blank adds information, overwriting a date
+      // somebody typed destroys it.
+      if (d && !s.revisionsDeadline) changes.push(proposal("revisionsDeadline", "Revisions due", d, true, "stated in the email"));
+      else if (d && s.revisionsDeadline !== d) changes.push(proposal("revisionsDeadline", "Revisions due", d, false, "the email says " + d + ", the study says " + s.revisionsDeadline));
+    }
+    const expM = /\b(?:expir\w+|continuing review|approval period ends?)\b[^.\n]{0,40}?([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{4})/i.exec(body);
+    if (expM) {
+      const d = parseLooseDate(expM[1]);
+      if (d && !s.irbExpiry) changes.push(proposal("irbExpiry", "IRB expiry", d, true, "stated in the email"));
+      else if (d && s.irbExpiry !== d) changes.push(proposal("irbExpiry", "IRB expiry", d, false, "the email says " + d + ", the study says " + s.irbExpiry));
+    }
+  }
+  return { study: hit ? hit.study : null, basis: hit ? hit.basis : "", changes };
+}
+
+// ---------- The queue ----------
+function upsertSuggestion(g) {
+  state.suggestions = state.suggestions || [];
+  const i = state.suggestions.findIndex(x => x.id === g.id);
+  if (i >= 0) state.suggestions[i] = g; else state.suggestions.push(g);
+  saveLocal(); pushItem("suggestion", g);
+}
+function pendingSuggestions() {
+  return (state.suggestions || []).filter(g => g.status === "pending")
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+}
+// Writes one proposed change onto its study. Returns a description of what it did, for the record.
+function applyChange(s, c) {
+  const before = s[c.field];
+  s[c.field] = c.to;
+  // A decision recorded by hand offers a matching phase move; one arriving by email must not, or
+  // an email could silently reshape a study. The offer still appears next time someone opens the
+  // manuscript section and changes it themselves.
+  if (c.field === "decision" && c.to && c.to !== "Awaiting decision" && !s.decisionDate) s.decisionDate = todayStr();
+  return { field: c.field, label: c.label, from: before || "", to: c.to };
+}
+// Takes an email, files it, and applies only what is safe. Everything else waits.
+function ingestEmail(raw, subject, source, from) {
+  const clean = stripPHI(raw);
+  const read = readEmail(clean.text, subject);
+  const now = new Date().toISOString();
+  const g = {
+    id: uid(),
+    createdAt: now,
+    source: source || "paste",
+    from: from || "",
+    subject: String(subject || "").slice(0, 200),
+    // Only ever the scrubbed text is stored.
+    text: clean.text.slice(0, 20000),
+    redacted: clean.redacted,
+    redactedKinds: clean.kinds,
+    studyId: read.study ? read.study.id : "",
+    basis: read.basis,
+    changes: read.changes,
+    applied: [],
+    status: "pending"
+  };
+  if (read.study && read.changes.some(c => c.safe)) {
+    const s = studyById(read.study.id);
+    if (s) {
+      const safe = read.changes.filter(c => c.safe);
+      g.applied = safe.map(c => applyChange(s, c));
+      upsertStudy(s);
+      g.changes = read.changes.filter(c => !c.safe);
+    }
+  }
+  // Nothing left to decide, and something was done: file it as handled rather than making someone
+  // dismiss a queue item that has no question in it.
+  if (!g.changes.length && g.applied.length) { g.status = "applied"; g.decidedAt = now; g.decidedBy = me(); }
+  upsertSuggestion(g);
+  return g;
+}
+function acceptSuggestion(id, fields) {
+  const g = (state.suggestions || []).find(x => x.id === id);
+  if (!g) return;
+  const s = studyById(g.studyId);
+  if (!s) { toast("That study no longer exists"); return; }
+  const take = g.changes.filter(c => !fields || fields.indexOf(c.field) >= 0);
+  g.applied = (g.applied || []).concat(take.map(c => applyChange(s, c)));
+  upsertStudy(s);
+  // Only the ones actually taken leave the list; anything left unticked stays to be decided.
+  g.changes = g.changes.filter(c => take.indexOf(c) < 0);
+  if (!g.changes.length) { g.status = "applied"; g.decidedAt = new Date().toISOString(); g.decidedBy = me(); }
+  upsertSuggestion(g);
+  render();
+  toastAction(`Updated ${s.nickname || s.title}`, "Open study", () => { openStudy(s.id); tab = "studies"; render(); });
+}
+function dismissSuggestion(id) {
+  const g = (state.suggestions || []).find(x => x.id === id);
+  if (!g) return;
+  // Dismissed, never deleted: the email and what it proposed stay on the record, so "why didn't
+  // this get entered?" has an answer six months later.
+  g.status = "dismissed";
+  g.decidedAt = new Date().toISOString();
+  g.decidedBy = me();
+  upsertSuggestion(g);
+  render();
+  toast("Dismissed — kept on the record, nothing was changed");
+}
+
+// ---------- Reviewing the queue ----------
+function suggestionCardHTML(g) {
+  const s = g.studyId ? studyById(g.studyId) : null;
+  const when = g.createdAt ? fmtDate(String(g.createdAt).slice(0, 10)) : "";
+  return `<div class="card">
+    <div style="display:flex;gap:8px;align-items:flex-start">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis">${esc(g.subject || "(no subject)")}</div>
+        <div style="font-size:11.5px;color:var(--text2);margin-top:2px">
+          ${when}${g.from ? " · " + esc(g.from) : ""}${g.source === "email" ? " · forwarded" : " · pasted in"}
+        </div>
+      </div>
+      <button class="mini-btn" data-sugg-dismiss="${esc(g.id)}" style="margin:0;flex:0 0 auto">Dismiss</button>
+    </div>
+
+    ${s ? `<div style="font-size:13px;margin-top:8px">
+        Matched to <b data-open-study="${esc(s.id)}" style="cursor:pointer;color:var(--blue)">${esc(s.nickname || s.title)}</b>
+        <span style="color:var(--text2)">by ${esc(g.basis)}</span>
+      </div>`
+      : `<div style="font-size:13px;color:var(--orange);margin-top:8px">
+        Couldn't tell which study this is about. Nothing was changed — it mentions no IRB number,
+        tracking ID or study title the tracker recognises.
+      </div>`}
+
+    ${(g.applied || []).length ? `
+      <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:12px 2px 4px 2px">ALREADY APPLIED</div>
+      ${g.applied.map(a => `<div style="font-size:13px;padding:3px 0">
+        ${esc(a.label)} → <b>${esc(a.to)}</b>${a.from ? ` <span style="color:var(--text2)">(was ${esc(a.from)})</span>` : ` <span style="color:var(--text2)">(was empty)</span>`}
+      </div>`).join("")}` : ""}
+
+    ${(g.changes || []).length ? `
+      <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:12px 2px 4px 2px">NEEDS YOUR DECISION</div>
+      ${g.changes.map(c => `<label class="frow" style="gap:10px;cursor:pointer;border-bottom:none;padding:5px 0;align-items:flex-start">
+        <input type="checkbox" class="sugg-pick" data-sugg="${esc(g.id)}" data-field="${esc(c.field)}" checked style="flex:0;width:20px;height:20px;margin-top:2px">
+        <span style="flex:1;min-width:0;font-size:14px">
+          ${esc(c.label)} → <b>${esc(c.to)}</b>
+          <div style="font-size:11.5px;color:var(--text2);margin-top:2px">${esc(c.why)}</div>
+        </span>
+      </label>`).join("")}
+      <button class="btn" data-sugg-accept="${esc(g.id)}" style="margin-top:10px">Apply the ticked changes</button>` : ""}
+
+    <button class="mini-btn" data-sugg-text="${esc(g.id)}" style="margin-top:10px">Show the email</button>
+    <div id="sugg-text-${esc(g.id)}" style="display:none;font-size:12.5px;color:var(--text2);line-height:1.5;white-space:pre-wrap;background:var(--bg);border-radius:8px;padding:10px 12px;margin-top:8px">${esc(g.text || "")}</div>
+    ${g.redacted ? `<div style="font-size:11.5px;color:var(--text2);margin-top:6px">
+      ${g.redacted} item${g.redacted === 1 ? "" : "s"} redacted before storing (${esc((g.redactedKinds || []).join(", "))}) — the tracker holds no patient data.
+    </div>` : ""}
+  </div>`;
+}
+function suggestionsSectionHTML() {
+  const pending = pendingSuggestions();
+  const recent = (state.suggestions || [])
+    .filter(g => g.status !== "pending")
+    .sort((a, b) => String(b.decidedAt || b.createdAt || "").localeCompare(String(a.decidedAt || a.createdAt || "")))
+    .slice(0, 5);
+  return `
+  <div class="section-title">Suggested Updates${pending.length ? ` (${pending.length})` : ""}</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
+    Paste a journal or IRB email below and the tracker will work out which study it's about and what
+    it says. Dates that fill an empty field are applied straight away; anything that would overwrite
+    a value, or change a decision, waits for you here.
+    <div style="margin-top:10px">
+      <input id="sugg-subject" placeholder="Subject line (optional)" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
+    </div>
+    <div style="margin-top:8px">
+      <textarea id="sugg-body" rows="4" placeholder="Paste the email here…" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14px;font-family:inherit;color:var(--text);outline:none"></textarea>
+    </div>
+    <button class="btn" id="sugg-add" style="margin-top:8px">Read this email</button>
+  </div>
+  ${pending.length ? pending.map(suggestionCardHTML).join("")
+    : `<div class="card" style="color:var(--text2);font-size:14px">Nothing waiting on you.</div>`}
+  ${recent.length ? `
+    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:14px 2px 4px 2px">RECENTLY HANDLED</div>
+    ${recent.map(g => `<div class="task-row" style="padding:7px 0;gap:8px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(g.subject || "(no subject)")}</div>
+        <div style="font-size:11.5px;color:var(--text2)">${g.status === "applied" ? "Applied" : "Dismissed"}${g.decidedBy ? " by " + esc(g.decidedBy) : ""}${g.decidedAt ? " · " + fmtDate(String(g.decidedAt).slice(0, 10)) : ""}</div>
+      </div>
+    </div>`).join("")}` : ""}`;
+}
+function bindSuggestions(root) {
+  const add = root.querySelector("#sugg-add");
+  if (add) add.onclick = () => {
+    if (blockOfflineEdit("Reading an email")) return;
+    const body = root.querySelector("#sugg-body");
+    const subj = root.querySelector("#sugg-subject");
+    const text = body ? body.value.trim() : "";
+    if (!text) { toast("Paste the email first"); return; }
+    const subject = subj ? subj.value.trim() : "";
+    // Cleared BEFORE the read: ingesting saves, saving re-renders, and a re-render restores drafts
+    // — so a draft still alive at that point would refill the boxes we just consumed.
+    clearDraft(body); clearDraft(subj);
+    const g = ingestEmail(text, subject, "paste", "");
+    render();
+    if (!g.studyId) toast("Read it, but couldn't tell which study it's about — see below");
+    else if (g.applied.length && !g.changes.length) toast(`Applied ${g.applied.length} change${g.applied.length === 1 ? "" : "s"} to ${esc(studyById(g.studyId).nickname || studyById(g.studyId).title)}`);
+    else if (g.changes.length) toast(`${g.changes.length} change${g.changes.length === 1 ? "" : "s"} waiting for your decision`);
+    else toast("Read it — nothing in it changes anything on that study");
+  };
+  root.querySelectorAll("[data-sugg-accept]").forEach(b => b.onclick = () => {
+    const id = b.dataset.suggAccept;
+    const fields = [...root.querySelectorAll(`.sugg-pick[data-sugg="${id}"]`)].filter(c => c.checked).map(c => c.dataset.field);
+    if (!fields.length) { toast("Tick something to apply, or Dismiss it"); return; }
+    acceptSuggestion(id, fields);
+  });
+  root.querySelectorAll("[data-sugg-dismiss]").forEach(b => b.onclick = () => dismissSuggestion(b.dataset.suggDismiss));
+  root.querySelectorAll("[data-sugg-text]").forEach(b => b.onclick = () => {
+    const box = root.querySelector("#sugg-text-" + b.dataset.suggText);
+    if (!box) return;
+    const open = box.style.display !== "none";
+    box.style.display = open ? "none" : "block";
+    b.textContent = open ? "Show the email" : "Hide the email";
+  });
+}
+
 /* ============ Worklist columns ============ */
 // The Worklist used to be a fixed set of columns for everyone. It isn't one table, though — it's
 // several: the enrolment view, the "what's stuck" view, the manuscript-chasing view. Each wants a
@@ -5806,6 +6132,8 @@ function renderSettings() {
   <datalist id="dl-people-set">${state.roster.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
   <button class="btn danger" id="sign-out-btn">Sign Out</button>
 
+  ${suggestionsSectionHTML()}
+
   <div class="card">
     <div style="font-size:12px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin-bottom:4px">TEAM MEMBERS — used for task assignment &amp; author lists</div>
     <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-bottom:10px">
@@ -6019,6 +6347,10 @@ function renderSettings() {
           ? "Alerts will go to " + typed + " — clear the box in Settings to switch back"
           : "Alerts will go to your sign-in address");
   };
+  bindSuggestions($main);
+  $main.querySelectorAll("[data-open-study]").forEach(el => el.onclick = () => {
+    openStudy(el.dataset.openStudy); tab = "studies"; render();
+  });
   const fixAlert = document.getElementById("me-alert-fix");
   if (fixAlert) fixAlert.onclick = () => {
     const to = (currentUser && alertEmailFor(currentUser.id)) || "";
