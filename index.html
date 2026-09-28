@@ -5226,6 +5226,110 @@ function readEmail(text, subject) {
   return { study: hit ? hit.study : null, basis: hit ? hit.basis : "", changes };
 }
 
+// ---------- Meeting transcripts ----------
+// A transcript is a different shape of problem from an email. An email is one message about one
+// study; a weekly research meeting walks through a dozen, so the job is to cut the transcript into
+// the part that belongs to each study and read each part on its own.
+//
+// It is also far less reliable evidence. A journal writes "we require major revision"; a person
+// says "yeah I think they want revisions, or was that the other one". So NOTHING from a transcript
+// applies itself, even changes that would be safe from an email — every proposal waits for a human
+// who was in the room. See TRANSCRIPT_NEVER_AUTO_APPLIES below.
+
+// Timestamps and speaker labels carry no meaning for us and confuse the date parser — a VTT
+// timestamp looks enough like a date to be worth removing before anything else runs.
+function cleanTranscript(raw) {
+  return String(raw || "")
+    .replace(/^WEBVTT.*$/gim, "")
+    .replace(/^\d+$/gm, "")                                        // VTT cue numbers
+    .replace(/^\d{2}:\d{2}:\d{2}[.,]\d{3}\s*-->.*$/gm, "")         // VTT / SRT time ranges
+    .replace(/^\[?\d{1,2}:\d{2}(:\d{2})?\]?\s*/gm, "")             // [00:12] line prefixes
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+const TRANSCRIPT_NEVER_AUTO_APPLIES = true;
+// How many lines after a mention still count as being about that study. Three is a guess, but a
+// deliberate one: people say the name and then discuss it for a sentence or two, and reaching
+// further starts pulling in the next study on the agenda.
+const TRANSCRIPT_CONTEXT_LINES = 3;
+// Every study the transcript talks about, with just the lines that talk about it.
+//
+// Deliberately only matches identifiers and names — it does not try to work out which study an
+// unattributed "it" refers to. A segment we can't attribute confidently is better dropped than
+// guessed, because a change filed against the wrong study is worse than one nobody filed.
+function transcriptSegments(text) {
+  const lines = String(text || "").split(/\n/);
+  const byStudy = new Map();
+  lines.forEach((line, i) => {
+    if (!line.trim()) return;
+    const hit = matchStudyFromText(line);
+    if (!hit) return;
+    // Stop at the next line that names a DIFFERENT study. Without this the window runs on past
+    // "next up, the cartilage study" and hands that study's dates to this one — which is the exact
+    // failure that makes an automatic update worse than no update.
+    const chunkLines = [lines[i]];
+    for (let j = i + 1; j <= i + TRANSCRIPT_CONTEXT_LINES && j < lines.length; j++) {
+      const next = matchStudyFromText(lines[j]);
+      if (next && next.study.id !== hit.study.id) break;
+      chunkLines.push(lines[j]);
+    }
+    const chunk = chunkLines.join("\n");
+    const prev = byStudy.get(hit.study.id);
+    if (prev) { prev.text += "\n" + chunk; }
+    else byStudy.set(hit.study.id, { study: hit.study, basis: hit.basis, text: chunk });
+  });
+  return [...byStudy.values()];
+}
+function readTranscript(text) {
+  return transcriptSegments(text).map(seg => {
+    const read = readEmail(seg.text, "");
+    return {
+      study: seg.study,
+      basis: seg.basis + " (mentioned in the transcript)",
+      text: seg.text,
+      // Safety stripped off every proposal: spoken words are not a journal's decision letter.
+      changes: read.changes.map(c => Object.assign({}, c, {
+        safe: TRANSCRIPT_NEVER_AUTO_APPLIES ? false : c.safe,
+        why: c.why + " — heard in the meeting, so worth checking"
+      }))
+    };
+  });
+}
+// One suggestion per study the meeting discussed. Studies it mentioned but said nothing actionable
+// about are skipped: a queue item with no proposal in it is just something else to dismiss.
+function ingestTranscript(raw, label) {
+  const cleaned = cleanTranscript(raw);
+  const clean = stripPHI(cleaned);
+  const segments = readTranscript(clean.text);
+  const now = new Date().toISOString();
+  const mine = currentUser ? profileFor(currentUser.id) : null;
+  const made = [];
+  segments.forEach(seg => {
+    if (!seg.changes.length) return;
+    const g = {
+      id: uid(),
+      createdAt: now,
+      source: "transcript",
+      from: "",
+      forwardedBy: mine ? mine.id : "",
+      forwardedByName: mine ? mine.name : "",
+      unverified: false,
+      subject: (label || "Meeting transcript") + " — " + (seg.study.nickname || seg.study.title),
+      text: seg.text.slice(0, 20000),
+      redacted: clean.redacted,
+      redactedKinds: clean.kinds,
+      studyId: seg.study.id,
+      basis: seg.basis,
+      changes: seg.changes,
+      applied: [],
+      status: "pending"
+    };
+    upsertSuggestion(g);
+    made.push(g);
+  });
+  return { made, mentioned: transcriptSegments(clean.text).length, redacted: clean.redacted };
+}
+
 // ---------- The queue ----------
 function upsertSuggestion(g) {
   state.suggestions = state.suggestions || [];
@@ -5390,7 +5494,7 @@ function suggestionCardHTML(g) {
       <div style="flex:1;min-width:0">
         <div style="font-size:14.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis">${esc(g.subject || "(no subject)")}</div>
         <div style="font-size:11.5px;color:var(--text2);margin-top:2px">
-          ${when}${g.from ? " · " + esc(g.from) : ""}${g.source === "email" ? " · forwarded" : " · pasted in"}
+          ${when}${g.from ? " · " + esc(g.from) : ""}${g.source === "email" ? " · forwarded" : g.source === "transcript" ? " · from a meeting transcript" : " · pasted in"}
         </div>
       </div>
       ${canDecideSuggestion(g) ? `<button class="mini-btn" data-sugg-dismiss="${esc(g.id)}" style="margin:0;flex:0 0 auto">Dismiss</button>` : ""}
@@ -5460,6 +5564,26 @@ function suggestionsSectionHTML() {
     </div>
     <button class="btn" id="sugg-add" style="margin-top:8px">Read this email</button>
   </div>
+
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
+    <b style="color:var(--text)">Meeting transcript</b><br>
+    Paste or upload a transcript of a research meeting and the tracker will split it by study and
+    propose an update for each one it heard something about. Nothing from a transcript is applied
+    automatically — people speak less precisely than journals write, so every proposal waits for
+    someone who was in the room.
+    <div style="margin-top:10px">
+      <input id="tx-label" placeholder="Which meeting? e.g. Weekly Research Meeting 9/28" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
+    </div>
+    <div style="margin-top:8px">
+      <textarea id="tx-body" rows="4" placeholder="Paste the transcript here…" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14px;font-family:inherit;color:var(--text);outline:none"></textarea>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <button class="btn" id="tx-add" style="flex:1;min-width:150px">Read this transcript</button>
+      <button class="btn secondary" id="tx-upload" style="flex:1;min-width:150px">Upload a file…</button>
+    </div>
+    <input type="file" id="tx-file" accept=".txt,.vtt,.srt,.md,text/plain" style="display:none">
+    <div style="font-size:12px;margin-top:8px">Takes a .txt, .vtt or .srt — what Zoom, Teams and most recorders export. Timestamps and speaker labels are ignored.</div>
+  </div>
   ${mine.length ? mine.map(suggestionCardHTML).join("")
     : `<div class="card" style="color:var(--text2);font-size:14px">Nothing waiting on you.</div>`}
   ${others.length ? `
@@ -5494,6 +5618,54 @@ function bindSuggestions(root) {
     else if (g.changes.length) toast(`${g.changes.length} change${g.changes.length === 1 ? "" : "s"} waiting for your decision`);
     else toast("Read it — nothing in it changes anything on that study");
   };
+  // Shared by the paste box and the file picker, so both behave identically.
+  const readTranscriptText = (text) => {
+    const labelEl = root.querySelector("#tx-label");
+    const label = labelEl ? labelEl.value.trim() : "";
+    const bodyEl = root.querySelector("#tx-body");
+    clearDraft(bodyEl); clearDraft(labelEl);
+    const out = ingestTranscript(text, label);
+    render();
+    if (!out.mentioned) {
+      toast("Read it, but it didn't mention a study the tracker recognises");
+    } else if (!out.made.length) {
+      toast(`Mentioned ${out.mentioned} stud${out.mentioned === 1 ? "y" : "ies"}, but nothing in it changes anything`);
+    } else {
+      toast(`${out.made.length} stud${out.made.length === 1 ? "y" : "ies"} to review below${out.redacted ? ` · ${out.redacted} identifier${out.redacted === 1 ? "" : "s"} removed` : ""}`);
+    }
+  };
+  const txAdd = root.querySelector("#tx-add");
+  if (txAdd) txAdd.onclick = () => {
+    if (blockOfflineEdit("Reading a transcript")) return;
+    const bodyEl = root.querySelector("#tx-body");
+    const text = bodyEl ? bodyEl.value.trim() : "";
+    if (!text) { toast("Paste the transcript first, or upload a file"); return; }
+    readTranscriptText(text);
+  };
+  const txUpload = root.querySelector("#tx-upload");
+  const txFile = root.querySelector("#tx-file");
+  if (txUpload && txFile) {
+    txUpload.onclick = () => { if (!blockOfflineEdit("Reading a transcript")) txFile.click(); };
+    txFile.onchange = () => {
+      const f = txFile.files[0];
+      txFile.value = "";
+      if (!f) return;
+      // A transcript is read and turned into suggestions; the file itself is never stored, so a
+      // recording's full text never lands in the database — only the lines about each study, with
+      // identifiers already stripped.
+      if (f.size > 5 * 1024 * 1024) { toast("That file is very large — paste the text instead"); return; }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = String(reader.result || "").trim();
+        if (!text) { toast("That file looks empty"); return; }
+        const labelEl = root.querySelector("#tx-label");
+        if (labelEl && !labelEl.value.trim()) labelEl.value = f.name.replace(/\.[^.]+$/, "");
+        readTranscriptText(text);
+      };
+      reader.onerror = () => toast("Couldn't read that file");
+      reader.readAsText(f);
+    };
+  }
   root.querySelectorAll("[data-sugg-accept]").forEach(b => b.onclick = () => {
     const id = b.dataset.suggAccept;
     const fields = [...root.querySelectorAll(`.sugg-pick[data-sugg="${id}"]`)].filter(c => c.checked).map(c => c.dataset.field);
