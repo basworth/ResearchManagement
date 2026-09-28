@@ -994,6 +994,119 @@ let detailStudyId = null;
 // sectionStateForStudy / studySectionState below) so every fresh open recomputes open/closed
 // per section from scratch — including reopening the SAME study after leaving it — while
 // incidental re-renders during an active viewing session (e.g. adding a milestone) don't touch it.
+/* ============ Document slots ============ */
+// A study used to keep documents in four places with two different mechanisms: six fixed slots
+// that took a pasted LINK, a free list of UPLOADED files, a second upload list tagged
+// "revision", and two more link fields inside it. So a manuscript could live in three places
+// depending on its stage and on whether whoever had it pasted or uploaded.
+//
+// Now there is one shape. A slot is a list of entries, newest first; the newest is "current" and
+// the rest are its version history. An entry is either a link or an uploaded file — the same row
+// renders both, so nobody has to decide which kind of thing a slot wants before they can file it.
+//
+// Replacing a document never discards the old one: it is pushed down into the history. That is
+// the whole reason slots are lists rather than single values.
+const DOC_SLOTS = [
+  { key: "abstract",   label: "Working Abstract",                         legacy: "workingAbstractLink" },
+  { key: "overview",   label: "Project Overview",                         legacy: "projectOverviewLink" },
+  { key: "manuscript", label: "Working Manuscript",                       legacy: "workingManuscriptLink" },
+  { key: "sheet",      label: "Data Collection Spreadsheet",              legacy: "dataCollectionSheetLink" },
+  { key: "process",    label: "Data Collection Process & Analysis Doc",   legacy: "dataProcessDocLink" },
+  { key: "tracking",   label: "Tracking Sheet (Enrolling Studies)",       legacy: "trackingSheetLink" }
+];
+// Not shown in Working Documents: these two live in Manuscript Submission, beside the journal and
+// the dates they belong to.
+const SUBMISSION_SLOTS = [
+  { key: "submitted", label: "Submitted Manuscript" },
+  // `multi`: this slot holds several DIFFERENT documents, not successive drafts of one. Reviewer
+  // comments, the revised manuscript and the point-by-point response all belong to the same
+  // revision and none supersedes the others, so they all stay visible. Treating them as a version
+  // stack hid two of the three behind "show earlier versions", which read as data loss.
+  { key: "revision",  label: "Revision Documents", multi: true }
+];
+const OTHER_SLOT = { key: "other", label: "Other Documents", multi: true };
+function slotIsMulti(key) {
+  const hit = DOC_SLOTS.concat(SUBMISSION_SLOTS, [OTHER_SLOT]).find(x => x.key === key);
+  return !!(hit && hit.multi);
+}
+const ALL_SLOT_KEYS = DOC_SLOTS.map(x => x.key).concat(SUBMISSION_SLOTS.map(x => x.key), [OTHER_SLOT.key]);
+function slotLabel(key) {
+  const all = DOC_SLOTS.concat(SUBMISSION_SLOTS, [OTHER_SLOT]);
+  const hit = all.find(x => x.key === key);
+  return hit ? hit.label : key;
+}
+// Where an already-uploaded file most likely belongs, read from the label and filename people
+// actually typed. Only confident matches move; anything ambiguous goes to Other Documents, where
+// it is visible and can be re-filed by hand. Guessing wrong is worse than not guessing, because a
+// misfiled document looks filed.
+function guessDocSlot(dc) {
+  const t = ((dc.label || "") + " " + (dc.name || "")).toLowerCase();
+  if (/revision|reviewer|response to review|rebuttal|point-by-point|point by point/.test(t)) return "revision";
+  if (/abstract/.test(t)) return "abstract";
+  if (/manuscript|\bms\b|draft|paper/.test(t)) return "manuscript";
+  if (/overview|protocol|proposal|concept/.test(t)) return "overview";
+  if (/tracking/.test(t)) return "tracking";
+  if (/process|analysis|stats|statistic/.test(t)) return "process";
+  if (/spreadsheet|data collection|datasheet|\bdata\b/.test(t)) return "sheet";
+  return "other";
+}
+const docEntryLink = (url, label, date) => ({ id: uid(), kind: "link", url: url, label: label || "", by: "", date: date || "" });
+// Migration. Runs on every load and is idempotent: a study already migrated has the flag and is
+// left alone. Legacy fields are NOT cleared — they stay exactly as they were, so if anything here
+// is wrong the original data is still sitting there to re-read. Nothing is deleted, ever.
+function migrateDocSlots(s) {
+  if (!s.docSlots || typeof s.docSlots !== "object") s.docSlots = {};
+  ALL_SLOT_KEYS.forEach(k => { if (!Array.isArray(s.docSlots[k])) s.docSlots[k] = []; });
+  if (s.docSlotsMigrated) return;
+
+  // 1. The six working-document link fields, and the two revision link fields.
+  DOC_SLOTS.forEach(sl => {
+    const v = (s[sl.legacy] || "").trim();
+    if (v) s.docSlots[sl.key].push(docEntryLink(v, "", s.updatedAt || ""));
+  });
+  const rev = (s.revisedManuscriptLink || "").trim();
+  if (rev) s.docSlots.revision.push(docEntryLink(rev, "Revised manuscript", ""));
+  const resp = (s.responseToReviewersLink || "").trim();
+  if (resp) s.docSlots.revision.push(docEntryLink(resp, "Response to reviewers", ""));
+
+  // 2. Every uploaded file. A file already tagged "revision" is not re-guessed — that tag was set
+  //    deliberately by whoever uploaded it, and it beats anything a filename suggests.
+  (s.docs || []).forEach(dc => {
+    const key = dc.category === "revision" ? "revision" : guessDocSlot(dc);
+    s.docSlots[key].push({
+      id: dc.id, kind: "file", name: dc.name, label: dc.label || "",
+      by: dc.by || "", date: dc.date || "", size: dc.size || 0,
+      // Remembered so the mapping can be reviewed later, and so a wrong guess is identifiable
+      // rather than indistinguishable from a deliberate filing.
+      movedFrom: dc.category === "revision" ? "Revision Documents" : "Manuscript & Documents"
+    });
+  });
+
+  // Newest first within each slot, so the top row is the current document.
+  ALL_SLOT_KEYS.forEach(k => {
+    s.docSlots[k].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
+  });
+  s.docSlotsMigrated = true;
+}
+function slotEntries(s, key) {
+  return (s.docSlots && Array.isArray(s.docSlots[key])) ? s.docSlots[key] : [];
+}
+function slotCurrent(s, key) { return slotEntries(s, key)[0] || null; }
+// New entries go to the front, which is what makes them "current" and pushes the previous one
+// into history without touching it.
+function addSlotEntry(s, key, entry) {
+  if (!s.docSlots) s.docSlots = {};
+  if (!Array.isArray(s.docSlots[key])) s.docSlots[key] = [];
+  s.docSlots[key].unshift(entry);
+  upsertStudy(s);
+}
+function totalSlotDocs(s) {
+  return ALL_SLOT_KEYS.reduce((n, k) => n + slotEntries(s, k).length, 0);
+}
+// Which slots have their version history expanded. View state only — cleared when a different
+// study is opened, so it can't leak across studies.
+let openDocHistory = {};
+
 function openStudy(id) { detailStudyId = id; sectionStateForStudy = null; }
 // An outstanding "should this study move phase?" question, raised when a journal decision is
 // recorded. Held here rather than in the study record on purpose: it's a question for the person
@@ -1138,6 +1251,7 @@ function migrate() {
     if (s.dataCollectionSheetLink == null) s.dataCollectionSheetLink = "";
     if (s.dataProcessDocLink == null) s.dataProcessDocLink = "";
     if (s.trackingSheetLink == null) s.trackingSheetLink = "";
+    migrateDocSlots(s);
     if (!s.grant) s.grant = { enabled: false, amount: "", source: "", awardDate: "", balance: "", expirationDate: "", balanceUpdatedDate: "" };
     if (s.enrollTarget == null) s.enrollTarget = "";
     if (s.enrollCurrent == null) s.enrollCurrent = "";
@@ -3443,13 +3557,15 @@ const PHASE_SECTIONS = {
   "Data Extraction":    ["workingDocs", "notes", "tasks", "milestones"],
   "Experiments":        ["workingDocs", "notes", "tasks", "milestones"],
   "Analysis":           ["workingDocs", "authors", "notes", "tasks", "milestones"],
-  "Manuscript":         ["docs", "authors", "workingDocs", "abstracts", "notes", "tasks"],
-  "Submitted":          ["docs", "authors", "abstracts", "manuscript", "notes", "tasks"],
-  "Revisions Required": ["revisionDocs", "manuscript", "docs", "authors", "notes", "tasks"],
+  "Manuscript":         ["workingDocs", "authors", "abstracts", "notes", "tasks"],
+  "Submitted":          ["manuscript", "authors", "abstracts", "workingDocs", "notes", "tasks"],
+  // The revision documents live inside Manuscript Submission now, so that is the section that
+  // opens here — it holds the decision, the dates and the reviewer comments together.
+  "Revisions Required": ["manuscript", "workingDocs", "authors", "notes", "tasks"],
   // Tasks stay open here on purpose: accepted is not done. Proofs, page charges and copyright
   // forms all land in this window, and it's the phase where a paper most easily goes quiet.
-  "Accepted / In Press": ["manuscript", "docs", "authors", "abstracts", "notes", "tasks"],
-  "Published":          ["docs", "abstracts", "manuscript", "authors", "notes"],
+  "Accepted / In Press": ["manuscript", "authors", "abstracts", "workingDocs", "notes", "tasks"],
+  "Published":          ["manuscript", "abstracts", "authors", "workingDocs", "notes"],
   "On Hold":            ["notes", "tasks"]
 };
 function sectionsForPhase(phase) { return PHASE_SECTIONS[phase] || PHASE_SECTIONS["Concept"]; }
@@ -3553,6 +3669,64 @@ function linkFieldRow(label, id, value) {
     <button type="button" data-copy-link="${esc(value)}" data-copy-label="${esc(label)}" style="flex:none;border:none;background:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:9px 2px">Copy</button>` : ""}
   </div>`;
 }
+// One document row, whichever kind it is. A link gets Open/Copy; a file gets Download. They look
+// the same on purpose — the person reading a study cares what the document IS, not how it got
+// here, and making the two kinds look different is what made the old four-section layout feel
+// like four unrelated features.
+function docEntryRowHTML(e, opts) {
+  opts = opts || {};
+  const title = e.kind === "link" ? (e.label || opts.fallbackLabel || "Link") : e.name;
+  const icon = e.kind === "link" ? "🔗" : "📄";
+  const meta = [
+    e.kind === "link" && e.label && opts.fallbackLabel ? "" : "",
+    e.date ? fmtDate(e.date) : "",
+    e.by || "",
+    e.kind === "file" && e.size ? fmtSize(e.size) : "",
+    e.movedFrom ? "was in " + e.movedFrom : ""
+  ].filter(Boolean).join(" · ");
+  const actions = e.kind === "link"
+    ? `<a href="${esc(e.url)}" target="_blank" rel="noopener" style="flex:none;color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:8px 4px">Open ↗</a>
+       <button type="button" data-copy-link="${esc(e.url)}" data-copy-label="${esc(title)}" style="flex:none;border:none;background:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:8px 4px">Copy</button>`
+    : `<button type="button" data-slot-dl="${esc(e.id)}" style="flex:none;border:none;background:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:8px 4px">Download</button>`;
+  return `<div class="milestone-row" style="gap:8px">
+    <div style="flex:1;min-width:0">
+      <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${icon} ${esc(title)}</div>
+      ${meta ? `<div style="font-size:12px;color:var(--text2)">${esc(meta)}</div>` : ""}
+    </div>
+    ${actions}
+  </div>`;
+}
+// A whole slot: the current document, its history folded away, and the two ways to add a new one.
+//
+// The history is collapsed rather than listed because the current version is what people open
+// ninety-nine times in a hundred — but it says how many are under there, so nobody has to wonder
+// whether replacing a draft lost the last one.
+function docSlotHTML(s, key, opts) {
+  opts = opts || {};
+  const entries = slotEntries(s, key);
+  const label = slotLabel(key);
+  const open = !!openDocHistory[key];
+  // A multi slot shows everything it holds; a single slot shows the current one and folds the
+  // superseded drafts away. See the `multi` flag above for why the two behave differently.
+  const multi = slotIsMulti(key);
+  const shown = multi ? entries : entries.slice(0, 1);
+  const older = multi ? [] : entries.slice(1);
+  return `<div class="card" style="padding:10px 14px;margin-bottom:8px">
+    <div style="font-size:12px;color:var(--text2);font-weight:600;letter-spacing:.02em">${esc(label)}</div>
+    ${shown.length ? shown.map(e => docEntryRowHTML(e, { fallbackLabel: label })).join("")
+      : `<div style="color:var(--text2);font-size:13.5px;padding:6px 0">${esc(opts.empty || "Nothing here yet — paste a link or upload a file.")}</div>`}
+    ${older.length ? `
+      <button type="button" data-slot-hist="${esc(key)}" style="border:none;background:none;color:var(--blue);font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;padding:4px 0">
+        ${open ? "Hide" : "Show"} ${older.length} earlier version${older.length === 1 ? "" : "s"}
+      </button>
+      ${open ? `<div style="border-left:2px solid var(--bg);padding-left:8px;margin-left:2px">${older.map(e => docEntryRowHTML(e, { fallbackLabel: label })).join("")}</div>` : ""}` : ""}
+    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+      <input data-slot-link="${esc(key)}" placeholder="Paste a link…" style="flex:1;min-width:140px;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
+      <button type="button" data-slot-save="${esc(key)}" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:14px;cursor:pointer">Add link</button>
+      <button type="button" data-slot-up="${esc(key)}" style="border:none;background:var(--bg);color:var(--text);border-radius:8px;padding:9px 14px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">Upload</button>
+    </div>
+  </div>`;
+}
 // Plain label+input row for the study detail page, styled like linkFieldRow but for a text/date
 // value rather than a link (no Open/Copy affordances).
 function plainFieldRow(label, id, value, opts) {
@@ -3648,6 +3822,10 @@ function manuscriptBodyHTML(s) {
     ${plainFieldRow("Submitted on", "ms-submitted-date", s.submittedDate, { type: "date" })}
     ${plainFieldRow("Tracking ID", "ms-tracking-id", s.journalTrackingId, { placeholder: "Journal manuscript ID (e.g. AJSM-26-1234)" })}
 
+    <!-- The manuscript as it actually went to this journal, filed with the journal and the date it
+         went. Distinct from the Working Manuscript, which keeps moving after submission. -->
+    ${docSlotHTML(s, "submitted", { empty: "The version sent to the journal. Add it when you submit, so you can tell it apart from the working draft." })}
+
     <div class="milestone-row" style="gap:8px;align-items:flex-end">
       <div style="flex:1;min-width:0">
         <div style="font-size:12px;color:var(--text2);font-weight:600;margin-bottom:4px">Decision</div>
@@ -3664,7 +3842,17 @@ function manuscriptBodyHTML(s) {
     <div id="ms-revision-fields" style="display:${showRevision ? "block" : "none"}">
       ${plainFieldRow("Revisions received", "ms-revisions-received", s.revisionsReceivedDate, { type: "date" })}
       ${plainFieldRow("Revisions due", "ms-revisions-deadline", s.revisionsDeadline, { type: "date" })}
+      <!-- Reviewer comments, the revised manuscript and the point-by-point response all belong to
+           this decision, so they sit inside it rather than in a section of their own. -->
+      ${docSlotHTML(s, "revision", { empty: "Reviewer comments, the revised manuscript, your point-by-point response — link or upload each." })}
     </div>
+    <!-- Revision documents already on file when the decision ISN'T a revision. Shown anyway: a
+         section that hides existing documents is indistinguishable from one that lost them. -->
+    ${(!showRevision && slotEntries(s, "revision").length) ? `
+      <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:10px 2px 4px 2px">
+        Revision documents from an earlier round — kept here because the current decision isn't a revision.
+      </div>
+      ${docSlotHTML(s, "revision")}` : ""}
 
     ${d === "Rejected" ? `
     <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5;margin-top:10px">
@@ -3731,11 +3919,26 @@ document.addEventListener("click", async (ev) => {
   if (ok) {
     toast(label + " link copied — paste it into whichever browser you're signed into");
   } else {
-    // Can't copy: select it in the field instead, so it's one keystroke away rather than a
-    // dead end. Better than a toast that only says "sorry".
-    const input = btn.parentElement && btn.parentElement.querySelector("input");
-    if (input) { try { input.focus(); input.select(); } catch (e) {} }
-    toast("Couldn't reach the clipboard — the link is selected, so copy it with ⌘C / long-press");
+    // Can't copy: put the link somewhere selectable instead, so it's one keystroke away rather
+    // than a dead end. The old link fields held the URL themselves; a document row doesn't, so
+    // fall back to the slot's own "paste a link" box — it's the nearest text input that can hold
+    // it, and filling it costs nothing since it was empty.
+    let input = btn.parentElement && btn.parentElement.querySelector("input");
+    if (!input) {
+      const card = btn.closest && btn.closest(".card");
+      const box = card && card.querySelector("[data-slot-link]");
+      if (box) { box.value = url; input = box; }
+    }
+    let selected = false;
+    if (input) {
+      try { input.focus(); input.select(); selected = true; } catch (e) { /* non-fatal */ }
+    }
+    // Only claim it's selected when it actually is. A confident wrong message costs more than a
+    // vague one: someone told the link is selected will hit ⌘C and paste whatever was on the
+    // clipboard before.
+    toast(selected
+      ? "Couldn't reach the clipboard — the link is selected, so copy it with ⌘C / long-press"
+      : "Couldn't reach the clipboard — open the link and copy it from the address bar");
   }
 });
 function authorsBodyHTML(s) {
@@ -3859,8 +4062,6 @@ function renderStudyDetail() {
   const stepperPhases = phasesFor(s).filter(p => p !== "Published" && p !== "On Hold");
   const tasks = state.tasks.filter(t => t.studyId === s.id).sort((a, b) => (a.done - b.done) || (a.due || "9999").localeCompare(b.due || "9999"));
   const milestones = (s.milestones || []).slice().sort((a, b) => (a.date || "9999").localeCompare(b.date || "9999"));
-  const docs = (s.docs || []).filter(dc => dc.category !== "revision").slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-  const revisionDocs = (s.docs || []).filter(dc => dc.category === "revision").slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const abstracts = (s.abstracts || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const meetingNotes = (s.meetingNotes || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const linkedMeetingsAll = meetingsForStudy(s.id).sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
@@ -3879,14 +4080,15 @@ function renderStudyDetail() {
     grant: grantHasContent(s),
     initiation: Object.keys(s.initiationProgress || {}).length > 0,
     authors: Array.isArray(s.authors) && s.authors.length > 0,
-    workingDocs: !!(s.workingAbstractLink || s.projectOverviewLink || s.workingManuscriptLink || s.dataCollectionSheetLink || s.dataProcessDocLink || s.trackingSheetLink),
+    // Counts documents wherever they now sit, not the retired link fields — otherwise a study
+    // whose only documents were uploads would report itself empty.
+    workingDocs: DOC_SLOTS.some(sl => slotEntries(s, sl.key).length) || slotEntries(s, "other").length > 0,
     meetingNotes: meetingNotes.length > 0,
     milestones: milestones.length > 0,
-    docs: docs.length > 0,
-    revisionDocs: revisionDocs.length > 0 || !!s.revisedManuscriptLink || !!s.responseToReviewersLink,
     abstracts: abstracts.length > 0 || linkedAbstractMeetings.length > 0,
     manuscript: !!(s.journal || s.submittedDate || s.journalTrackingId || s.revisionsReceivedDate
-      || s.revisionsDeadline || s.decision || (s.priorSubmissions || []).length),
+      || s.revisionsDeadline || s.decision || (s.priorSubmissions || []).length
+      || slotEntries(s, "submitted").length || slotEntries(s, "revision").length),
     deadlines: linkedGrantMeetings.length > 0,
     tasks: tasks.length > 0
   };
@@ -3907,11 +4109,9 @@ function renderStudyDetail() {
     notes: (s.noteEntries || []).filter(n => !n.archivedOn).length || "",
     initiation: (() => { const d = initiationDone(s); return d.total ? d.passed + "/" + d.total : ""; })(),
     authors: hasContent.authors ? String(s.authors.length) : "",
-    workingDocs: hasContent.workingDocs ? "linked" : "",
+    workingDocs: (DOC_SLOTS.reduce((n, sl) => n + slotEntries(s, sl.key).length, 0) + slotEntries(s, "other").length) || "",
     meetingNotes: meetingNotes.length || "",
     milestones: milestones.length || "",
-    docs: docs.length || "",
-    revisionDocs: revisionDocs.length || "",
     abstracts: (abstracts.length + linkedAbstractMeetings.length) || "",
     // The decision is what you want to see without opening the section — "AJSM · Major revision"
     // answers the question the collapsed header is really being asked.
@@ -4000,12 +4200,12 @@ function renderStudyDetail() {
   ${collapsibleSection("authors", "Proposed Authors", authorsBodyHTML(s), sectionBadge.authors)}
 
   ${collapsibleSection("workingDocs", "Working Documents", `
-    ${linkFieldRow("Working Abstract", "wd-abstract", s.workingAbstractLink)}
-    ${linkFieldRow("Project Overview", "wd-overview", s.projectOverviewLink)}
-    ${linkFieldRow("Working Manuscript", "wd-manuscript", s.workingManuscriptLink)}
-    ${linkFieldRow("Data Collection Spreadsheet", "wd-sheet", s.dataCollectionSheetLink)}
-    ${linkFieldRow("Data Collection Process & Analysis Doc", "wd-process", s.dataProcessDocLink)}
-    ${linkFieldRow("Tracking Sheet (Enrolling Studies)", "wd-tracking", s.trackingSheetLink)}
+    <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:0 2px 10px 2px">
+      The live drafts for this study. Every one takes a <b>link or an uploaded file</b>, whichever
+      you have. Adding a new one keeps the previous as an earlier version — nothing is replaced away.
+    </div>
+    ${DOC_SLOTS.map(sl => docSlotHTML(s, sl.key)).join("")}
+    ${docSlotHTML(s, "other", { empty: "Anything that doesn't fit the slots above." })}
   `, sectionBadge.workingDocs)}
 
   ${collapsibleSection("meetingNotes", "Meeting Notes", `
@@ -4047,52 +4247,6 @@ function renderStudyDetail() {
     </div>
   `, sectionBadge.milestones)}
 
-  ${collapsibleSection("docs", "Manuscript & Documents", `
-    ${docs.length ? docs.map(dc => `
-      <div class="milestone-row">
-        <div style="flex:1;cursor:pointer;min-width:0" data-doc="${dc.id}">
-          <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 ${esc(dc.name)}</div>
-          <div style="font-size:12px;color:var(--text2)">${dc.label ? esc(dc.label) + " · " : ""}${fmtDate(dc.date)}${dc.by ? " · " + esc(dc.by) : ""}${dc.size ? " · " + fmtSize(dc.size) : ""}</div>
-        </div>
-        <button data-doc-del="${dc.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
-      </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No documents yet. Upload manuscript drafts to keep a version history — tap a file to download it.</div>`}
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <input id="doc-label" placeholder="Version label (e.g. v2 — post-review)" style="flex:1;${inputStyle}">
-      <button id="doc-upload" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:15px;cursor:pointer">Upload</button>
-    </div>
-    <input type="file" id="doc-file" style="display:none">
-    ${sb ? "" : `<div style="font-size:12px;color:var(--text2);margin-top:8px">Without Team Sync, files stay on this device only (max 2.5 MB each).</div>`}
-  `, sectionBadge.docs)}
-
-  ${collapsibleSection("revisionDocs", "Revision Documents", `
-    <!-- Not hidden when it doesn't apply, and that's deliberate: this section can already hold
-         uploaded files, and a section that vanishes is indistinguishable from data that was lost.
-         Instead it says plainly why it's quiet — which also stops "revision submitted" reading as
-         an option on a paper that was accepted outright or rejected. -->
-    ${!decisionWantsRevision(s.decision) && !revisionDocs.length && !s.revisedManuscriptLink && !s.responseToReviewersLink ? `
-      <div style="color:var(--text2);font-size:13px;line-height:1.5;margin-bottom:10px">
-        ${s.decision === "Accepted" ? "Accepted without revisions — nothing to respond to."
-          : s.decision === "Rejected" ? "Rejected, so there are no reviewer comments to answer here. If you resubmit elsewhere and get a revision decision, this fills in."
-          : s.decision === "Awaiting decision" ? "Waiting on the journal. This becomes relevant if the decision is a minor or major revision."
-          : "This fills in once the journal returns a minor or major revision decision."}
-      </div>` : ""}
-    ${revisionDocs.length ? revisionDocs.map(dc => `
-      <div class="milestone-row">
-        <div style="flex:1;cursor:pointer;min-width:0" data-doc="${dc.id}">
-          <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 ${esc(dc.name)}</div>
-          <div style="font-size:12px;color:var(--text2)">${dc.label ? esc(dc.label) + " · " : ""}${fmtDate(dc.date)}${dc.by ? " · " + esc(dc.by) : ""}${dc.size ? " · " + fmtSize(dc.size) : ""}</div>
-        </div>
-        <button data-doc-del="${dc.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
-      </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No revision comments uploaded yet.</div>`}
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <input id="revdoc-label" placeholder="e.g. Reviewer comments — round 1" style="flex:1;${inputStyle}">
-      <button id="revdoc-upload" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:15px;cursor:pointer">Upload</button>
-    </div>
-    <input type="file" id="revdoc-file" style="display:none">
-    ${linkFieldRow("Revised Manuscript", "wd-revised-ms", s.revisedManuscriptLink)}
-    ${linkFieldRow("Response to Reviewers", "wd-response", s.responseToReviewersLink)}
-  `, sectionBadge.revisionDocs)}
-
   ${collapsibleSection("abstracts", "Abstract Submissions", `
     ${abstracts.length ? abstracts.map(a => `
       <div class="milestone-row">
@@ -4102,6 +4256,17 @@ function renderStudyDetail() {
         </div>
         <button class="badge" data-abs-status="${a.id}" style="background:${ABS_COLORS[a.status] || "var(--text2)"};border:none;cursor:pointer;font-family:inherit" title="Tap to change status">${esc(a.status)}</button>
         <button data-abs-del="${a.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
+      </div>
+      <!-- The abstract that actually went to THIS meeting, filed with it. Two meetings usually get
+           two different versions of the same abstract, and keeping them apart is the point. -->
+      <div style="margin:0 0 10px 0">
+        ${(Array.isArray(a.docs) && a.docs.length) ? a.docs.map(e => docEntryRowHTML(e, { fallbackLabel: "Submitted abstract" })).join("")
+          : `<div style="color:var(--text2);font-size:12.5px;padding:2px 2px 6px 2px">No abstract attached to this submission yet.</div>`}
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <input data-abs-link="${a.id}" placeholder="Paste a link to the abstract…" style="flex:1;min-width:140px;border:none;background:var(--bg);border-radius:8px;padding:8px 12px;font-size:13.5px;font-family:inherit;color:var(--text);outline:none">
+          <button type="button" data-abs-linksave="${a.id}" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 12px;font-weight:700;font-size:13.5px;cursor:pointer">Add link</button>
+          <button type="button" data-abs-up="${a.id}" style="border:none;background:var(--bg);color:var(--text);border-radius:8px;padding:8px 12px;font-weight:700;font-size:13.5px;cursor:pointer;font-family:inherit">Upload</button>
+        </div>
       </div>`).join("") : `<div style="color:var(--text2);font-size:14px">No abstracts yet. Tap a status badge to update it (Planned → Submitted → Accepted…).</div>`}
     <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
       <input id="abs-meeting" placeholder="Meeting (e.g. AAOS 2027)" style="flex:1;min-width:130px;${inputStyle}">
@@ -4282,79 +4447,111 @@ function renderStudyDetail() {
   });
 
   // Documents
-  document.getElementById("doc-upload").onclick = () => document.getElementById("doc-file").click();
-  document.getElementById("doc-file").onchange = (e) => {
-    const f = e.target.files[0]; if (!f) return;
+  // ---------- Document slots ----------
+  // One set of handlers for every slot on the page: Working Documents, Other Documents, the
+  // submitted manuscript and the revision documents all use the same three controls, because
+  // they are now the same thing.
+  const slotUploadInput = document.createElement("input");
+  slotUploadInput.type = "file";
+  slotUploadInput.style.display = "none";
+  $main.appendChild(slotUploadInput);
+
+  // Shared by slots and by per-abstract attachments. Returns the new entry, or null if the upload
+  // failed — callers must not record anything on a null, or the study would list a document that
+  // isn't there.
+  async function storeUploadedFile(f) {
     const maxMB = sb ? 8 : 2.5;
-    if (f.size > maxMB * 1024 * 1024) { toast(`File too large (max ${maxMB} MB${sb ? "" : " until Team Sync is on"})`); return; }
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const id = uid();
-      if (!sb) {
-        try { localStorage.setItem("rt-file-" + id, reader.result); }
-        catch (err) { toast("Device storage full — connect Team Sync for file space"); return; }
-      } else {
-        try { localStorage.setItem("rt-file-" + id, reader.result); } catch (err) {}
-        const { error } = await sb.from("items").upsert({ id, kind: "file", data: { name: f.name, content: reader.result }, updated_at: new Date().toISOString() });
-        if (error) { toast("Upload failed — check connection"); localStorage.removeItem("rt-file-" + id); return; }
-      }
-      const label = document.getElementById("doc-label").value.trim();
-      s.docs = s.docs || [];
-      s.docs.push({ id, name: f.name, label, by: me(), date: todayStr(), size: f.size });
-      upsertStudy(s);
-      toast("Document uploaded");
-    };
-    reader.readAsDataURL(f);
-  };
-  $main.querySelectorAll("[data-doc]").forEach(el => el.onclick = () => {
-    const dc = (s.docs || []).find(x => x.id === el.dataset.doc);
-    if (dc) downloadDoc(dc);
+    if (f.size > maxMB * 1024 * 1024) { toast(`File too large (max ${maxMB} MB${sb ? "" : " until Team Sync is on"})`); return null; }
+    const dataUrl = await new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result);
+      r.onerror = () => rej(new Error("read failed"));
+      r.readAsDataURL(f);
+    });
+    const id = uid();
+    if (!sb) {
+      try { localStorage.setItem("rt-file-" + id, dataUrl); }
+      catch (err) { toast("Device storage full — connect Team Sync for file space"); return null; }
+    } else {
+      try { localStorage.setItem("rt-file-" + id, dataUrl); } catch (err) {}
+      const { error } = await sb.from("items").upsert({ id, kind: "file", data: { name: f.name, content: dataUrl }, updated_at: new Date().toISOString() });
+      if (error) { toast("Upload failed — check connection"); localStorage.removeItem("rt-file-" + id); return null; }
+    }
+    return { id, kind: "file", name: f.name, label: "", by: me(), date: todayStr(), size: f.size };
+  }
+
+  $main.querySelectorAll("[data-slot-save]").forEach(b => b.onclick = () => {
+    const key = b.dataset.slotSave;
+    const input = $main.querySelector(`[data-slot-link="${key}"]`);
+    const url = input ? input.value.trim() : "";
+    if (!url) { toast("Paste a link first, or use Upload"); return; }
+    addSlotEntry(s, key, { id: uid(), kind: "link", url, label: "", by: me(), date: todayStr() });
+    render();
+    toast(!slotIsMulti(key) && slotEntries(s, key).length > 1
+      ? `Added to ${slotLabel(key)} — the previous one is kept as an earlier version`
+      : `Added to ${slotLabel(key)}`);
   });
-  $main.querySelectorAll("[data-doc-del]").forEach(b => b.onclick = () => {
-    const dc = (s.docs || []).find(x => x.id === b.dataset.docDel);
-    if (!dc || !confirm(`Delete "${dc.name}"? All team copies are removed.`)) return;
-    s.docs = s.docs.filter(x => x.id !== dc.id);
-    localStorage.removeItem("rt-file-" + dc.id);
-    deleteRemote(dc.id);
+  $main.querySelectorAll("[data-slot-up]").forEach(b => b.onclick = () => {
+    const key = b.dataset.slotUp;
+    slotUploadInput.value = "";
+    slotUploadInput.onchange = async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      const entry = await storeUploadedFile(f);
+      if (!entry) return;
+      addSlotEntry(s, key, entry);
+      render();
+      toast(!slotIsMulti(key) && slotEntries(s, key).length > 1
+        ? `Uploaded to ${slotLabel(key)} — the previous one is kept as an earlier version`
+        : `Uploaded to ${slotLabel(key)}`);
+    };
+    slotUploadInput.click();
+  });
+  $main.querySelectorAll("[data-slot-hist]").forEach(b => b.onclick = () => {
+    const key = b.dataset.slotHist;
+    openDocHistory[key] = !openDocHistory[key];
+    render();
+  });
+  // Download works off the file id, wherever the entry now lives — including entries that were
+  // moved here by the migration, which kept their original ids for exactly this reason.
+  $main.querySelectorAll("[data-slot-dl]").forEach(b => b.onclick = () => {
+    const id = b.dataset.slotDl;
+    let hit = null;
+    ALL_SLOT_KEYS.forEach(k => slotEntries(s, k).forEach(e => { if (e.id === id) hit = e; }));
+    (s.abstracts || []).forEach(a => (a.docs || []).forEach(e => { if (e.id === id) hit = e; }));
+    if (hit) downloadDoc(hit);
+    else toast("That file couldn't be found");
+  });
+
+  // ---------- Abstracts: the version that went to this meeting ----------
+  $main.querySelectorAll("[data-abs-linksave]").forEach(b => b.onclick = () => {
+    const a = (s.abstracts || []).find(x => x.id === b.dataset.absLinksave);
+    if (!a) return;
+    const input = $main.querySelector(`[data-abs-link="${a.id}"]`);
+    const url = input ? input.value.trim() : "";
+    if (!url) { toast("Paste a link first, or use Upload"); return; }
+    if (!Array.isArray(a.docs)) a.docs = [];
+    a.docs.unshift({ id: uid(), kind: "link", url, label: "Submitted abstract", by: me(), date: todayStr() });
     upsertStudy(s);
-    toast("Document deleted");
+    render();
+    toast(`Abstract attached to ${a.meeting}`);
+  });
+  $main.querySelectorAll("[data-abs-up]").forEach(b => b.onclick = () => {
+    const a = (s.abstracts || []).find(x => x.id === b.dataset.absUp);
+    if (!a) return;
+    slotUploadInput.value = "";
+    slotUploadInput.onchange = async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      const entry = await storeUploadedFile(f);
+      if (!entry) return;
+      if (!Array.isArray(a.docs)) a.docs = [];
+      a.docs.unshift(entry);
+      upsertStudy(s);
+      render();
+      toast(`Abstract uploaded for ${a.meeting}`);
+    };
+    slotUploadInput.click();
   });
 
-  // Revision documents (uploaded file tagged category:"revision", plus link fields)
-  document.getElementById("revdoc-upload").onclick = () => document.getElementById("revdoc-file").click();
-  document.getElementById("revdoc-file").onchange = (e) => {
-    const f = e.target.files[0]; if (!f) return;
-    const maxMB = sb ? 8 : 2.5;
-    if (f.size > maxMB * 1024 * 1024) { toast(`File too large (max ${maxMB} MB${sb ? "" : " until Team Sync is on"})`); return; }
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const id = uid();
-      if (!sb) {
-        try { localStorage.setItem("rt-file-" + id, reader.result); }
-        catch (err) { toast("Device storage full — connect Team Sync for file space"); return; }
-      } else {
-        try { localStorage.setItem("rt-file-" + id, reader.result); } catch (err) {}
-        const { error } = await sb.from("items").upsert({ id, kind: "file", data: { name: f.name, content: reader.result }, updated_at: new Date().toISOString() });
-        if (error) { toast("Upload failed — check connection"); localStorage.removeItem("rt-file-" + id); return; }
-      }
-      const label = document.getElementById("revdoc-label").value.trim();
-      s.docs = s.docs || [];
-      s.docs.push({ id, name: f.name, label, by: me(), date: todayStr(), size: f.size, category: "revision" });
-      upsertStudy(s);
-      toast("Revision comments uploaded");
-    };
-    reader.readAsDataURL(f);
-  };
-  bindLinkFieldRow($main, "wd-revised-ms", s, "revisedManuscriptLink");
-  bindLinkFieldRow($main, "wd-response", s, "responseToReviewersLink");
-
-  // Working documents (link fields)
-  bindLinkFieldRow($main, "wd-abstract", s, "workingAbstractLink");
-  bindLinkFieldRow($main, "wd-overview", s, "projectOverviewLink");
-  bindLinkFieldRow($main, "wd-manuscript", s, "workingManuscriptLink");
-  bindLinkFieldRow($main, "wd-sheet", s, "dataCollectionSheetLink");
-  bindLinkFieldRow($main, "wd-process", s, "dataProcessDocLink");
-  bindLinkFieldRow($main, "wd-tracking", s, "trackingSheetLink");
 
   // Manuscript submission tracking (own section, see manuscriptBodyHTML)
   bindPlainFieldRow($main, "ms-journal", s, "journal");
