@@ -5557,9 +5557,17 @@ function renderTeamNotes() {
 }
 
 /* ============ Invites ============ */
-// ---------- Domains our mail doesn't currently reach ----------
-// TEMPORARY, and the whole block should be deleted once sending moves to an authenticated
-// domain. Auth mail goes out from a personal Gmail address wearing the display name
+// ---------- Domains our mail doesn't reach ----------
+// Settled policy as of 28 Sep 2026, not a workaround waiting to be removed. The plan had been to
+// send from an authenticated domain of our own (studypipeline.com), but Rush's security stack
+// classifies a newly registered domain as untrusted — it blocks the web address outright, and
+// mail from it would be judged by the same reputation data. So a fresh domain would very likely
+// arrive LESS reliably than the current Gmail sender, which does reach rushortho.com and Gmail.
+//
+// Adam's decision: stop chasing rush.edu delivery. The tracker's job is now to steer people to an
+// address that works rather than to keep trying an address that doesn't.
+//
+// Auth mail goes out from a personal Gmail address wearing the display name
 // "MOR Research Tracker", carrying a sign-in code, telling the reader to type it into a website.
 // That is the exact shape of a credential-phishing email, so Rush University's inbound filter
 // quarantines it — correctly. Supabase reports the send as a success because Gmail accepted the
@@ -5775,6 +5783,22 @@ function renderSettings() {
     <div class="frow"><label>Display name</label><input id="me-name" list="dl-people-set" placeholder="Used for 'Mine' filter &amp; uploads" value="${esc(me())}"></div>
     <div class="frow"><label>Alerts to</label><input id="me-alert" type="email" placeholder="${esc(currentUser ? currentUser.email : "your sign-in address")}" value="${esc(((currentUser && profileFor(currentUser.id)) || {}).alertEmail || "")}"></div>
   </div>
+  ${(() => {
+    // Your own alerts are going somewhere that doesn't receive them. Said here, on your own
+    // settings, because nobody else can fix it for you and the symptom — silence — looks
+    // identical to there being nothing to tell you about.
+    const to = (currentUser && alertEmailFor(currentUser.id)) || "";
+    if (!domainUndeliverable(to)) return "";
+    const alt = suggestedAlternative(to);
+    return `<div class="card" style="border-left:3px solid var(--red);font-size:13px;line-height:1.55">
+      <b>Your alerts aren't reaching you.</b> They're set to go to ${esc(to)}, and mail to
+      ${esc(emailDomain(to))} is quarantined before it reaches the mailbox — so task assignments and
+      deadline reminders have been sent and silently discarded.
+      ${alt ? `<div style="margin-top:8px"><button class="btn" id="me-alert-fix" style="width:100%">Use ${esc(alt)} instead</button></div>
+      <div style="font-size:12px;color:var(--text2);margin-top:6px">Correct it in the box above if that guess is wrong. You'll still sign in with ${esc(currentUser ? currentUser.email : "your own address")}.</div>`
+      : `<div style="font-size:12px;color:var(--text2);margin-top:6px">Put a rushortho.com or Gmail address in the box above.</div>`}
+    </div>`;
+  })()}
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-top:-4px">
     Task assignments and deadline reminders go to <b>${esc((currentUser && alertEmailFor(currentUser.id)) || "—")}</b>. Clear the box to go back to your sign-in address — you always sign in with ${esc(currentUser ? currentUser.email : "your own address")} either way.<br><br>
     The Studies tab defaults to showing just your projects, and your Society Subscriptions below sync across every device you log into.
@@ -5994,6 +6018,18 @@ function renderSettings() {
         : typed && !sameAsLogin
           ? "Alerts will go to " + typed + " — clear the box in Settings to switch back"
           : "Alerts will go to your sign-in address");
+  };
+  const fixAlert = document.getElementById("me-alert-fix");
+  if (fixAlert) fixAlert.onclick = () => {
+    const to = (currentUser && alertEmailFor(currentUser.id)) || "";
+    const alt = suggestedAlternative(to);
+    if (!alt) return;
+    upsertProfile(null, { alertEmail: alt, alertEmailAsked: true });
+    render();
+    toastAction(`Alerts will go to ${alt}`, "Change it", () => {
+      const box = document.getElementById("me-alert");
+      if (box) { box.focus(); box.select(); }
+    });
   };
   document.getElementById("sign-out-btn").onclick = async () => {
     if (!confirm("Sign out of Team Sync on this device?")) return;
