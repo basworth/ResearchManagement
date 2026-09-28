@@ -1691,6 +1691,8 @@ async function handleAuthChange(event, session) {
       // Before the name/position prompts, so someone arriving from an "update please" email
       // lands on the study rather than behind a setup sheet with no idea why they're here.
       if (openPendingStudy()) render();
+      // Forwarded emails that arrived while nobody was looking.
+      if (parseIncomingSuggestions()) render();
       maybePromptDisplayName();
     } catch (e) {
       console.warn("pull after sign-in failed", e);
@@ -5193,15 +5195,41 @@ function applyChange(s, c) {
   return { field: c.field, label: c.label, from: before || "", to: c.to };
 }
 // Takes an email, files it, and applies only what is safe. Everything else waits.
+// Who sent this, if we recognise them. Matched against profile sign-in and alert addresses, which
+// is the whole security boundary for the forwarding address: anyone can send mail to a Gmail
+// address and a From header is trivially forged, so an unrecognised sender must never be able to
+// change a study. It is kept and shown to admins, but it changes nothing by itself.
+function profileForEmail(email) {
+  const e = String(email || "").trim().toLowerCase();
+  if (!e) return null;
+  return activeProfiles().find(p =>
+    String(p.email || "").toLowerCase() === e ||
+    String(p.alertEmail || "").toLowerCase() === e) || null;
+}
+// Can this person act on this suggestion? The forwarder, because it's their email and waiting on
+// an admin makes the whole thing slower than retyping it; and admins, who can already edit every
+// study by hand. An unverified sender's suggestion is admin-only, whatever it claims to be from.
+function canDecideSuggestion(g) {
+  if (!g || !currentUser) return false;
+  if (g.unverified) return isAdmin();
+  if (isAdmin()) return true;
+  return !!g.forwardedBy && g.forwardedBy === currentUser.id;
+}
 function ingestEmail(raw, subject, source, from) {
   const clean = stripPHI(raw);
   const read = readEmail(clean.text, subject);
   const now = new Date().toISOString();
+  // A paste is owned by whoever pasted it; a forward by whoever we can prove sent it.
+  const sender = source === "email" ? profileForEmail(from) : (currentUser ? profileFor(currentUser.id) : null);
   const g = {
     id: uid(),
     createdAt: now,
     source: source || "paste",
     from: from || "",
+    forwardedBy: sender ? sender.id : "",
+    forwardedByName: sender ? sender.name : "",
+    // Only forwards can be unverified — a paste already required a signed-in session.
+    unverified: source === "email" && !sender,
     subject: String(subject || "").slice(0, 200),
     // Only ever the scrubbed text is stored.
     text: clean.text.slice(0, 20000),
@@ -5213,7 +5241,9 @@ function ingestEmail(raw, subject, source, from) {
     applied: [],
     status: "pending"
   };
-  if (read.study && read.changes.some(c => c.safe)) {
+  // An unverified sender gets nothing applied, not even the "safe" additions — the point of the
+  // check is that we don't know who this is, so we don't act on it at all.
+  if (!g.unverified && read.study && read.changes.some(c => c.safe)) {
     const s = studyById(read.study.id);
     if (s) {
       const safe = read.changes.filter(c => c.safe);
@@ -5228,9 +5258,50 @@ function ingestEmail(raw, subject, source, from) {
   upsertSuggestion(g);
   return g;
 }
+// A forwarded email arrives from the edge function as raw text with `needsParse`. The matching and
+// the change rules live here rather than in the function, so there is one set of rules rather than
+// two that drift; this is where they get run.
+//
+// Only the forwarder or an admin does the parsing, which bounds how many clients could race to do
+// it at once — and `needsParse` is cleared before anything is written, so a second client arriving
+// late finds nothing to do.
+function parseIncomingSuggestions() {
+  if (!currentUser) return false;
+  const todo = (state.suggestions || []).filter(g =>
+    g.needsParse && g.status === "pending" &&
+    (isAdmin() || (g.forwardedBy && g.forwardedBy === currentUser.id)));
+  if (!todo.length) return false;
+  todo.forEach(g => {
+    g.needsParse = false;
+    const read = readEmail(g.text, g.subject);
+    g.studyId = read.study ? read.study.id : "";
+    g.basis = read.basis;
+    g.changes = read.changes;
+    // Same rule as a paste: an unverified sender gets nothing applied automatically.
+    if (!g.unverified && read.study && read.changes.some(c => c.safe)) {
+      const s = studyById(read.study.id);
+      if (s) {
+        const safe = read.changes.filter(c => c.safe);
+        g.applied = safe.map(c => applyChange(s, c));
+        upsertStudy(s);
+        g.changes = read.changes.filter(c => !c.safe);
+      }
+    }
+    if (!g.changes.length && g.applied.length) {
+      g.status = "applied";
+      g.decidedAt = new Date().toISOString();
+      g.decidedBy = "the tracker";
+    }
+    upsertSuggestion(g);
+  });
+  return true;
+}
 function acceptSuggestion(id, fields) {
   const g = (state.suggestions || []).find(x => x.id === id);
   if (!g) return;
+  // Checked here rather than only in the UI: the buttons are hidden for people who can't act, but
+  // the rule belongs with the write, not with the rendering of it.
+  if (!canDecideSuggestion(g)) { toast("Only " + (g.forwardedByName || "whoever forwarded this") + " or an admin can apply this"); return; }
   const s = studyById(g.studyId);
   if (!s) { toast("That study no longer exists"); return; }
   const take = g.changes.filter(c => !fields || fields.indexOf(c.field) >= 0);
@@ -5246,6 +5317,7 @@ function acceptSuggestion(id, fields) {
 function dismissSuggestion(id) {
   const g = (state.suggestions || []).find(x => x.id === id);
   if (!g) return;
+  if (!canDecideSuggestion(g)) { toast("Only " + (g.forwardedByName || "whoever forwarded this") + " or an admin can dismiss this"); return; }
   // Dismissed, never deleted: the email and what it proposed stay on the record, so "why didn't
   // this get entered?" has an answer six months later.
   g.status = "dismissed";
@@ -5268,8 +5340,13 @@ function suggestionCardHTML(g) {
           ${when}${g.from ? " · " + esc(g.from) : ""}${g.source === "email" ? " · forwarded" : " · pasted in"}
         </div>
       </div>
-      <button class="mini-btn" data-sugg-dismiss="${esc(g.id)}" style="margin:0;flex:0 0 auto">Dismiss</button>
+      ${canDecideSuggestion(g) ? `<button class="mini-btn" data-sugg-dismiss="${esc(g.id)}" style="margin:0;flex:0 0 auto">Dismiss</button>` : ""}
     </div>
+    ${g.unverified ? `<div style="font-size:12.5px;color:var(--orange);line-height:1.5;margin-top:8px">
+      Sent from <b>${esc(g.from || "an unknown address")}</b>, which isn't a tracker account — so nothing
+      was changed and nothing will be until an admin acts on it. Anyone can send mail to the
+      forwarding address, so a sender we can't place is never trusted to edit a study.
+    </div>` : g.forwardedByName ? `<div style="font-size:12px;color:var(--text2);margin-top:6px">Forwarded by ${esc(g.forwardedByName)}</div>` : ""}
 
     ${s ? `<div style="font-size:13px;margin-top:8px">
         Matched to <b data-open-study="${esc(s.id)}" style="cursor:pointer;color:var(--blue)">${esc(s.nickname || s.title)}</b>
@@ -5295,7 +5372,9 @@ function suggestionCardHTML(g) {
           <div style="font-size:11.5px;color:var(--text2);margin-top:2px">${esc(c.why)}</div>
         </span>
       </label>`).join("")}
-      <button class="btn" data-sugg-accept="${esc(g.id)}" style="margin-top:10px">Apply the ticked changes</button>` : ""}
+      ${canDecideSuggestion(g)
+        ? `<button class="btn" data-sugg-accept="${esc(g.id)}" style="margin-top:10px">Apply the ticked changes</button>`
+        : `<div style="font-size:12.5px;color:var(--text2);margin-top:8px">Waiting on ${esc(g.forwardedByName || "an admin")} to decide.</div>`}` : ""}
 
     <button class="mini-btn" data-sugg-text="${esc(g.id)}" style="margin-top:10px">Show the email</button>
     <div id="sugg-text-${esc(g.id)}" style="display:none;font-size:12.5px;color:var(--text2);line-height:1.5;white-space:pre-wrap;background:var(--bg);border-radius:8px;padding:10px 12px;margin-top:8px">${esc(g.text || "")}</div>
@@ -5306,12 +5385,16 @@ function suggestionCardHTML(g) {
 }
 function suggestionsSectionHTML() {
   const pending = pendingSuggestions();
+  // Your own forwards first. A coordinator who forwarded one email should not have to read the
+  // whole team's queue to find it, and an admin still sees everything — just further down.
+  const mine = pending.filter(g => !g.forwardedBy || (currentUser && g.forwardedBy === currentUser.id));
+  const others = pending.filter(g => mine.indexOf(g) < 0);
   const recent = (state.suggestions || [])
     .filter(g => g.status !== "pending")
     .sort((a, b) => String(b.decidedAt || b.createdAt || "").localeCompare(String(a.decidedAt || a.createdAt || "")))
     .slice(0, 5);
   return `
-  <div class="section-title">Suggested Updates${pending.length ? ` (${pending.length})` : ""}</div>
+  <div class="section-title">Suggested Updates${mine.length ? ` (${mine.length})` : ""}</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
     Paste a journal or IRB email below and the tracker will work out which study it's about and what
     it says. Dates that fill an empty field are applied straight away; anything that would overwrite
@@ -5324,8 +5407,12 @@ function suggestionsSectionHTML() {
     </div>
     <button class="btn" id="sugg-add" style="margin-top:8px">Read this email</button>
   </div>
-  ${pending.length ? pending.map(suggestionCardHTML).join("")
+  ${mine.length ? mine.map(suggestionCardHTML).join("")
     : `<div class="card" style="color:var(--text2);font-size:14px">Nothing waiting on you.</div>`}
+  ${others.length ? `
+    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:16px 2px 4px 2px">WAITING ON SOMEONE ELSE</div>
+    <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Forwarded by other people. You can act on any of them, but they'll see them too.</div>
+    ${others.map(suggestionCardHTML).join("")}` : ""}
   ${recent.length ? `
     <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:14px 2px 4px 2px">RECENTLY HANDLED</div>
     ${recent.map(g => `<div class="task-row" style="padding:7px 0;gap:8px">
