@@ -995,6 +995,11 @@ let detailStudyId = null;
 // per section from scratch — including reopening the SAME study after leaving it — while
 // incidental re-renders during an active viewing session (e.g. adding a milestone) don't touch it.
 function openStudy(id) { detailStudyId = id; sectionStateForStudy = null; }
+// An outstanding "should this study move phase?" question, raised when a journal decision is
+// recorded. Held here rather than in the study record on purpose: it's a question for the person
+// who just typed something, not a fact about the study, so it must not sync to everyone else.
+// Cleared only by answering it — see the banner in renderStudyDetail().
+let pendingPhaseOffer = null;
 // Spends the ?study=<id> captured from an email link, once the studies are actually loaded.
 // Returns whether the view changed, so the caller knows whether to re-render.
 //
@@ -3585,17 +3590,15 @@ function bindDecisionRow(root, s) {
 
     const suggested = DECISION_SUGGESTS_PHASE[picked];
     if (suggested && s.phase !== suggested && s.phase !== "On Hold") {
-      toastAction(
-        `Recorded: ${picked}. Move this study to "${suggested}"?`,
-        "Move it",
-        () => {
-          s.phase = suggested;
-          upsertStudy(s);
-          render();
-          toast(`Now in ${suggested} — change it any time from Edit Study`);
-        });
+      // Deliberately NOT a toast. A toast fades after a few seconds, so recording a decision and
+      // then looking away meant the offer was gone before it was read — and the study sat in the
+      // wrong phase with nothing left on screen to say so. This sits on the study until one of
+      // the two buttons is pressed.
+      pendingPhaseOffer = { studyId: s.id, decision: picked, suggested, from: s.phase };
+      render();
       return;
     }
+    pendingPhaseOffer = null;
     if (picked === "Rejected") {
       toast("Recorded: Rejected. Use “File this away & submit elsewhere” to keep the record and start a new journal.");
       return;
@@ -3971,6 +3974,17 @@ function renderStudyDetail() {
     })()}
     ${s.phase === "Submitted" ? `<div style="font-size:12px;color:var(--orange);line-height:1.4;margin-top:10px">⚠︎ Make sure the Title above matches the manuscript title exactly as submitted to the journal.</div>` : ""}
   </div>
+  ${(pendingPhaseOffer && pendingPhaseOffer.studyId === s.id) ? `
+  <div class="card" style="border-left:3px solid var(--orange)">
+    <div style="font-size:14.5px;line-height:1.5">
+      Recorded: <b>${esc(pendingPhaseOffer.decision)}</b>. This study is still in
+      <b>${esc(pendingPhaseOffer.from)}</b> — move it to <b>${esc(pendingPhaseOffer.suggested)}</b>?
+    </div>
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn" id="phase-offer-yes" style="flex:1">Move to ${esc(pendingPhaseOffer.suggested)}</button>
+      <button class="btn secondary" id="phase-offer-no" style="flex:1">Keep it in ${esc(pendingPhaseOffer.from)}</button>
+    </div>
+  </div>` : ""}
   <div style="display:flex;gap:8px;align-items:stretch">
     <button class="btn secondary" id="edit-study-btn" style="flex:1">Edit Study</button>
     <button class="btn secondary" id="ask-update-btn" style="flex:1">${esc(updateRequestLabel(s))}</button>
@@ -4147,6 +4161,24 @@ function renderStudyDetail() {
   document.getElementById("back-btn").onclick = () => { detailStudyId = null; render(); };
   document.getElementById("edit-study-btn").onclick = () => openStudyForm(s);
   document.getElementById("ask-update-btn").onclick = () => openUpdateRequestSheet(s.id);
+  const offerYes = document.getElementById("phase-offer-yes");
+  if (offerYes) offerYes.onclick = () => {
+    const to = pendingPhaseOffer.suggested;
+    s.phase = to;
+    pendingPhaseOffer = null;
+    upsertStudy(s);
+    render();
+    toast(`Now in ${to} — change it any time from Edit Study`);
+  };
+  const offerNo = document.getElementById("phase-offer-no");
+  if (offerNo) offerNo.onclick = () => {
+    const kept = pendingPhaseOffer.from;
+    pendingPhaseOffer = null;
+    render();
+    // The decision itself was already saved when it was picked; only the phase question is being
+    // answered here. Saying so stops "Keep it" reading like it undid the decision too.
+    toast(`Left in ${kept}. The decision is still recorded.`);
+  };
   document.getElementById("del-study-btn").onclick = () => {
     if (blockOfflineEdit("Deleting a study")) return;
     if (confirm(`Delete "${s.title}" and its tasks? This can't be undone.`)) { detailStudyId = null; removeStudy(s.id); toast("Study deleted"); }
@@ -6217,12 +6249,15 @@ function openUpdateRequestSheet(studyId) {
       <b>${esc(s.nickname || s.title)}</b>, with a button that opens this study.
     </div>
     <div class="card" style="padding:8px 14px">
-      ${aud.reach.map(r => `<div style="display:flex;align-items:center;gap:8px;font-size:14px;padding:4px 0">
-        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</span>
+      ${aud.reach.map(r => `<label class="frow ur-row" style="gap:10px;cursor:pointer;border-bottom:none;padding:5px 0;align-items:center">
+        <input type="checkbox" class="ur-pick" data-name="${esc(r.name)}" checked style="flex:0;width:20px;height:20px">
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:15px">${esc(r.name)}</span>
         <span style="font-size:11.5px;color:var(--text2);white-space:nowrap">${esc(r.to)}</span>
         ${r.filtered ? `<span style="color:var(--orange);font-weight:800">!</span>` : `<span style="color:var(--green);font-weight:800">✓</span>`}
-      </div>`).join("")}
+      </label>`).join("")}
     </div>
+    <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px 10px 2px">Everyone's ticked. Untick anyone you'd rather not bother this time — it doesn't change the study team.</div>
+    <div id="ur-none" style="display:none;font-size:12.5px;color:var(--orange);line-height:1.5;margin:0 2px 10px 2px">Nobody is ticked, so there's no one to send to.</div>
     ${filtered.length ? `<div style="font-size:12.5px;color:var(--orange);line-height:1.5;margin:0 2px 10px 2px">
       Mail to ${esc(filtered.map(r => emailDomain(r.to)).filter((v, i, a) => a.indexOf(v) === i).join(", "))} is being quarantined at the moment, so ${filtered.length === 1 ? esc(filtered[0].name) + " may not see it" : "some of these may not arrive"}.
     </div>` : ""}
@@ -6240,20 +6275,37 @@ function openUpdateRequestSheet(studyId) {
   `, () => {
     const noteEl = document.getElementById("ur-note");
     const note = noteEl ? noteEl.value.trim().slice(0, 500) : "";
-    sendUpdateRequest(studyId, note, aud);
+    const only = [...document.querySelectorAll(".ur-pick")].filter(c => c.checked).map(c => c.dataset.name);
+    // Returning false holds the sheet open. Closing on an empty selection would look like it
+    // sent and then quietly did nothing, which is the worst of the available outcomes.
+    if (!only.length) { toast("Tick at least one person, or Cancel"); return false; }
+    sendUpdateRequest(studyId, note, aud, only);
     return true;
-  }, (sh) => { const t = sh.querySelector("#ur-note"); if (t) t.focus(); },
-     { saveLabel: "Send" });
+  }, (sh) => {
+    const t = sh.querySelector("#ur-note"); if (t) t.focus();
+    // The Send button stays enabled — an unusable button with no explanation is worse than one
+    // that tells you why when you press it — but the warning appears as soon as the list empties.
+    const sync = () => {
+      const n = [...sh.querySelectorAll(".ur-pick")].filter(c => c.checked).length;
+      const warn = sh.querySelector("#ur-none");
+      if (warn) warn.style.display = n ? "none" : "block";
+    };
+    sh.querySelectorAll(".ur-pick").forEach(c => c.addEventListener("change", sync));
+  }, { saveLabel: "Send" });
 }
 // Fires the send, then records it. The log is written from what the SERVER says it sent, not
 // from what the sheet showed — the two can differ if a profile changed between opening the
 // sheet and tapping Send, and the log is meant to be a record of what actually happened.
-async function sendUpdateRequest(studyId, note, aud) {
+async function sendUpdateRequest(studyId, note, aud, only) {
   toast("Sending…");
   try {
-    const out = await callUpdateFn({ studyId, note });
-    const sent = Array.isArray(out.sent) ? out.sent : aud.reach.map(r => r.name);
+    const out = await callUpdateFn({ studyId, note, only });
+    const sent = Array.isArray(out.sent) ? out.sent : (only || aud.reach.map(r => r.name));
     const failed = Array.isArray(out.failed) ? out.failed : [];
+    // Deliberately unticked is not the same as "has no account", so it's recorded separately.
+    // Six months from now, "why wasn't Will asked?" has two very different answers.
+    const picked = only || aud.reach.map(r => r.name);
+    const unticked = aud.reach.map(r => r.name).filter(n => picked.indexOf(n) < 0);
     logUpdateRequest(studyId, {
       id: uid(),
       at: new Date().toISOString(),
@@ -6261,6 +6313,7 @@ async function sendUpdateRequest(studyId, note, aud) {
       note: note || "",
       sentTo: sent,
       skipped: aud.skip.slice(),
+      unticked: unticked,
       failed: failed
     });
     render();
