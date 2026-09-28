@@ -4950,7 +4950,7 @@ function visibleFilterSets(tab) {
 }
 function currentFilters(tab) {
   return tab === "worklist"
-    ? { status: worklistStatus === "all" ? "All" : worklistStatus === "going" ? "Stale and Rotten" : "Active", person: worklistPerson, phase: worklistPhaseFilter, design: worklistDesignFilter, search: worklistSearchQuery }
+    ? { status: worklistStatus === "all" ? "All" : worklistStatus === "going" ? "Stale and Rotten" : "Active", person: worklistPerson, phase: worklistPhaseFilter, design: worklistDesignFilter, search: worklistSearchQuery, columns: worklistColumns.slice(), layout: worklistLayout }
     : { status: studyFilter, person: personFilter, phase: studyPhaseFilter, design: studyDesignFilter, search: studySearchQuery };
 }
 function applyFilters(tab, f) {
@@ -4961,6 +4961,9 @@ function applyFilters(tab, f) {
     worklistPhaseFilter = f.phase || "All phases";
     worklistDesignFilter = f.design || "All designs";
     worklistSearchQuery = f.search || "";
+    // Views saved before columns were choosable carry none, and must not blank the table.
+    if (Array.isArray(f.columns) && f.columns.length) setWorklistColumns(f.columns.slice());
+    if (f.layout) worklistLayout = f.layout;
   } else {
     studyFilter = f.status || "Active";
     personFilter = f.person || "mine";
@@ -5041,6 +5044,73 @@ function bindFilterSetsBar(tab, setActive) {
     deleteFilterSet(id);
   };
 }
+/* ============ Worklist columns ============ */
+// The Worklist used to be a fixed set of columns for everyone. It isn't one table, though — it's
+// several: the enrolment view, the "what's stuck" view, the manuscript-chasing view. Each wants a
+// different handful of the same facts, and a column that matters for one is noise in the others.
+//
+// So the columns are choosable, and a saved View carries the choice along with its filters. Views
+// are already shared with the team, which means "here's how I look at this" travels too.
+const WL_COLUMNS = [
+  { key: "irb",        label: "ORA / IRB #" },
+  { key: "irbStatus",  label: "IRB Status" },
+  { key: "enrollment", label: "Enrollment" },
+  { key: "title",      label: "IRB Study Name" },
+  { key: "nickname",   label: "Nickname" },
+  { key: "design",     label: "Design" },
+  { key: "phase",      label: "Study Status" },
+  { key: "note",       label: "Latest Note" },
+  { key: "steps",      label: "Next Steps" },
+  { key: "ask",        label: "Study Team", fixed: true }   // the chase button; always last
+];
+const WL_DEFAULT_COLUMNS = WL_COLUMNS.filter(c => !c.fixed).map(c => c.key);
+let worklistColumns = WL_DEFAULT_COLUMNS.slice();
+try {
+  const saved = JSON.parse(localStorage.getItem("rt-wl-columns") || "null");
+  // Filtered against the current column list so a key retired in a later version can't leave
+  // someone with a blank table they have no obvious way to fix.
+  if (Array.isArray(saved)) {
+    const valid = saved.filter(k => WL_COLUMNS.some(c => c.key === k && !c.fixed));
+    if (valid.length) worklistColumns = valid;
+  }
+} catch (e) { /* corrupt or private mode — the default stands */ }
+function setWorklistColumns(keys) {
+  // Never let the table end up with nothing in it.
+  worklistColumns = keys.length ? keys : WL_DEFAULT_COLUMNS.slice();
+  try { localStorage.setItem("rt-wl-columns", JSON.stringify(worklistColumns)); } catch (e) { /* non-fatal */ }
+}
+// The most recent note anyone wrote on this study, ignoring archived ones. Undated notes sort
+// last rather than first: a note with no date is almost always an old import, not today's news.
+function latestNote(s) {
+  const live = (s.noteEntries || []).filter(n => !n.archivedOn && (n.text || "").trim());
+  if (!live.length) return null;
+  return live.slice().sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")))[0];
+}
+function openColumnPicker() {
+  const picked = new Set(worklistColumns);
+  openSheet("Columns", `
+    <div style="font-size:13px;color:var(--text2);line-height:1.5;margin:2px 2px 12px 2px">
+      Choose what this table shows. Save it as a View afterwards and your team gets the same layout.
+    </div>
+    <div class="card" style="padding:6px 14px">
+      ${WL_COLUMNS.filter(c => !c.fixed).map(c => `
+        <label class="frow" style="gap:10px;cursor:pointer;border-bottom:none;padding:6px 0;align-items:center">
+          <input type="checkbox" class="wl-col-pick" data-key="${esc(c.key)}" ${picked.has(c.key) ? "checked" : ""} style="flex:0;width:20px;height:20px">
+          <span style="flex:1;font-size:15px">${esc(c.label)}</span>
+        </label>`).join("")}
+    </div>
+    <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px">The Study Team button stays on every row — it's how you chase a study without opening it.</div>
+  `, () => {
+    const keys = [...document.querySelectorAll(".wl-col-pick")].filter(c => c.checked).map(c => c.dataset.key);
+    if (!keys.length) { toast("Leave at least one column ticked"); return false; }
+    // Stored in the canonical order, not tick order, so the table reads the same for everyone.
+    setWorklistColumns(WL_COLUMNS.filter(c => keys.indexOf(c.key) >= 0).map(c => c.key));
+    render();
+    toast("Columns updated — save this as a View to share it");
+    return true;
+  }, null, { saveLabel: "Done" });
+}
+
 let studyViewId = "";
 let worklistViewId = "";
 function renderWorkingList() {
@@ -5073,6 +5143,9 @@ function renderWorkingList() {
     design: s => (s.design || "").toLowerCase(),
     phase: s => PHASES.indexOf(s.phase),
     steps: s => state.tasks.filter(t => t.studyId === s.id && !t.done).length,
+    // Sorted by WHEN the note was written, not alphabetically by its text — "which studies have
+    // been written about recently" is the question this column is really asked.
+    note: s => { const n = latestNote(s); return n ? (n.date || "") : ""; },
     // Days since anyone touched it. Not a visible column — it's what the Stale and Rotten tab
     // sorts on by default, so the worst offender is the first thing you read.
     stale: s => { const f = freshness(s); return f ? f.days : -1; },
@@ -5093,16 +5166,8 @@ function renderWorkingList() {
       (a.nickname || a.title).localeCompare(b.nickname || b.title));
   }
 
-  const cols = [
-    { key: "irb", label: "ORA / IRB #" },
-    { key: "irbStatus", label: "IRB Status" },
-    { key: "enrollment", label: "Enrollment" },
-    { key: "title", label: "IRB Study Name" },
-    { key: "nickname", label: "Nickname" },
-    { key: "design", label: "Design" },
-    { key: "phase", label: "Study Status" },
-    { key: "steps", label: "Next Steps" },
-  ];
+  // Only the columns this view asks for, in the canonical order. See WL_COLUMNS.
+  const cols = WL_COLUMNS.filter(c => !c.fixed && worklistColumns.indexOf(c.key) >= 0);
   let html = `<div class="seg">
       <button class="${worklistStatus === "active" ? "active" : ""}" data-wl="active">Active</button>
       <button class="${worklistStatus === "going" ? "active" : ""}" data-wl="going">Stale &amp; Rotten</button>
@@ -5110,6 +5175,9 @@ function renderWorkingList() {
     </div>`;
   html += searchBoxHTML("worklist-search", worklistSearchQuery, "Search by title, nickname, PI, or IRB #");
   html += filterSetsBarHTML("worklist", worklistViewId);
+  html += `<div style="display:flex;justify-content:flex-end;margin:0 4px 10px 4px">
+      <button class="mini-btn" id="wl-columns" style="margin:0">Columns (${worklistColumns.length})</button>
+    </div>`;
   const wlSelStyle = "flex:1;-webkit-appearance:none;appearance:none;background:var(--card);border:none;border-radius:10px;padding:9px 30px 9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;box-shadow:0 1px 2px rgba(0,0,0,0.06)";
   if (isAdmin()) {
     const others = state.roster.filter(n => n.trim().toLowerCase() !== wlMyName.trim().toLowerCase());
@@ -5139,6 +5207,8 @@ function renderWorkingList() {
 
   const bindWorklistFilters = () => {
     bindFilterSetsBar("worklist", (id) => { worklistViewId = id; });
+    const colBtn = document.getElementById("wl-columns");
+    if (colBtn) colBtn.onclick = openColumnPicker;
     const wp = document.getElementById("wl-person");
     if (wp) wp.onchange = () => { worklistPerson = wp.value; render(); };
     const ph = document.getElementById("wl-phase");
@@ -5349,20 +5419,38 @@ function renderWorkingList() {
     const recent = d !== null && d <= 3;
     return `<button class="mini-btn" data-ask-update="${s.id}" style="margin:0;white-space:nowrap${recent ? ";opacity:.55" : ""}">${esc(updateRequestLabel(s))}</button>`;
   };
+  // The most recent note, shown in full rather than clipped to a line: the point of putting notes
+  // on the list is to read them without opening thirty studies, and a truncated note usually
+  // stops exactly before the part that mattered.
+  const noteCell = (s) => {
+    const n = latestNote(s);
+    if (!n) return `<span class="none">No notes</span>`;
+    return `<div style="max-width:320px;white-space:normal;font-size:12.5px;line-height:1.45">${esc(n.text)}</div>`
+      + (n.date ? `<div style="font-size:11px;color:var(--text2);margin-top:2px">${fmtDate(n.date)}</div>` : "");
+  };
+  const cellFor = (s, key) => {
+    switch (key) {
+      case "irb":        return `<td>${s.irb ? esc(s.irb) : `<span style="color:var(--text2)">—</span>`}</td>`;
+      case "irbStatus":  return `<td><span class="wl-pill" style="background:${IRB_STATUS_COLORS[s.irbStatus] || "var(--text2)"}">${esc(s.irbStatus || "—")}</span></td>`;
+      case "enrollment": return `<td>${enrollCell(s)}</td>`;
+      case "title":      return `<td class="wl-title">${esc(s.title)}</td>`;
+      // The staleness tag rides with the nickname, so it needs somewhere else to go when that
+      // column is switched off — otherwise turning off Nickname silently hides STALE and ROTTEN.
+      case "nickname":   return `<td class="wl-name">${esc(s.nickname || "—")}${rotCell(s)}</td>`;
+      case "design":     return `<td><span class="badge outline" style="font-size:11px">${esc(DESIGN_SHORT[s.design] || "—")}</span></td>`;
+      case "phase":      return `<td><span class="wl-pill" style="background:${PHASE_COLORS[s.phase] || "var(--text2)"}">${esc(s.phase)}</span>${worklistColumns.indexOf("nickname") < 0 ? rotCell(s) : ""}</td>`;
+      case "note":       return `<td>${noteCell(s)}</td>`;
+      case "steps":      return `<td class="wl-steps">${stepsCell(s)}</td>`;
+      default:           return `<td></td>`;
+    }
+  };
   const rows = studies.map(s => {
     const f = freshness(s);
     const rotClass = (f && f.level === "rotten") ? " class=\"wl-rotten\""
       : (f && f.level === "stale") ? " class=\"wl-stale\"" : "";
     return `
     <tr data-open-study="${s.id}"${rotClass}>
-      <td>${s.irb ? esc(s.irb) : `<span style="color:var(--text2)">—</span>`}</td>
-      <td><span class="wl-pill" style="background:${IRB_STATUS_COLORS[s.irbStatus] || "var(--text2)"}">${esc(s.irbStatus || "—")}</span></td>
-      <td>${enrollCell(s)}</td>
-      <td class="wl-title">${esc(s.title)}</td>
-      <td class="wl-name">${esc(s.nickname || "—")}${rotCell(s)}</td>
-      <td><span class="badge outline" style="font-size:11px">${esc(DESIGN_SHORT[s.design] || "—")}</span></td>
-      <td><span class="wl-pill" style="background:${PHASE_COLORS[s.phase] || "var(--text2)"}">${esc(s.phase)}</span></td>
-      <td class="wl-steps">${stepsCell(s)}</td>
+      ${cols.map(c => cellFor(s, c.key)).join("")}
       <td style="white-space:nowrap">${askCell(s)}</td>
     </tr>`;
   }).join("");
