@@ -5563,9 +5563,12 @@ function ingestEmail(raw, subject, source, from) {
   upsertSuggestion(g);
   return g;
 }
-// A forwarded email arrives from the edge function as raw text with `needsParse`. The matching and
-// the change rules live here rather than in the function, so there is one set of rules rather than
-// two that drift; this is where they get run.
+// Fallback only. The edge function reads a forward on arrival now, so anything arriving today is
+// already parsed and skipped here. This still runs for suggestions captured before that change —
+// and if the function ever fails to parse one, it is the safety net rather than the main path.
+//
+// The rules themselves are duplicated in supabase/functions/ingest-email/rules.ts, deliberately;
+// test_parser_parity.js runs the same emails through both and fails on any disagreement.
 //
 // Only the forwarder or an admin does the parsing, which bounds how many clients could race to do
 // it at once — and `needsParse` is cleared before anything is written, so a second client arriving
