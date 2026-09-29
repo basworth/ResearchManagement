@@ -4334,6 +4334,21 @@ function renderStudyDetail() {
     })()}
     ${s.phase === "Submitted" ? `<div style="font-size:12px;color:var(--orange);line-height:1.4;margin-top:10px">⚠︎ Make sure the Title above matches the manuscript title exactly as submitted to the journal.</div>` : ""}
   </div>
+  ${(() => {
+    // Proposals live in Settings, but nobody goes looking in Settings for news about a study they
+    // happen to have open. So the study says so itself, and links straight there.
+    const waiting = pendingSuggestions().filter(g => g.studyId === s.id && (g.changes || []).length);
+    if (!waiting.length) return "";
+    const n = waiting.reduce((t, g) => t + g.changes.length, 0);
+    return `<div class="card" style="border-left:3px solid var(--blue)">
+      <div style="font-size:14.5px;line-height:1.5">
+        <b>${n} suggested update${n === 1 ? "" : "s"}</b> for this study, from
+        ${waiting.length === 1 ? esc(waiting[0].source === "transcript" ? "a meeting transcript" : waiting[0].source === "email" ? "a forwarded email" : "a pasted email") : esc(waiting.length + " messages")}.
+        Nothing has been changed.
+      </div>
+      <button class="btn" id="sugg-goto" style="margin-top:10px">Review ${n === 1 ? "it" : "them"}</button>
+    </div>`;
+  })()}
   ${(pendingPhaseOffer && pendingPhaseOffer.studyId === s.id) ? `
   <div class="card" style="border-left:3px solid var(--orange)">
     <div style="font-size:14.5px;line-height:1.5">
@@ -4487,6 +4502,8 @@ function renderStudyDetail() {
   document.getElementById("back-btn").onclick = () => { detailStudyId = null; render(); };
   document.getElementById("edit-study-btn").onclick = () => openStudyForm(s);
   document.getElementById("ask-update-btn").onclick = () => openUpdateRequestSheet(s.id);
+  const suggGoto = document.getElementById("sugg-goto");
+  if (suggGoto) suggGoto.onclick = () => { tab = "settings"; render(); toast("Suggested Updates is below Account"); };
   const offerYes = document.getElementById("phase-offer-yes");
   if (offerYes) offerYes.onclick = () => {
     const to = pendingPhaseOffer.suggested;
@@ -5160,7 +5177,62 @@ function matchStudyFromText(text) {
       // nickname like "Meniscus" could be any of several studies or just a word in a sentence.
       || tryField("title", "study title", 12)
       || tryField("nickname", "nickname", 6)
+      // Last resort, and the one that earns its keep in practice: an exact title match is brittle
+      // because titles get edited between submission and decision, and journals reformat them. So
+      // fall back to the distinctive WORDS — "STABLE" or "saddle" appears in one study and nowhere
+      // else, which is stronger evidence than a title that's one comma different.
+      || matchByDistinctiveWords(t)
       || null;
+}
+// Words too common to identify anything. Deliberately includes the vocabulary every orthopaedic
+// title shares — "patients", "outcomes", "study" — because a match on those is no match at all.
+const MATCH_STOPWORDS = new Set(("a an and are as at be by for from has have in into is it its of on or that the to with " +
+  "study studies trial patients patient outcome outcomes clinical results analysis comparison versus vs " +
+  "using based effect effects evaluation assessment review prospective retrospective randomized randomised " +
+  "treatment surgical surgery repair reconstruction following after before during between among").split(/\s+/));
+function matchTokens(str) {
+  return [...new Set(String(str || "").toLowerCase().split(/[^a-z0-9]+/)
+    .filter(w => w.length >= 4 && !MATCH_STOPWORDS.has(w)))];
+}
+// Scores every study by the distinctive words it shares with the text, and returns a winner only if
+// there is a clear one. Two rules do the work:
+//
+//   rarity — a word in ONE study's title is worth far more than one in thirty. This is what makes
+//            "STABLE" decisive and "tibial" nearly worthless.
+//   margin — the best study must be well clear of the runner-up. Where two studies are close, the
+//            honest answer is "I don't know", because filing a decision against the wrong study is
+//            worse than filing it against none.
+function matchByDistinctiveWords(text) {
+  const studies = state.studies || [];
+  if (studies.length < 2) return null;
+  const haystack = " " + String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, " ") + " ";
+  // How many studies use each word, so rarity can be weighed.
+  const docFreq = new Map();
+  const perStudy = studies.map(s => {
+    const toks = matchTokens((s.title || "") + " " + (s.nickname || ""));
+    toks.forEach(w => docFreq.set(w, (docFreq.get(w) || 0) + 1));
+    return { study: s, toks };
+  });
+  let best = null, second = 0;
+  perStudy.forEach(({ study, toks }) => {
+    let score = 0;
+    const hits = [];
+    toks.forEach(w => {
+      if (haystack.indexOf(" " + w + " ") < 0) return;
+      // Unique to one study: 3 points. Shared by a handful: proportionally less. Longer words are
+      // worth slightly more, since a long word matching by chance is less likely.
+      const rarity = 3 / (docFreq.get(w) || 1);
+      score += rarity * (w.length >= 8 ? 1.4 : 1);
+      hits.push(w);
+    });
+    if (!best || score > best.score) { second = best ? best.score : second; best = { study, score, hits }; }
+    else if (score > second) second = score;
+  });
+  if (!best || best.score < 4) return null;            // too little evidence to name a study
+  if (second > 0 && best.score < second * 1.6) return null;  // too close to call
+  // The words themselves go in the basis, so a wrong match is obvious rather than mysterious.
+  const shown = best.hits.slice().sort((a, b) => (docFreq.get(a) - docFreq.get(b)) || b.length - a.length).slice(0, 4);
+  return { study: best.study, basis: `wording — "${shown.join('", "')}"` };
 }
 
 // ---------- What is this email telling us? ----------
@@ -5195,12 +5267,64 @@ function parseLooseDate(str) {
 function proposal(field, label, to, safe, why) {
   return { field, label, to, safe: !!safe, why: why || "" };
 }
+// A journal's "we have received your submission" note. Worth reading because it marks the start of
+// a round, and because it's the one email that arrives when a paper moves to a NEW journal after a
+// rejection — the moment the tracker is most likely to be out of date.
+const SUBMISSION_PATTERNS = [
+  /your submission[^.]{0,400}?has been received by\s+([A-Z][^.\n]{3,70})/i,
+  /has been (?:successfully )?(?:received|submitted) (?:by|to)\s+([A-Z][^.\n]{3,70})/i
+];
+function readSubmissionConfirmation(body) {
+  if (!/submission confirmation|has been received|successfully submitted/i.test(body)) return null;
+  for (const re of SUBMISSION_PATTERNS) {
+    const m = re.exec(body);
+    if (m) {
+      // Journals append their own subtitle — "Arthroscopy: The Journal of Arthroscopic and Related
+      // Surgery" — and the short name is what anyone would type, so cut at the colon.
+      const journal = m[1].split(/[:,]/)[0].replace(/\s+/g, " ").trim();
+      if (journal.length >= 3) return { journal };
+    }
+  }
+  return { journal: "" };
+}
+// The date the email itself was sent, used as the submission date. Read from the forwarded header
+// block rather than from anywhere in the body, so a date mentioned in passing can't be mistaken
+// for the day it was submitted.
+function emailSentDate(body) {
+  const m = /^\s*(?:Date|Sent):\s*(.+)$/im.exec(String(body || ""));
+  return m ? parseLooseDate(m[1]) : "";
+}
 function readEmail(text, subject) {
   const body = String(subject || "") + "\n" + String(text || "");
   const hit = matchStudyFromText(body);
   const changes = [];
   if (hit) {
     const s = hit.study;
+
+    // A submission confirmation, read before decisions: "has been received by Arthroscopy" is not
+    // a decision, and reading it as one would be a serious mistake.
+    const sub = readSubmissionConfirmation(body);
+    if (sub) {
+      const when = emailSentDate(body);
+      const already = (s.journal || "").trim();
+      const movedJournal = sub.journal && already && already.toLowerCase() !== sub.journal.toLowerCase();
+      if (movedJournal) {
+        // The paper has gone somewhere new. Filing the old round away and starting a fresh one is
+        // exactly what the "File this away & submit elsewhere" button does by hand, so propose the
+        // whole move as ONE decision rather than three fields that only make sense together.
+        changes.push(proposal("newSubmission", `Submitted to ${sub.journal}`,
+          sub.journal + (when ? " on " + when : ""), false,
+          `the study says ${already}${s.decision ? " (" + s.decision + ")" : ""} — this files that round into Previous Submissions and starts a new one`));
+      } else {
+        if (sub.journal && !already) changes.push(proposal("journal", "Journal", sub.journal, true, "named in the confirmation"));
+        if (when && !s.submittedDate) changes.push(proposal("submittedDate", "Submitted on", when, true, "the date the confirmation was sent"));
+        else if (when && s.submittedDate !== when) changes.push(proposal("submittedDate", "Submitted on", when, false, `the email says ${when}, the study says ${s.submittedDate}`));
+        // A confirmation means it's with the journal now, so "awaiting decision" is the truth —
+        // but only when the study isn't already recording an outcome we'd be erasing.
+        if (!s.decision) changes.push(proposal("decision", "Journal decision", "Awaiting decision", true, "it's just been submitted"));
+      }
+    }
+
     const dec = DECISION_PATTERNS.find(p => p.re.test(body));
     if (dec && s.decision !== dec.decision) {
       // Never safe. A decision drives which fields the manuscript section even shows, and a parser
@@ -5343,6 +5467,30 @@ function pendingSuggestions() {
 }
 // Writes one proposed change onto its study. Returns a description of what it did, for the record.
 function applyChange(s, c) {
+  // Moving to a new journal isn't one field — it's the same bookkeeping the "File this away &
+  // submit elsewhere" button does: the finished round goes into Previous Submissions, untouched,
+  // and the live fields start again. Nothing is discarded.
+  if (c.field === "newSubmission") {
+    const parts = String(c.to || "").split(" on ");
+    const journal = parts[0] || "";
+    const when = parts[1] || "";
+    const was = s.journal || "";
+    if (was || s.submittedDate || s.decision) {
+      if (!Array.isArray(s.priorSubmissions)) s.priorSubmissions = [];
+      s.priorSubmissions.push({
+        id: uid(), journal: was, submittedDate: s.submittedDate || "",
+        trackingId: s.journalTrackingId || "", decision: s.decision || "", decisionDate: s.decisionDate || ""
+      });
+    }
+    s.journal = journal;
+    s.submittedDate = when;
+    s.journalTrackingId = "";
+    s.decision = "Awaiting decision";
+    s.decisionDate = "";
+    s.revisionsReceivedDate = "";
+    s.revisionsDeadline = "";
+    return { field: c.field, label: c.label, from: was ? was + " round filed away" : "", to: journal };
+  }
   const before = s[c.field];
   s[c.field] = c.to;
   // A decision recorded by hand offers a matching phase move; one arriving by email must not, or
