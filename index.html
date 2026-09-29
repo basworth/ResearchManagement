@@ -5129,6 +5129,12 @@ function bindFilterSetsBar(tab, setActive) {
 // phase, or changes IRB status waits for a person — those are the ones that are expensive to get
 // wrong, and a parser reading free text will get some of them wrong.
 
+// Bumped whenever these rules learn something new. A suggestion records the version that read it,
+// so improving the parser re-reads everything it looked at before and got nothing from — otherwise
+// a message read by an older, dumber version stays permanently misjudged, which is exactly what
+// happened to the first Arthroscopy confirmation.
+const PARSER_VERSION = 2;
+
 // ---------- Protected health information ----------
 // The tracker is deliberately study-level and holds no PHI. A forwarded email might, so it is
 // scrubbed BEFORE anything is stored — not before it is displayed, which would leave it in the
@@ -5576,12 +5582,19 @@ function ingestEmail(raw, subject, source, from) {
 function parseIncomingSuggestions() {
   if (!currentUser) return false;
   const todo = (state.suggestions || []).filter(g =>
-    g.needsParse && g.status === "pending" &&
+    // Never re-reads something already decided: an applied or dismissed item is a record of what a
+    // person chose, and a later parser has no business revising it.
+    g.status === "pending" &&
+    (g.needsParse || (g.parserVersion || 0) < PARSER_VERSION) &&
     (isAdmin() || (g.forwardedBy && g.forwardedBy === currentUser.id)));
   if (!todo.length) return false;
   todo.forEach(g => {
     g.needsParse = false;
+    g.parserVersion = PARSER_VERSION;
     const read = readEmail(g.text, g.subject);
+    // Anything already applied stays applied and is never proposed again.
+    const done = new Set((g.applied || []).map(a => a.field));
+    read.changes = read.changes.filter(c => !done.has(c.field));
     g.studyId = read.study ? read.study.id : "";
     g.basis = read.basis;
     g.changes = read.changes;
