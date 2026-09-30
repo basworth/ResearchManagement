@@ -4258,10 +4258,18 @@ function renderStudyDetail() {
     editingNoteId = "";
     studySectionState = {};
     Object.keys(hasContent).forEach(id => {
-      // Phase decides. A section that isn't part of this phase's work starts collapsed even if
-      // it has content — it's still right there, one tap away, with a count on the header.
-      studySectionState[id] = sectionOpenForPhase(id, s.phase);
+      // Two tests, and a section has to pass both to start open: the phase has to care about it,
+      // AND it has to actually hold something. An empty section open is a header, a blank space
+      // and an input box telling you there's nothing here — which is most of the page on a study
+      // that's only just started.
+      studySectionState[id] = sectionOpenForPhase(id, s.phase) && !!hasContent[id];
     });
+    // Unless that would leave the whole study collapsed. A brand-new study has nothing anywhere,
+    // and a wall of shut headers reads as broken rather than as tidy — so fall back to the phase's
+    // own sections, which is where you'd be about to type.
+    if (!Object.keys(studySectionState).some(id => studySectionState[id])) {
+      Object.keys(hasContent).forEach(id => { studySectionState[id] = sectionOpenForPhase(id, s.phase); });
+    }
     sectionStateForStudy = s.id;
   }
   // Counts shown on collapsed headers.
