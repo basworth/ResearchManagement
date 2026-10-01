@@ -978,7 +978,7 @@ function setSub(soc, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [] };
+let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [] };
 let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
@@ -1335,6 +1335,10 @@ function migrate() {
   if (!Array.isArray(state.profiles)) state.profiles = [];
   if (!Array.isArray(state.filterSets)) state.filterSets = [];
   if (!Array.isArray(state.suggestions)) state.suggestions = [];
+  if (!Array.isArray(state.matchHints)) state.matchHints = [];
+  // The matcher reads them from a module variable rather than from state, so it can be shared
+  // verbatim with the edge function, which has no state at all.
+  setMatchHints(state.matchHints);
   if (!state.nameAliases || typeof state.nameAliases !== "object") state.nameAliases = {};
   // A customised stage list won't contain stages added to the defaults later, so splice them in
   // once. The "once" matters: the stage editor lets people deliberately remove stages, and
@@ -1882,6 +1886,8 @@ async function pullAll() {
     state.profiles = data.filter(r => r.kind === "profile").map(r => r.data);
     state.filterSets = data.filter(r => r.kind === "filterSet").map(r => r.data);
     state.suggestions = data.filter(r => r.kind === "suggestion").map(r => r.data);
+    state.matchHints = data.filter(r => r.kind === "matchHint").map(r => r.data);
+    setMatchHints(state.matchHints);
     const meta = data.find(r => r.kind === "meta");
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
     if (meta && meta.data.degrees && typeof meta.data.degrees === "object") state.rosterDegrees = meta.data.degrees;
@@ -1996,7 +2002,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
     if (Array.isArray(data.names)) { state.roster = data.names; saveLocal(); render(); }
     return;
   }
-  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : kind === "filterSet" ? state.filterSets : kind === "suggestion" ? state.suggestions : null;
+  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : kind === "filterSet" ? state.filterSets : kind === "suggestion" ? state.suggestions : kind === "matchHint" ? state.matchHints : null;
   if (!arr) return;
   // Match on the payload's own id, not the row id: for userPref the two differ (see
   // prefRowId), and matching on the row id would never find the existing entry — so every
@@ -2013,7 +2019,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
 function applyRealtimeDelete(id) {
   if (!id) return;
   let hitOpenRecord = false;
-  ["studies", "tasks", "meetings", "teamNotes", "userPrefs", "profiles", "filterSets", "suggestions"].forEach(key => {
+  ["studies", "tasks", "meetings", "teamNotes", "userPrefs", "profiles", "filterSets", "suggestions", "matchHints"].forEach(key => {
     const before = state[key].length;
     // userPref rows live under a derived row id, so also check that mapping — otherwise a
     // deleted preferences row would linger in local state forever.
@@ -2059,6 +2065,7 @@ async function pushAllLocal() {
     ...(state.profiles || []).map(p => ({ id: p.id, kind: "profile", data: p, updated_at: now() })),
     ...(state.filterSets || []).map(f => ({ id: f.id, kind: "filterSet", data: f, updated_at: now() })),
     ...(state.suggestions || []).map(g => ({ id: g.id, kind: "suggestion", data: g, updated_at: now() })),
+    ...(state.matchHints || []).map(h => ({ id: h.id, kind: "matchHint", data: h, updated_at: now() })),
     // Must carry every meta field, not just names — an earlier version dropped degrees and
     // would silently wipe them on a full re-push.
     { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null, nameAliases: state.nameAliases || {}, stageAdds: state.stageAdds || [] }, updated_at: now() }
@@ -5138,7 +5145,7 @@ function bindFilterSetsBar(tab, setActive) {
 // so improving the parser re-reads everything it looked at before and got nothing from — otherwise
 // a message read by an older, dumber version stays permanently misjudged, which is exactly what
 // happened to the first Arthroscopy confirmation.
-const PARSER_VERSION = 3;
+const PARSER_VERSION = 4;
 
 // ---------- Protected health information ----------
 // The tracker is deliberately study-level and holds no PHI. A forwarded email might, so it is
@@ -5168,9 +5175,55 @@ function stripPHI(text) {
 // Ordered by how specific the evidence is. A journal tracking ID identifies one study and nothing
 // else; a nickname appearing in prose might be a coincidence. Returning HOW it matched matters as
 // much as the match: a suggestion you can't audit is one you have to re-check by hand anyway.
+// ---------- What people have taught it ----------
+// The matcher's real weakness was never its vocabulary — it was having no memory. The same
+// journals, coordinators and shorthand recur constantly, so a correction made once should hold.
+//
+// A hint is: these words, or this sender, mean this study. Hints are data like anything else, so
+// they sync to the team — a correction Carla makes helps everyone.
+let MATCH_HINTS = [];
+function setMatchHints(list) { MATCH_HINTS = Array.isArray(list) ? list : []; }
+// Phrases worth remembering out of a corrected email. Not every word — the ones that are rare
+// enough to identify something, which is the same test the distinctive-word matcher uses.
+function hintPhrasesFrom(text, limit) {
+  const freq = new Map();
+  matchTokens(text).forEach(w => freq.set(w, (freq.get(w) || 0) + 1));
+  return [...freq.keys()]
+    .sort((a, b) => b.length - a.length)
+    .slice(0, limit || 8);
+}
+function matchByHint(text) {
+  // Hyphens kept: an address like editor@ortho-journal.org would otherwise be split in two and
+  // never match the sender we recorded.
+  const hay = " " + String(text || "").toLowerCase().replace(/[^a-z0-9@.\-]+/g, " ") + " ";
+  for (const h of MATCH_HINTS) {
+    if (!h || !h.studyId) continue;
+    // A sender is the strongest hint there is: an editorial system writes from one address about
+    // one manuscript, and a coordinator emails about the studies they run.
+    if (h.sender && hay.indexOf(" " + String(h.sender).toLowerCase() + " ") >= 0) {
+      return { studyId: h.studyId, basis: `you taught it that ${h.sender} means this study` };
+    }
+    const words = (h.words || []).filter(w => hay.indexOf(" " + w + " ") >= 0);
+    // Two matched words, not one: a single remembered word is how a hint starts matching things
+    // it shouldn't.
+    if (words.length >= 2) {
+      return { studyId: h.studyId, basis: `you taught it that "${words.slice(0, 3).join('", "')}" means this study` };
+    }
+  }
+  return null;
+}
+
 function matchStudyFromText(text) {
   const t = String(text || "");
   const studies = state.studies || [];
+  // Before anything else. A correction someone made deliberately outranks every guess the rules
+  // can make, including an identifier — if you've said "this sender means this study", you know
+  // something the text doesn't say.
+  const taught = matchByHint(t);
+  if (taught) {
+    const s = studies.find(x => x.id === taught.studyId);
+    if (s) return { study: s, basis: taught.basis };
+  }
   const tryField = (field, label, minLen) => {
     for (const s of studies) {
       const v = String(s[field] || "").trim();
@@ -5201,9 +5254,51 @@ const MATCH_STOPWORDS = new Set(("a an and are as at be by for from has have in 
   "study studies trial patients patient outcome outcomes clinical results analysis comparison versus vs " +
   "using based effect effects evaluation assessment review prospective retrospective randomized randomised " +
   "treatment surgical surgery repair reconstruction following after before during between among").split(/\s+/));
+// The shorthand this team actually writes. An email saying "the MPFL saddle paper" should reach a
+// study titled "medial patellofemoral ligament reconstruction", and no amount of word matching gets
+// there without being told these are the same thing.
+const MATCH_ACRONYMS = {
+  mpfl: "medial patellofemoral ligament",
+  tto: "tibial tubercle osteotomy",
+  oca: "osteochondral allograft",
+  aca: "anterior cruciate", acl: "anterior cruciate ligament",
+  pcl: "posterior cruciate ligament", mcl: "medial collateral ligament",
+  lcl: "lateral collateral ligament", plc: "posterolateral corner",
+  ttpcl: "tibial tubercle posterior cruciate ligament",
+  tttg: "tibial tubercle trochlear groove", sttg: "sagittal tibial tubercle trochlear groove",
+  dfo: "distal femoral osteotomy", hto: "high tibial osteotomy",
+  maci: "matrix autologous chondrocyte implantation",
+  aci: "autologous chondrocyte implantation",
+  bmac: "bone marrow aspirate concentrate", prp: "platelet rich plasma",
+  oat: "osteochondral autograft transfer", rct: "rotator cuff",
+  thaa: "total hip", tka: "total knee", uka: "unicompartmental knee",
+  pros: "patient reported outcome", proms: "patient reported outcome measures"
+};
+// Crude, deliberately. A real stemmer would be a dependency and a source of surprises; what this
+// needs is for "chondrocytes" and "chondrocyte" to be the same word, and for "reconstruction" to
+// survive being written "reconstructions".
+function stemWord(w) {
+  return String(w || "")
+    .replace(/(ies)$/, "y")
+    .replace(/(sses|shes|ches|xes)$/, "")
+    .replace(/([^s])s$/, "$1")
+    .replace(/(ing|ed)$/, "")
+    .replace(/(ation|ations)$/, "at");
+}
 function matchTokens(str) {
-  return [...new Set(String(str || "").toLowerCase().split(/[^a-z0-9]+/)
-    .filter(w => w.length >= 4 && !MATCH_STOPWORDS.has(w)))];
+  const raw = String(str || "").toLowerCase().split(/[^a-z0-9]+/);
+  const out = new Set();
+  raw.forEach(w => {
+    if (!w) return;
+    // An acronym contributes the words it stands for, so either spelling matches the other.
+    if (MATCH_ACRONYMS[w]) {
+      MATCH_ACRONYMS[w].split(" ").forEach(x => { if (x.length >= 4 && !MATCH_STOPWORDS.has(x)) out.add(stemWord(x)); });
+      out.add(w);
+      return;
+    }
+    if (w.length >= 4 && !MATCH_STOPWORDS.has(w)) out.add(stemWord(w));
+  });
+  return [...out];
 }
 // Scores every study by the distinctive words it shares with the text, and returns a winner only if
 // there is a clear one. Two rules do the work:
@@ -5216,7 +5311,8 @@ function matchTokens(str) {
 function matchByDistinctiveWords(text) {
   const studies = state.studies || [];
   if (studies.length < 2) return null;
-  const haystack = " " + String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, " ") + " ";
+  // Stemmed on both sides, or "chondrocytes" in the email would miss "chondrocyte" in the title.
+  const haystack = " " + matchTokens(text).join(" ") + " ";
   // How many studies use each word, so rarity can be weighed.
   const docFreq = new Map();
   const perStudy = studies.map(s => {
@@ -5239,7 +5335,10 @@ function matchByDistinctiveWords(text) {
     if (!best || score > best.score) { second = best ? best.score : second; best = { study, score, hits }; }
     else if (score > second) second = score;
   });
-  if (!best || best.score < 4) return null;            // too little evidence to name a study
+  // Two distinct words, not one. A single long rare word clears the score threshold on its own —
+  // "landmark" appearing anywhere was enough to claim a study — and one word is a coincidence
+  // waiting to happen.
+  if (!best || best.hits.length < 2 || best.score < 4) return null;
   if (second > 0 && best.score < second * 1.6) return null;  // too close to call
   // The words themselves go in the basis, so a wrong match is obvious rather than mysterious.
   const shown = best.hits.slice().sort((a, b) => (docFreq.get(a) - docFreq.get(b)) || b.length - a.length).slice(0, 4);
@@ -5677,6 +5776,60 @@ function parseIncomingSuggestions() {
   });
   return true;
 }
+// Teaching it. Records what this email looked like against the study you picked, then re-reads the
+// email so you immediately get the proposals you would have had if it had matched first time.
+function teachSuggestionStudy(id, studyId) {
+  const g = (state.suggestions || []).find(x => x.id === id);
+  const s = studyById(studyId);
+  if (!g || !s) return;
+  if (blockOfflineEdit("Correcting a match")) return;
+  const wrong = g.studyId && g.studyId !== studyId;
+  const hint = {
+    id: uid(),
+    studyId,
+    // The sender is the hint that pays off most often — an editorial system writes from one
+    // address about one manuscript, for months.
+    sender: (g.from || "").trim().toLowerCase(),
+    words: hintPhrasesFrom((g.subject || "") + " " + (g.text || "")),
+    taughtBy: me(),
+    taughtAt: new Date().toISOString(),
+    // Kept so a hint that turns out to be wrong can be understood rather than just deleted.
+    fromSubject: g.subject || ""
+  };
+  state.matchHints = state.matchHints || [];
+  state.matchHints.push(hint);
+  setMatchHints(state.matchHints);
+  saveLocal(); pushItem("matchHint", hint);
+
+  // Re-read it now that it knows.
+  g.studyId = studyId;
+  const read = readEmail(g.text, g.subject);
+  g.basis = read.basis || "you said so";
+  const done = new Set((g.applied || []).map(a => a.field));
+  g.changes = read.changes.filter(c => !done.has(c.field));
+  g.parserVersion = PARSER_VERSION;
+  // Safe changes apply straight away, exactly as they would have on arrival.
+  const safe = g.changes.filter(c => c.safe);
+  if (safe.length) {
+    g.applied = (g.applied || []).concat(safe.map(c => applyChange(s, c)));
+    upsertStudy(s);
+    g.changes = g.changes.filter(c => !c.safe);
+  }
+  if (!g.changes.length && g.applied.length) { g.status = "applied"; g.decidedAt = new Date().toISOString(); g.decidedBy = me(); }
+  upsertSuggestion(g);
+  render();
+  toastAction(
+    `Learned — ${wrong ? "re-filed" : "filed"} under ${s.nickname || s.title}. Next time it'll match on its own.`,
+    "Open study", () => { openStudy(studyId); tab = "studies"; render(); });
+}
+function forgetMatchHint(hintId) {
+  const h = (state.matchHints || []).find(x => x.id === hintId);
+  if (!h) return;
+  state.matchHints = state.matchHints.filter(x => x.id !== hintId);
+  setMatchHints(state.matchHints);
+  saveLocal(); deleteRemote(hintId); render();
+  toast("Forgotten — it won't use that to match any more");
+}
 function acceptSuggestion(id, fields) {
   const g = (state.suggestions || []).find(x => x.id === id);
   if (!g) return;
@@ -5737,6 +5890,15 @@ function suggestionCardHTML(g) {
         Couldn't tell which study this is about. Nothing was changed — it mentions no IRB number,
         tracking ID or study title the tracker recognises.
       </div>`}
+    ${canDecideSuggestion(g) ? `
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+        <span style="font-size:12.5px;color:var(--text2);flex:0 0 auto">${s ? "Wrong study?" : "Which study is it?"}</span>
+        <select data-sugg-teach="${esc(g.id)}" style="flex:1;min-width:150px;-webkit-appearance:none;appearance:none;background:var(--bg);border:none;border-radius:8px;padding:8px 12px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
+          <option value="">— tell it, and it'll remember —</option>
+          ${visibleStudies().slice().sort((a, b) => (a.nickname || a.title).localeCompare(b.nickname || b.title))
+            .map(x => `<option value="${esc(x.id)}">${esc(x.nickname || x.title)}</option>`).join("")}
+        </select>
+      </div>` : ""}
 
     ${(g.applied || []).length ? `
       <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:12px 2px 4px 2px">ALREADY APPLIED</div>
@@ -5814,6 +5976,22 @@ function suggestionsSectionHTML() {
     <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:16px 2px 4px 2px">WAITING ON SOMEONE ELSE</div>
     <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Forwarded by other people. You can act on any of them, but they'll see them too.</div>
     ${others.map(suggestionCardHTML).join("")}` : ""}
+  ${(state.matchHints || []).length ? `
+    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:16px 2px 4px 2px">WHAT IT HAS LEARNED</div>
+    <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:0 2px 8px 2px">Corrections anyone has made. It uses these before anything else, so if one is wrong it'll keep being wrong until you forget it.</div>
+    ${(state.matchHints || []).slice().reverse().map(h => {
+      const st = studyById(h.studyId);
+      return `<div class="task-row" style="padding:7px 0;gap:8px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13.5px">${esc(st ? (st.nickname || st.title) : "a study that no longer exists")}</div>
+          <div style="font-size:11.5px;color:var(--text2);overflow:hidden;text-overflow:ellipsis">
+            ${h.sender ? "from " + esc(h.sender) : ""}${h.sender && (h.words || []).length ? " · " : ""}${(h.words || []).slice(0, 4).map(esc).join(", ")}
+            ${h.taughtBy ? " · " + esc(h.taughtBy) : ""}
+          </div>
+        </div>
+        <button class="mini-btn" data-hint-forget="${esc(h.id)}" style="margin:0;flex:0 0 auto">Forget</button>
+      </div>`;
+    }).join("")}` : ""}
   ${recent.length ? `
     <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:14px 2px 4px 2px">RECENTLY HANDLED</div>
     ${recent.map(g => `<div class="task-row" style="padding:7px 0;gap:8px">
@@ -5897,6 +6075,10 @@ function bindSuggestions(root) {
     acceptSuggestion(id, fields);
   });
   root.querySelectorAll("[data-sugg-dismiss]").forEach(b => b.onclick = () => dismissSuggestion(b.dataset.suggDismiss));
+  root.querySelectorAll("[data-hint-forget]").forEach(b => b.onclick = () => forgetMatchHint(b.dataset.hintForget));
+  root.querySelectorAll("[data-sugg-teach]").forEach(sel => sel.onchange = () => {
+    if (sel.value) teachSuggestionStudy(sel.dataset.suggTeach, sel.value);
+  });
   root.querySelectorAll("[data-sugg-text]").forEach(b => b.onclick = () => {
     const box = root.querySelector("#sugg-text-" + b.dataset.suggText);
     if (!box) return;
