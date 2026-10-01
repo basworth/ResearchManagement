@@ -4441,7 +4441,7 @@ function renderStudyDetail() {
           <div style="font-size:14.5px;font-weight:600">${esc(a.meeting)}</div>
           ${a.date ? `<div style="font-size:12px;color:var(--text2)">${fmtDate(a.date)}</div>` : ""}
         </div>
-        <button class="badge" data-abs-status="${a.id}" style="background:${ABS_COLORS[a.status] || "var(--text2)"};border:none;cursor:pointer;font-family:inherit" title="Tap to change status">${esc(a.status)}</button>
+        <button class="badge" data-abs-status="${a.id}" style="background:${ABS_COLORS[a.status] || "var(--text2)"};border:none;cursor:pointer;font-family:inherit" title="Tap to change status">${esc(a.status)}${a.format ? " · " + esc(a.format) : ""}</button>
         <button data-abs-del="${a.id}" style="border:none;background:none;color:var(--text2);font-size:18px;cursor:pointer">×</button>
       </div>
       <!-- The abstract that actually went to THIS meeting, filed with it. Two meetings usually get
@@ -5145,7 +5145,7 @@ function bindFilterSetsBar(tab, setActive) {
 // so improving the parser re-reads everything it looked at before and got nothing from — otherwise
 // a message read by an older, dumber version stays permanently misjudged, which is exactly what
 // happened to the first Arthroscopy confirmation.
-const PARSER_VERSION = 4;
+const PARSER_VERSION = 6;
 
 // ---------- Protected health information ----------
 // The tracker is deliberately study-level and holds no PHI. A forwarded email might, so it is
@@ -5416,6 +5416,109 @@ function noteFromEmail(subject, body) {
   return (head ? head + "\n" : "") + text;
 }
 
+// ---------- Conference abstracts ----------
+// A society's "Paper Presentation Information" email means the abstract was accepted, and whether
+// it's a podium or a poster is in the wording. That is a submission record, not a note — filing it
+// as prose was the tracker failing to understand something it plainly could.
+// Societies that email about abstracts. Written out rather than derived from the SOCIETIES map
+// above, because this block is shared verbatim with the edge function, which has no such map —
+// deriving it would make the two copies behave differently while still reading identically, which
+// is the one failure the parity test cannot catch. Keep this in step with SOCIETIES by hand.
+const ABSTRACT_SOCIETIES = ["AAOS", "AANA", "AOSSM", "OREF", "IPSG", "ICRS", "ISHA", "ISAKOS",
+  "ORS", "POSNA", "AMSSM", "ACSM", "ESSKA", "SOMOS", "AOA", "ASES", "AOFAS", "AAHKS", "SANOFF"];
+// "AAOS 2027", "2027 AAOS", or a society named beside an Annual Meeting.
+function conferenceFromText(text) {
+  const t = String(text || "");
+  for (const soc of ABSTRACT_SOCIETIES) {
+    const re = new RegExp("\\b" + soc + "\\b[^.\\n]{0,24}?(20\\d\\d)|\\b(20\\d\\d)[^.\\n]{0,24}?\\b" + soc + "\\b", "i");
+    const m = re.exec(t);
+    if (m) return soc + " " + (m[1] || m[2]);
+    if (new RegExp("\\b" + soc + "\\b[^.\\n]{0,30}annual meeting", "i").test(t)) return soc;
+  }
+  return "";
+}
+// What the society decided, and in what form. Order matters: "not been accepted" has to be read
+// before "accepted", or a rejection becomes an acceptance — the single worst mistake available here.
+function abstractOutcomeFromText(text) {
+  const t = String(text || "");
+  if (/\b(?:was not|has not been|regret|unable to) (?:accept|select)/i.test(t)) return { status: "Rejected", format: "" };
+  const accepted = /\b(?:accepted for (?:presentation|publication)|has been accepted|pleased to (?:inform|accept)|been selected for)\b/i.test(t);
+  if (!accepted) {
+    // The other half of the story: "we have received your abstract" is a submission, which is
+    // worth recording months before anyone hears back.
+    if (/\b(?:abstract|submission)[^.\n]{0,60}\b(?:has been received|was received|successfully submitted|received your)\b/i.test(t)
+        || /\b(?:thank you for (?:your )?submi|confirmation of (?:your )?submi)/i.test(t)) {
+      return { status: "Submitted", format: "" };
+    }
+    return null;
+  }
+  // Societies use "paper presentation" to mean a podium talk, as distinct from a poster.
+  const podium = /\b(?:podium|paper presentation|oral presentation|instructional course)\b/i.test(t);
+  const poster = /\bposter\b/i.test(t);
+  return { status: "Accepted", format: podium ? "Podium" : poster ? "Poster" : "" };
+}
+function readConferenceEmail(body, study) {
+  const meeting = conferenceFromText(body);
+  if (!meeting) return null;
+  const outcome = abstractOutcomeFromText(body);
+  if (!outcome) return null;
+  const existing = (study.abstracts || []).find(a =>
+    String(a.meeting || "").toLowerCase().replace(/\s+/g, " ").trim() === meeting.toLowerCase());
+  const label = outcome.format ? `${outcome.status} — ${outcome.format}` : outcome.status;
+  if (!existing) {
+    // A submission the tracker didn't know about. Additive, so it files itself.
+    return proposal("abstractSubmission", `Abstract — ${meeting}`, `${meeting}|${outcome.status}|${outcome.format}`,
+      true, `the ${meeting} email says ${label.toLowerCase()}`);
+  }
+  if (existing.status === outcome.status && (existing.format || "") === outcome.format) return null;
+  // Changing a status somebody already recorded is never automatic.
+  return proposal("abstractSubmission", `Abstract — ${meeting}`, `${meeting}|${outcome.status}|${outcome.format}`,
+    false, `the study says ${existing.status}${existing.format ? " — " + existing.format : ""}, the email says ${label.toLowerCase()}`);
+}
+
+// ---------- Grants ----------
+// Funding correspondence follows its own arc — letter of intent, full application, decision — and
+// none of it belongs in the manuscript fields. An award is the one that matters most and the one
+// most often recorded late.
+const GRANT_WORDS = /\b(?:grant|funding|award|foundation|letter of intent|LOI|proposal)\b/i;
+function moneyFromText(text) {
+  const m = /\$\s?([\d,]{3,12})(?:\.\d{2})?/.exec(String(text || ""));
+  return m ? "$" + m[1].replace(/,$/, "") : "";
+}
+function readGrantEmail(body, study) {
+  if (!GRANT_WORDS.test(body)) return null;
+  const g = study.grant || {};
+  const out = [];
+  const declined = /\b(?:not (?:been )?(?:funded|selected|awarded)|regret[^.\n]{0,40}(?:fund|award|support)|unsuccessful)\b/i.test(body);
+  const awarded = !declined && /\b(?:has been (?:funded|awarded)|pleased to (?:award|inform[^.\n]{0,40}award|fund)|your (?:grant|proposal|application) (?:has been )?(?:approved|funded|awarded)|notice of award)\b/i.test(body);
+  const source = conferenceFromText(body) || (/(OREF|AOSSM|AANA|AAOS|NIH|NFL|DOD|ICRS|MTF|Arthritis Foundation)/i.exec(body) || [])[1] || "";
+  if (awarded) {
+    const amount = moneyFromText(body);
+    const when = emailSentDate(body);
+    // Each into an empty field only. Overwriting a recorded award is never automatic — the figure
+    // in an email is often a headline that differs from the executed amount.
+    if (source && !g.source) out.push(proposal("grantSource", "Awarded by", source, true, "named in the award email"));
+    else if (source && g.source && g.source.toLowerCase() !== source.toLowerCase()) out.push(proposal("grantSource", "Awarded by", source, false, `the study says ${g.source}`));
+    if (amount && !g.amount) out.push(proposal("grantAmount", "Amount awarded", amount, true, "stated in the award email"));
+    else if (amount && g.amount && g.amount !== amount) out.push(proposal("grantAmount", "Amount awarded", amount, false, `the study says ${g.amount}`));
+    if (when && !g.awardDate) out.push(proposal("grantAwardDate", "Date of award", when, true, "the date the award email was sent"));
+  }
+  // A submission, a letter of intent or a decline has nowhere structured to go — the grant fields
+  // only describe money that arrived. Recorded as a note so the arc is on the study either way.
+  if (!out.length) {
+    const stage = declined ? "not funded"
+      : /\bletter of intent\b|\bLOI\b/i.test(body) ? "letter of intent"
+      : /\b(?:has been received|successfully submitted|thank you for (?:your )?submi)\b/i.test(body) ? "application submitted"
+      : "";
+    if (stage) {
+      return [proposal("addNote", "Note on the study",
+        `Grant — ${stage}${source ? " (" + source + ")" : ""}${moneyFromText(body) ? ", " + moneyFromText(body) : ""}`,
+        true, "a grant update with no field to put it in")];
+    }
+  }
+  return out.length ? out : null;
+}
+
 // A proposed change. `safe` decides whether it can apply itself: true only for additions that
 // destroy nothing. Anything replacing an existing value is never safe, whatever the field.
 function proposal(field, label, to, safe, why) {
@@ -5479,9 +5582,10 @@ function readEmail(text, subject) {
       }
     }
 
-    // Always offered when an email matches, whatever else is in it: the text is the point.
-    const note = noteFromEmail(subject, text);
-    if (note) changes.push(proposal("addNote", "Note on the study", note, true, "the email, trimmed of signatures and quoted replies"));
+    const conf = readConferenceEmail(body, s);
+    if (conf) changes.push(conf);
+    const grants = readGrantEmail(body, s);
+    if (grants) grants.forEach(c => changes.push(c));
 
     const dec = DECISION_PATTERNS.find(p => p.re.test(body));
     if (dec && s.decision !== dec.decision) {
@@ -5504,6 +5608,14 @@ function readEmail(text, subject) {
       if (d && !s.irbExpiry) changes.push(proposal("irbExpiry", "IRB expiry", d, true, "stated in the email"));
       else if (d && s.irbExpiry !== d) changes.push(proposal("irbExpiry", "IRB expiry", d, false, "the email says " + d + ", the study says " + s.irbExpiry));
     }
+  }
+  // The note is a fallback, not a default. When the email says something the tracker understands —
+  // a decision, a submission, a conference outcome — that structured record IS the update, and a
+  // note repeating it in prose is noise on the study.
+  if (hit && !changes.length) {
+    const note = noteFromEmail(subject, text);
+    if (note) changes.push(proposal("addNote", "Note on the study", note, true,
+      "nothing in it maps to a field, so it's kept as a note"));
   }
   return { study: hit ? hit.study : null, basis: hit ? hit.basis : "", changes };
 }
@@ -5612,24 +5724,38 @@ function ingestTranscript(raw, label) {
   return { made, mentioned: transcriptSegments(clean.text).length, redacted: clean.redacted };
 }
 
-// ---------- The queue ----------
-function upsertSuggestion(g) {
-  state.suggestions = state.suggestions || [];
-  const i = state.suggestions.findIndex(x => x.id === g.id);
-  if (i >= 0) state.suggestions[i] = g; else state.suggestions.push(g);
-  saveLocal(); pushItem("suggestion", g);
-}
-function pendingSuggestions() {
-  return (state.suggestions || []).filter(g => g.status === "pending")
-    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-}
 // Writes one proposed change onto its study. Returns a description of what it did, for the record.
-function applyChange(s, c) {
+// `env` supplies the two things that differ between the app and the server — how an id is minted
+// and what today is — so the rule itself can live in the shared block and never drift.
+function applyChangeTo(s, c, env) {
+  const newId = env.uid;
+  const todayStr = env.today;
+  // An abstract submission: update the entry for that meeting if there is one, otherwise add it.
+  // Matched on the meeting name, since that is what identifies a submission.
+  if (c.field === "abstractSubmission") {
+    const [meeting, status, format] = String(c.to || "").split("|");
+    if (!Array.isArray(s.abstracts)) s.abstracts = [];
+    const key = (v) => String(v || "").toLowerCase().replace(/\s+/g, " ").trim();
+    const existing = s.abstracts.find(a => key(a.meeting) === key(meeting));
+    const before = existing ? (existing.status + (existing.format ? " — " + existing.format : "")) : "";
+    if (existing) { existing.status = status; if (format) existing.format = format; }
+    else s.abstracts.push({ id: newId(), meeting, date: todayStr(), status, format: format || "" });
+    return { field: c.field, label: c.label, from: before, to: status + (format ? " — " + format : "") };
+  }
+  // Grant fields live on a nested object, and recording one implies the study has a grant at all.
+  if (c.field.startsWith("grant")) {
+    if (!s.grant || typeof s.grant !== "object") s.grant = {};
+    const key = c.field.slice(5, 6).toLowerCase() + c.field.slice(6);
+    const was = s.grant[key] || "";
+    s.grant[key] = c.to;
+    s.grant.enabled = true;
+    return { field: c.field, label: c.label, from: was, to: c.to };
+  }
   // A note is appended, never assigned — a study's notes are a log, and overwriting one would lose
   // whatever somebody wrote there before.
   if (c.field === "addNote") {
     if (!Array.isArray(s.noteEntries)) s.noteEntries = [];
-    s.noteEntries.push({ id: uid(), text: c.to, date: todayStr(), archivedOn: "" });
+    s.noteEntries.push({ id: newId(), text: c.to, date: todayStr(), archivedOn: "" });
     return { field: c.field, label: c.label, from: "", to: "added to Notes" };
   }
   // Moving to a new journal isn't one field — it's the same bookkeeping the "File this away &
@@ -5643,7 +5769,7 @@ function applyChange(s, c) {
     if (was || s.submittedDate || s.decision) {
       if (!Array.isArray(s.priorSubmissions)) s.priorSubmissions = [];
       s.priorSubmissions.push({
-        id: uid(), journal: was, submittedDate: s.submittedDate || "",
+        id: newId(), journal: was, submittedDate: s.submittedDate || "",
         trackingId: s.journalTrackingId || "", decision: s.decision || "", decisionDate: s.decisionDate || ""
       });
     }
@@ -5664,6 +5790,20 @@ function applyChange(s, c) {
   if (c.field === "decision" && c.to && c.to !== "Awaiting decision" && !s.decisionDate) s.decisionDate = todayStr();
   return { field: c.field, label: c.label, from: before || "", to: c.to };
 }
+
+// ---------- The queue ----------
+function upsertSuggestion(g) {
+  state.suggestions = state.suggestions || [];
+  const i = state.suggestions.findIndex(x => x.id === g.id);
+  if (i >= 0) state.suggestions[i] = g; else state.suggestions.push(g);
+  saveLocal(); pushItem("suggestion", g);
+}
+function pendingSuggestions() {
+  return (state.suggestions || []).filter(g => g.status === "pending")
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+}
+// Writes one proposed change onto its study. Returns a description of what it did, for the record.
+function applyChange(s, c) { return applyChangeTo(s, c, { uid: uid, today: todayStr }); }
 // Takes an email, files it, and applies only what is safe. Everything else waits.
 // Who sent this, if we recognise them. Matched against profile sign-in and alert addresses, which
 // is the whole security boundary for the forwarding address: anyone can send mail to a Gmail
