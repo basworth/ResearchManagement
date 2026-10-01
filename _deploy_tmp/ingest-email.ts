@@ -31,6 +31,16 @@ const SMTP_PASSWORD = Deno.env.get("SMTP_PASSWORD") ?? "";
 const SMTP_HOST = Deno.env.get("SMTP_HOST") ?? "smtp.gmail.com";
 const SMTP_PORT = Number(Deno.env.get("SMTP_PORT") ?? "465");
 const FROM_NAME = Deno.env.get("REMINDER_FROM_NAME") ?? "MOR Research Tracker";
+// Shared mailboxes a whole team forwards from. These belong to no one profile, so without this a
+// forward from the group address would be treated as a stranger and change nothing. Comma-separated
+// in SHARED_INBOXES so more can be added without a deploy.
+const SHARED_INBOXES = (Deno.env.get("SHARED_INBOXES") ?? "cartilage.restoration@rushortho.com")
+  .split(",").map((a) => a.trim().toLowerCase()).filter(Boolean);
+function sharedInboxName(addr: string): string {
+  if (SHARED_INBOXES.indexOf(addr) < 0) return "";
+  const local = addr.split("@")[0].replace(/[._-]+/g, " ").trim();
+  return local.replace(/\b\w/g, (c) => c.toUpperCase()) + " (shared)";
+}
 
 // Telling the forwarder what happened to their email. Without it, forwarding feels like shouting
 // into a void and people stop doing it — which is the failure mode that kills this whole feature.
@@ -70,6 +80,10 @@ async function notifyForwarder(to: string, name: string, subject: string, matche
     <p style="margin:20px 0 0 0"><a href="${esc(link)}" style="background:#0a84ff;color:#fff;text-decoration:none;font-weight:600;font-size:14.5px;padding:10px 18px;border-radius:9px;display:inline-block">${waiting.length ? "Review it" : "Open the tracker"}</a></p>
     <p style="font-size:11.5px;color:#8e8e93;line-height:1.45;margin-top:20px">You're getting this because you forwarded an email to the tracker.</p>
   </div>`;
+  // Collapsed to a single line with no runs of spaces. Indented HTML leaves lines ending in a
+  // space, which quoted-printable encodes as "=20" — and a mail client that doesn't decode it
+  // renders a literal "=20" in the middle of the message. That showed up in the first real one.
+  const wire = html.replace(/\s*\n\s*/g, "").replace(/ {2,}/g, " ");
   const smtp = new SMTPClient({
     connection: { hostname: SMTP_HOST, port: SMTP_PORT, tls: true, auth: { username: SMTP_USER, password: SMTP_PASSWORD } },
   });
@@ -77,7 +91,7 @@ async function notifyForwarder(to: string, name: string, subject: string, matche
     await smtp.send({
       from: `${FROM_NAME} <${SMTP_USER}>`, to,
       subject: matched ? `Read: ${matched}` : "Read your forwarded email",
-      html, content: html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
+      html: wire, content: wire.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
     } as any);
   } finally {
     try { await smtp.close(); } catch { /* already closed */ }
@@ -141,6 +155,13 @@ Deno.serve(async (req) => {
       }
     }
 
+    if (!sender) {
+      const groupName = sharedInboxName(from);
+      // Replying to the group is the point: the person who forwarded it is reading that mailbox,
+      // and a reply to an individual would reach the wrong one of them — or nobody.
+      if (groupName) sender = { id: "", name: groupName, notify: from };
+    }
+
     const clean = stripPHIRules(raw);
     const id = crypto.randomUUID();
     const nowIso = new Date().toISOString();
@@ -160,6 +181,13 @@ Deno.serve(async (req) => {
       const target = studies.find((s: any) => s.id === read.study.id);
       if (target) {
         read.changes.filter((c: any) => c.safe).forEach((c: any) => {
+          if (c.field === "addNote") {
+            // Appended, never assigned — a study's notes are a log.
+            if (!Array.isArray(target.noteEntries)) target.noteEntries = [];
+            target.noteEntries.push({ id: crypto.randomUUID(), text: c.to, date: new Date().toISOString().slice(0, 10), archivedOn: "" });
+            applied.push({ field: c.field, label: c.label, from: "", to: "added to Notes" });
+            return;
+          }
           const before = target[c.field];
           target[c.field] = c.to;
           if (c.field === "decision" && c.to && c.to !== "Awaiting decision" && !target.decisionDate) {

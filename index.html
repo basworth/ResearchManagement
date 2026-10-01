@@ -4343,19 +4343,16 @@ function renderStudyDetail() {
     ${s.phase === "Submitted" ? `<div style="font-size:12px;color:var(--orange);line-height:1.4;margin-top:10px">⚠︎ Make sure the Title above matches the manuscript title exactly as submitted to the journal.</div>` : ""}
   </div>
   ${(() => {
-    // Proposals live in Settings, but nobody goes looking in Settings for news about a study they
-    // happen to have open. So the study says so itself, and links straight there.
+    // The whole review, here, not a signpost to Settings. Settings is where you go to change a
+    // setting; news about a study belongs on the study, and anything that makes you navigate to
+    // act on it is something you'll put off.
     const waiting = pendingSuggestions().filter(g => g.studyId === s.id && (g.changes || []).length);
     if (!waiting.length) return "";
     const n = waiting.reduce((t, g) => t + g.changes.length, 0);
-    return `<div class="card" style="border-left:3px solid var(--blue)">
-      <div style="font-size:14.5px;line-height:1.5">
-        <b>${n} suggested update${n === 1 ? "" : "s"}</b> for this study, from
-        ${waiting.length === 1 ? esc(waiting[0].source === "transcript" ? "a meeting transcript" : waiting[0].source === "email" ? "a forwarded email" : "a pasted email") : esc(waiting.length + " messages")}.
-        Nothing has been changed.
+    return `<div style="font-size:11px;font-weight:700;color:var(--blue);letter-spacing:.4px;margin:14px 2px 6px 2px">
+        ${n} SUGGESTED UPDATE${n === 1 ? "" : "S"} — NOTHING CHANGED YET
       </div>
-      <button class="btn" id="sugg-goto" style="margin-top:10px">Review ${n === 1 ? "it" : "them"}</button>
-    </div>`;
+      ${waiting.map(suggestionCardHTML).join("")}`;
   })()}
   ${(pendingPhaseOffer && pendingPhaseOffer.studyId === s.id) ? `
   <div class="card" style="border-left:3px solid var(--orange)">
@@ -4510,8 +4507,8 @@ function renderStudyDetail() {
   document.getElementById("back-btn").onclick = () => { detailStudyId = null; render(); };
   document.getElementById("edit-study-btn").onclick = () => openStudyForm(s);
   document.getElementById("ask-update-btn").onclick = () => openUpdateRequestSheet(s.id);
-  const suggGoto = document.getElementById("sugg-goto");
-  if (suggGoto) suggGoto.onclick = () => { tab = "settings"; render(); toast("Suggested Updates is below Account"); };
+  // The same cards as in Settings, so the same handlers drive them.
+  bindSuggestions($main);
   const offerYes = document.getElementById("phase-offer-yes");
   if (offerYes) offerYes.onclick = () => {
     const to = pendingPhaseOffer.suggested;
@@ -5141,7 +5138,7 @@ function bindFilterSetsBar(tab, setActive) {
 // so improving the parser re-reads everything it looked at before and got nothing from — otherwise
 // a message read by an older, dumber version stays permanently misjudged, which is exactly what
 // happened to the first Arthroscopy confirmation.
-const PARSER_VERSION = 2;
+const PARSER_VERSION = 3;
 
 // ---------- Protected health information ----------
 // The tracker is deliberately study-level and holds no PHI. A forwarded email might, so it is
@@ -5276,6 +5273,50 @@ function parseLooseDate(str) {
   if (m) return `${m[3]}-${String(+m[1]).padStart(2, "0")}-${String(+m[2]).padStart(2, "0")}`;
   return "";
 }
+// ---------- Turning a forwarded email into a note ----------
+// Most study email isn't a journal decision. It's a coordinator's update, a quote, a scheduling
+// note — information worth keeping that fits no field. Those used to produce nothing but a queue
+// entry, and somebody retyped the useful sentence as a note by hand, which is the retyping this
+// was supposed to end.
+//
+// So a matched email becomes a note. The hard part isn't the note, it's the trimming: forwarded
+// mail carries a security banner, a signature, a confidentiality footer and the whole quoted
+// thread, and a note made of that is worse than no note.
+const NOISE_LINE = [
+  /^\s*(MOR|Rush) Email Security/i,
+  /^\s*This email (originated|alert was generated)/i,
+  /^\s*(External Email|EXTERNAL SENDER)/i,
+  /\bdo not click links or attachments\b/i,
+  /\bwill never ask for user ID\b/i,
+  /^\s*(Sent from my|Get Outlook for)/i,
+  /^\s*(CONFIDENTIALITY|This (e-?mail|message) (and any|is intended))/i,
+  /^\s*(From|To|Cc|Bcc|Date|Sent|Subject|Reply-To):/i,
+  /^\s*[-_=]{3,}\s*$/,
+  /^\s*>/                                      // the quoted thread underneath a reply
+];
+// A signature starts here and everything after it is noise.
+const SIG_START = /^\s*(--\s*$|Thanks[,!]?\s*$|Thank you[,!]?\s*$|Best[,.]?\s*$|Best regards|Kind regards|Regards[,.]?\s*$|Sincerely)/i;
+function cleanForwardedBody(raw) {
+  const out = [];
+  for (const line of String(raw || "").replace(/\r/g, "").split("\n")) {
+    if (SIG_START.test(line)) break;
+    if (NOISE_LINE.some(re => re.test(line))) continue;
+    out.push(line);
+  }
+  // Collapse the blank runs left behind by all that removal.
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+// The note itself: the subject as a headline, then as much of the trimmed body as is useful.
+// Capped, because a note nobody can read at a glance defeats the point of notes.
+const NOTE_MAX = 700;
+function noteFromEmail(subject, body) {
+  const clean = cleanForwardedBody(body);
+  if (!clean) return "";
+  const head = String(subject || "").replace(/^\s*(FW|FWD|RE):\s*/i, "").trim();
+  let text = clean.length > NOTE_MAX ? clean.slice(0, NOTE_MAX).replace(/\s+\S*$/, "") + "…" : clean;
+  return (head ? head + "\n" : "") + text;
+}
+
 // A proposed change. `safe` decides whether it can apply itself: true only for additions that
 // destroy nothing. Anything replacing an existing value is never safe, whatever the field.
 function proposal(field, label, to, safe, why) {
@@ -5338,6 +5379,10 @@ function readEmail(text, subject) {
         if (!s.decision) changes.push(proposal("decision", "Journal decision", "Awaiting decision", true, "it's just been submitted"));
       }
     }
+
+    // Always offered when an email matches, whatever else is in it: the text is the point.
+    const note = noteFromEmail(subject, text);
+    if (note) changes.push(proposal("addNote", "Note on the study", note, true, "the email, trimmed of signatures and quoted replies"));
 
     const dec = DECISION_PATTERNS.find(p => p.re.test(body));
     if (dec && s.decision !== dec.decision) {
@@ -5481,6 +5526,13 @@ function pendingSuggestions() {
 }
 // Writes one proposed change onto its study. Returns a description of what it did, for the record.
 function applyChange(s, c) {
+  // A note is appended, never assigned — a study's notes are a log, and overwriting one would lose
+  // whatever somebody wrote there before.
+  if (c.field === "addNote") {
+    if (!Array.isArray(s.noteEntries)) s.noteEntries = [];
+    s.noteEntries.push({ id: uid(), text: c.to, date: todayStr(), archivedOn: "" });
+    return { field: c.field, label: c.label, from: "", to: "added to Notes" };
+  }
   // Moving to a new journal isn't one field — it's the same bookkeeping the "File this away &
   // submit elsewhere" button does: the finished round goes into Previous Submissions, untouched,
   // and the live fields start again. Nothing is discarded.

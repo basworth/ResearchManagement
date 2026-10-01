@@ -17,7 +17,7 @@ export function setStudies(list: any[]) { STUDIES = list || []; }
 // so improving the parser re-reads everything it looked at before and got nothing from — otherwise
 // a message read by an older, dumber version stays permanently misjudged, which is exactly what
 // happened to the first Arthroscopy confirmation.
-export const PARSER_VERSION = 2;
+export const PARSER_VERSION = 3;
 
 // ---------- Protected health information ----------
 // The tracker is deliberately study-level and holds no PHI. A forwarded email might, so it is
@@ -152,6 +152,50 @@ function parseLooseDate(str) {
   if (m) return `${m[3]}-${String(+m[1]).padStart(2, "0")}-${String(+m[2]).padStart(2, "0")}`;
   return "";
 }
+// ---------- Turning a forwarded email into a note ----------
+// Most study email isn't a journal decision. It's a coordinator's update, a quote, a scheduling
+// note — information worth keeping that fits no field. Those used to produce nothing but a queue
+// entry, and somebody retyped the useful sentence as a note by hand, which is the retyping this
+// was supposed to end.
+//
+// So a matched email becomes a note. The hard part isn't the note, it's the trimming: forwarded
+// mail carries a security banner, a signature, a confidentiality footer and the whole quoted
+// thread, and a note made of that is worse than no note.
+const NOISE_LINE = [
+  /^\s*(MOR|Rush) Email Security/i,
+  /^\s*This email (originated|alert was generated)/i,
+  /^\s*(External Email|EXTERNAL SENDER)/i,
+  /\bdo not click links or attachments\b/i,
+  /\bwill never ask for user ID\b/i,
+  /^\s*(Sent from my|Get Outlook for)/i,
+  /^\s*(CONFIDENTIALITY|This (e-?mail|message) (and any|is intended))/i,
+  /^\s*(From|To|Cc|Bcc|Date|Sent|Subject|Reply-To):/i,
+  /^\s*[-_=]{3,}\s*$/,
+  /^\s*>/                                      // the quoted thread underneath a reply
+];
+// A signature starts here and everything after it is noise.
+const SIG_START = /^\s*(--\s*$|Thanks[,!]?\s*$|Thank you[,!]?\s*$|Best[,.]?\s*$|Best regards|Kind regards|Regards[,.]?\s*$|Sincerely)/i;
+function cleanForwardedBody(raw) {
+  const out = [];
+  for (const line of String(raw || "").replace(/\r/g, "").split("\n")) {
+    if (SIG_START.test(line)) break;
+    if (NOISE_LINE.some(re => re.test(line))) continue;
+    out.push(line);
+  }
+  // Collapse the blank runs left behind by all that removal.
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+// The note itself: the subject as a headline, then as much of the trimmed body as is useful.
+// Capped, because a note nobody can read at a glance defeats the point of notes.
+const NOTE_MAX = 700;
+function noteFromEmail(subject, body) {
+  const clean = cleanForwardedBody(body);
+  if (!clean) return "";
+  const head = String(subject || "").replace(/^\s*(FW|FWD|RE):\s*/i, "").trim();
+  let text = clean.length > NOTE_MAX ? clean.slice(0, NOTE_MAX).replace(/\s+\S*$/, "") + "…" : clean;
+  return (head ? head + "\n" : "") + text;
+}
+
 // A proposed change. `safe` decides whether it can apply itself: true only for additions that
 // destroy nothing. Anything replacing an existing value is never safe, whatever the field.
 function proposal(field, label, to, safe, why) {
@@ -214,6 +258,10 @@ export function readEmail(text, subject) {
         if (!s.decision) changes.push(proposal("decision", "Journal decision", "Awaiting decision", true, "it's just been submitted"));
       }
     }
+
+    // Always offered when an email matches, whatever else is in it: the text is the point.
+    const note = noteFromEmail(subject, text);
+    if (note) changes.push(proposal("addNote", "Note on the study", note, true, "the email, trimmed of signatures and quoted replies"));
 
     const dec = DECISION_PATTERNS.find(p => p.re.test(body));
     if (dec && s.decision !== dec.decision) {
