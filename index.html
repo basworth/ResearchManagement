@@ -1462,6 +1462,19 @@ function blockOfflineEdit(what) {
 // pullAll() and by the realtime subscription. Used to detect "someone else changed this
 // since you opened it" before an edit is saved over the top of it.
 let remoteMeta = {};
+// What the server's copy of each row looked like the last time we saw it, keyed by row id.
+//
+// This is the whole basis of the field-level merge in pushItem(). Without it, every save writes
+// the record as this tab happens to hold it, and any field this tab is behind on is silently
+// reverted — which is how three ICRS deadline tags disappeared on 7 Oct 2026. With it, a save can
+// work out which fields THIS person actually changed, and leave every other field alone.
+//
+// Deep-copied on the way in. Holding a reference to the same object the app renders from would
+// make the baseline change as the user types, and then nothing would ever look edited.
+let remoteBaseline = {};
+function setBaseline(rowId, data) {
+  try { remoteBaseline[rowId] = JSON.parse(JSON.stringify(data)); } catch (e) { delete remoteBaseline[rowId]; }
+}
 // { kind, id, baseline } for whichever record is currently open in an edit sheet, so we can
 // warn instead of silently clobbering a concurrent edit. Cleared whenever the sheet closes.
 let editingRef = null;
@@ -1916,22 +1929,73 @@ async function pullAll() {
     if (meta && meta.data.nameAliases && typeof meta.data.nameAliases === "object") state.nameAliases = meta.data.nameAliases;
     // Team-wide, so a stage one person removed doesn't come back for everyone else.
     if (meta && Array.isArray(meta.data.stageAdds)) state.stageAdds = meta.data.stageAdds;
-    data.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; });
+    data.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; setBaseline(r.id, r.data); });
     migrate();
     saveLocal();
     render();
   }
 }
 function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null, nameAliases: state.nameAliases || {}, stageAdds: state.stageAdds || [] }); }
+// The fields this person actually changed: every top-level key where our copy differs from the
+// server copy we started from. Keys the baseline had and we no longer do count as changes too,
+// or deleting a field could never be saved.
+function changedFields(obj, baseline) {
+  const keys = new Set(Object.keys(obj || {}).concat(Object.keys(baseline || {})));
+  const out = [];
+  keys.forEach(k => {
+    if (JSON.stringify(obj ? obj[k] : undefined) !== JSON.stringify(baseline ? baseline[k] : undefined)) out.push(k);
+  });
+  return out;
+}
+// Re-read the row and lay only our own changed fields over it, so a save carries what this person
+// edited and nothing else. Granularity is the top-level field: if two people edit the same field
+// (both adding a note, say) the later save still wins that field — but they no longer flatten
+// each other's unrelated work, which is the failure that actually kept happening.
+//
+// Returns the object to write, or null to write `obj` unchanged (new row, no baseline, or the
+// server copy is exactly what we started from).
+async function mergeWithServer(kind, rowId, obj) {
+  const baseline = remoteBaseline[rowId];
+  if (!baseline) return null;                       // never seen the server's copy — nothing to merge against
+  const { data, error } = await sb.from("items").select("data").eq("id", rowId).maybeSingle();
+  if (error || !data || !data.data) return null;    // row is gone or unreadable: fall back to a plain write
+  const server = data.data;
+  if (JSON.stringify(server) === JSON.stringify(baseline)) return null;   // nobody moved; fast path
+  const mine = changedFields(obj, baseline);
+  const merged = JSON.parse(JSON.stringify(server));
+  mine.forEach(k => {
+    if (obj[k] === undefined) delete merged[k]; else merged[k] = obj[k];
+  });
+  merged.id = obj.id;                               // identity is never negotiable
+  return merged;
+}
 // rowIdOverride exists for records whose natural key would collide with another kind's row —
 // see prefRowId(). Everything else stores itself under its own obj.id.
-async function pushItem(kind, obj, rowIdOverride) {
+//
+// `opts.merge === false` skips the merge for bulk pushes (import, seeding, pushing everything
+// after a name merge), where the local copy IS the intended answer and one read per row would
+// turn a single action into hundreds of round trips.
+async function pushItem(kind, obj, rowIdOverride, opts) {
   if (!sb) return;
   try {
     const updatedAt = new Date().toISOString();
     const rowId = rowIdOverride || obj.id;
-    const { error } = await sb.from("items").upsert({ id: rowId, kind, data: obj, updated_at: updatedAt });
+    let toWrite = obj;
+    if (!(opts && opts.merge === false) && kind !== "meta") {
+      try {
+        const merged = await mergeWithServer(kind, rowId, obj);
+        if (merged) {
+          toWrite = merged;
+          // Keep what the app is rendering in step with what we just wrote, or the next save
+          // would start from a copy that is already behind.
+          Object.keys(obj).forEach(k => { if (!(k in merged)) delete obj[k]; });
+          Object.assign(obj, merged);
+        }
+      } catch (e) { /* merge is best-effort; a plain write is still better than no write */ }
+    }
+    const { error } = await sb.from("items").upsert({ id: rowId, kind, data: toWrite, updated_at: updatedAt });
     if (error) throw error;
+    setBaseline(rowId, toWrite);
     // Advance our own baseline immediately so the save we just made isn't flagged as stale.
     remoteMeta[rowId] = { kind, updated_at: updatedAt };
     if (editingRef && editingRef.id === rowId) editingRef.baseline = updatedAt;
@@ -2018,6 +2082,7 @@ function unsubscribeRealtime() {
 function applyRealtimeRow(kind, id, data, updatedAt) {
   if (kind === "file") { remoteMeta[id] = { kind, updated_at: updatedAt }; return; }
   remoteMeta[id] = { kind, updated_at: updatedAt };
+  setBaseline(id, data);
   if (kind === "meta") {
     if (Array.isArray(data.names)) { state.roster = data.names; saveLocal(); render(); }
     return;
@@ -2047,6 +2112,7 @@ function applyRealtimeDelete(id) {
     if (state[key].length !== before && editingRef && editingRef.id === id) hitOpenRecord = true;
   });
   delete remoteMeta[id];
+  delete remoteBaseline[id];
   saveLocal();
   if (hitOpenRecord) { toast("This was deleted elsewhere"); closeSheet(); }
   render();
@@ -2399,11 +2465,13 @@ function mergeNames(fromRaw, toRaw) {
   if (hit(worklistPerson)) worklistPerson = to;
 
   saveLocal();
-  studies.forEach(s => pushItem("study", s));
-  tasks.forEach(t => pushItem("task", t));
-  profiles.forEach(p => pushItem("profile", p));
-  prefs.forEach(p => pushItem("userPref", p, prefRowId(p.id)));
-  sets.forEach(f => pushItem("filterSet", f));
+  // Bulk: one read per row would turn a single rename into hundreds of round trips, and the
+  // renamed copy is exactly what we mean to store.
+  studies.forEach(s => pushItem("study", s, null, { merge: false }));
+  tasks.forEach(t => pushItem("task", t, null, { merge: false }));
+  profiles.forEach(p => pushItem("profile", p, null, { merge: false }));
+  prefs.forEach(p => pushItem("userPref", p, prefRowId(p.id), { merge: false }));
+  sets.forEach(f => pushItem("filterSet", f, null, { merge: false }));
   pushRoster();
   render();
   return { studies: studies.length, tasks: tasks.length, profiles: profiles.length, views: sets.length };
@@ -7587,9 +7655,9 @@ function renderSettings() {
         }
         migrate(); saveLocal();
         Object.entries(files).forEach(([id, c]) => { try { localStorage.setItem("rt-file-" + id, c); } catch (e2) {} });
-        state.studies.forEach(s => pushItem("study", s));
-        state.tasks.forEach(t => pushItem("task", t));
-        state.meetings.forEach(m => pushItem("meeting", m));
+        state.studies.forEach(s => pushItem("study", s, null, { merge: false }));
+        state.tasks.forEach(t => pushItem("task", t, null, { merge: false }));
+        state.meetings.forEach(m => pushItem("meeting", m, null, { merge: false }));
         pushRoster();
         render(); toast(data.mergeMode === "add" ? "Studies imported" : "Data imported");
       } catch (err) { toast("Invalid import file"); }
@@ -8321,9 +8389,9 @@ function loadSample() {
     { id: uid(), title: "Order specimen shipping kits", studyId: s2.id, due: d(-10), assignees: ["Chen"], notes: "", done: true }
   );
   saveLocal();
-  state.studies.forEach(s => pushItem("study", s));
-  state.tasks.forEach(t => pushItem("task", t));
-  state.meetings.forEach(m => pushItem("meeting", m));
+  state.studies.forEach(s => pushItem("study", s, null, { merge: false }));
+  state.tasks.forEach(t => pushItem("task", t, null, { merge: false }));
+  state.meetings.forEach(m => pushItem("meeting", m, null, { merge: false }));
   render();
 }
 
