@@ -1462,6 +1462,11 @@ function blockOfflineEdit(what) {
 // pullAll() and by the realtime subscription. Used to detect "someone else changed this
 // since you opened it" before an edit is saved over the top of it.
 let remoteMeta = {};
+// Which lab this person belongs to. Every row carries a `workspace` stamp and the database
+// refuses to hand over another lab's rows, so this is not a display filter — it is the thing the
+// server checks. Read from the signed-in user's own profile row on each pull; the default is the
+// original lab, which is also what the database assumes when it can't tell.
+let myWorkspace = "sports-yanke";
 // What the server's copy of each row looked like the last time we saw it, keyed by row id.
 //
 // This is the whole basis of the field-level merge in pushItem(). Without it, every save writes
@@ -1908,7 +1913,7 @@ function maybePromptDisplayName() {
 }
 async function pullAll() {
   if (!sb) return;
-  const { data, error } = await sb.from("items").select("id, kind, data, updated_at").neq("kind", "file");
+  const { data, error } = await sb.from("items").select("id, kind, data, updated_at, workspace").neq("kind", "file");
   if (error) throw error;
   if (data) {
     state.studies = data.filter(r => r.kind === "study").map(r => r.data);
@@ -1930,6 +1935,12 @@ async function pullAll() {
     // Team-wide, so a stage one person removed doesn't come back for everyone else.
     if (meta && Array.isArray(meta.data.stageAdds)) state.stageAdds = meta.data.stageAdds;
     data.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; setBaseline(r.id, r.data); });
+    // My own profile row says which lab I'm in. Taken from the row's column, not from `data`,
+    // because the stamp is what the database's own rules read.
+    if (currentUser) {
+      const mine = data.find(r => r.kind === "profile" && r.id === currentUser.id);
+      if (mine && mine.workspace) myWorkspace = mine.workspace;
+    }
     migrate();
     saveLocal();
     render();
@@ -1993,7 +2004,9 @@ async function pushItem(kind, obj, rowIdOverride, opts) {
         }
       } catch (e) { /* merge is best-effort; a plain write is still better than no write */ }
     }
-    const { error } = await sb.from("items").upsert({ id: rowId, kind, data: toWrite, updated_at: updatedAt });
+    // The stamp goes on every write. Without it the database rejects the row outright — which is
+    // the point: a save can only ever land in the saver's own lab.
+    const { error } = await sb.from("items").upsert({ id: rowId, kind, data: toWrite, updated_at: updatedAt, workspace: myWorkspace });
     if (error) throw error;
     setBaseline(rowId, toWrite);
     // Advance our own baseline immediately so the save we just made isn't flagged as stale.
