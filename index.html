@@ -1241,7 +1241,7 @@ function dedupeMeetingsByKey() {
   });
   if (removedIds.length) {
     state.meetings = state.meetings.filter(m => !removedIds.includes(m.id));
-    keepers.forEach(m => pushItem("meeting", m));
+    keepers.forEach(m => pushMeeting(m, false));
     touchedTasks.forEach(t => pushItem("task", t));
     removedIds.forEach(deleteRemote);
   }
@@ -1390,6 +1390,7 @@ function migrate() {
     if (m.loiDeadline == null) m.loiDeadline = "";
   });
   dedupeMeetingsByKey();
+  healMeetingLinksFromTasks();
   // Migrate single-assignee tasks (older "assignee" string) to the new multi-person "assignees" array.
   state.tasks.forEach(t => {
     if (!Array.isArray(t.assignees)) t.assignees = t.assignee ? [t.assignee] : [];
@@ -2122,7 +2123,7 @@ function upsertMeeting(m) {
   if (blockOfflineEdit("Saving this deadline")) return;
   const i = state.meetings.findIndex(x => x.id === m.id);
   if (i >= 0) state.meetings[i] = m; else state.meetings.push(m);
-  saveLocal(); pushItem("meeting", m); render();
+  saveLocal(); pushMeeting(m, false); render();
 }
 function removeMeeting(id) {
   if (blockOfflineEdit("Deleting a deadline")) return;
@@ -2166,6 +2167,53 @@ function syncSubmissionTask(m, studyId, linked) {
     deleteRemote(existing.id);
   }
 }
+// Pushing a meeting used to write the whole record, studyIds and all. That is a last-write-wins
+// overwrite: any client holding a stale copy of the meeting — an open tab that never saw the link,
+// a device that applied a deadline refresh — would push its own empty studyIds straight over
+// somebody's tagging. That is exactly how three studies tagged for the ICRS congress on 7 Oct
+// vanished 34 minutes later.
+//
+// So only the two paths that are *about* linking may shrink the list. Every other write (deadline
+// refresh, dedupe, editing a meeting's dates) re-reads the row first and unions the links it finds
+// there, so a stale client can add but never subtract.
+async function pushMeeting(m, authoritativeLinks) {
+  if (sb && !authoritativeLinks) {
+    try {
+      const { data, error } = await sb.from("items").select("data").eq("id", m.id).maybeSingle();
+      if (!error && data && data.data && Array.isArray(data.data.studyIds)) {
+        const union = new Set(m.studyIds || []);
+        data.data.studyIds.forEach(id => union.add(id));
+        m.studyIds = [...union];
+      }
+    } catch (e) { /* offline: push what we have, the self-heal below catches it next load */ }
+  }
+  return pushItem("meeting", m);
+}
+// Links live in two places: meeting.studyIds, and the "Submit abstract:" task that linking creates
+// (unlinking deletes that task, so the tasks are a faithful record of what is meant to be linked).
+// Rebuilding one from the other is therefore safe, additive, and idempotent — and it recovers any
+// link an older build already lost. Never removes a link: a missing task is not evidence of intent.
+function healMeetingLinksFromTasks() {
+  const byId = {};
+  state.meetings.forEach(m => { byId[m.id] = m; });
+  const fixed = [];
+  (state.tasks || []).forEach(t => {
+    if (!t.linkedMeetingId || !t.studyId) return;
+    const m = byId[t.linkedMeetingId];
+    if (!m) return;
+    if (!Array.isArray(m.studyIds)) m.studyIds = [];
+    if (!m.studyIds.includes(t.studyId) && state.studies.some(s => s.id === t.studyId)) {
+      m.studyIds.push(t.studyId);
+      if (!fixed.includes(m)) fixed.push(m);
+    }
+  });
+  if (fixed.length) {
+    saveLocal();
+    fixed.forEach(m => pushItem("meeting", m));
+    toast(`Restored ${fixed.length === 1 ? "a deadline link" : fixed.length + " deadline links"} from their submission tasks`);
+  }
+  return fixed.length;
+}
 function toggleStudyLink(meetingId, studyId) {
   if (blockOfflineEdit("Linking a deadline")) return;
   const m = state.meetings.find(x => x.id === meetingId);
@@ -2175,7 +2223,7 @@ function toggleStudyLink(meetingId, studyId) {
   const linking = i < 0;
   if (linking) m.studyIds.push(studyId); else m.studyIds.splice(i, 1);
   syncSubmissionTask(m, studyId, linking);
-  saveLocal(); pushItem("meeting", m); render();
+  saveLocal(); pushMeeting(m, true); render();
 }
 function meetingsForStudy(studyId) {
   return state.meetings.filter(m => (m.studyIds || []).includes(studyId));
@@ -3078,7 +3126,7 @@ function openLinkSheet(meetingId, preselectIds) {
       if (wasLinked !== nowLinked) syncSubmissionTask(m, s.id, nowLinked);
     });
     m.studyIds = checked;
-    saveLocal(); pushItem("meeting", m); render();
+    saveLocal(); pushMeeting(m, true); render();
     toast("Projects linked");
   });
   bindSheetSearch("link-study-search", "#link-study-list .link-row", "link-study-empty");
@@ -3113,7 +3161,7 @@ function openStudyLinkSheet(studyId) {
       if (checkedIds.has(m.id) && !has) { m.studyIds.push(studyId); syncSubmissionTask(m, studyId, true); changed.push(m); }
       else if (!checkedIds.has(m.id) && has) { m.studyIds = m.studyIds.filter(x => x !== studyId); syncSubmissionTask(m, studyId, false); changed.push(m); }
     });
-    saveLocal(); changed.forEach(m => pushItem("meeting", m)); render();
+    saveLocal(); changed.forEach(m => pushMeeting(m, true)); render();
     toast("Deadlines linked");
   });
   bindSheetSearch("link-mtg-search", "#link-mtg-list .link-row", "link-mtg-empty");
@@ -8363,7 +8411,7 @@ function applyFeedEntries(entries, fromNetwork) {
       changed.push(m);
     }
   });
-  if (changed.length) { saveLocal(); changed.forEach(m => pushItem("meeting", m)); render(); }
+  if (changed.length) { saveLocal(); changed.forEach(m => pushMeeting(m, false)); render(); }
   return changed.length;
 }
 
