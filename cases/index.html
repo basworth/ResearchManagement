@@ -1,0 +1,1518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="MOR Cases">
+<title>MOR Teaching Cases</title>
+<style>
+  :root {
+    --bg: #f4f6f6;
+    --card: #ffffff;
+    --card2: #f9fafa;
+    --text: #1d1d1d;
+    --text2: #5f6466;
+    --line: #e3e6e8;
+    --accent: #0f7a68;          /* MOR teal, darkened for AA text contrast */
+    --accent-fill: #28bfa1;     /* MOR brand teal, fills only */
+    --accent-soft: #e3f6f1;
+    --warn: #b25e00;
+    --warn-soft: #fff4e5;
+    --danger: #c0392b;
+    --radius: 14px;
+    --shadow: 0 1px 2px rgba(0,0,0,.05), 0 2px 10px rgba(0,0,0,.04);
+    /* Timeline event colors — validated categorical order (light surface) */
+    --ev-visit: #2a78d6; --ev-surgery: #eb6834; --ev-injection: #1baf7a; --ev-outcome: #eda100;
+    --ev-complication: #e87ba4; --ev-rehab: #008300; --ev-imaging: #6250d6; --ev-other: #8a8f91;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161717; --card: #222424; --card2: #1b1c1c; --text: #f2f2f2; --text2: #a3a8aa;
+      --line: #34373a; --accent: #3fd1b1; --accent-soft: #163a33; --warn: #ffb35c; --warn-soft: #3a2a14;
+      --danger: #ff7a6b; --shadow: none;
+      --ev-visit: #3987e5; --ev-surgery: #d95926; --ev-injection: #199e70; --ev-outcome: #c98500;
+      --ev-complication: #d55181; --ev-rehab: #008300; --ev-imaging: #9085e9; --ev-other: #8a8f91;
+    }
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { min-height: 100%; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--text); font-size: 14.5px; line-height: 1.45; }
+  a { color: var(--accent); }
+  button { font: inherit; color: inherit; }
+  input, select, textarea { font: inherit; color: var(--text); background: var(--card); border: 1px solid var(--line);
+         border-radius: 9px; padding: 8px 10px; width: 100%; outline: none; }
+  input:focus, select:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  textarea { resize: vertical; min-height: 70px; line-height: 1.45; }
+  label.f { display: block; font-size: 12px; font-weight: 650; color: var(--text2); margin: 10px 0 4px; }
+  .hint { font-size: 12.5px; color: var(--text2); }
+  .btn { border: none; background: var(--accent); color: #fff; font-weight: 650; border-radius: 10px;
+         padding: 9px 16px; cursor: pointer; white-space: nowrap; }
+  @media (prefers-color-scheme: dark) { .btn { color: #0b1a17; } }
+  .btn.secondary { background: var(--card); color: var(--text); border: 1px solid var(--line); }
+  .btn.ghost { background: none; color: var(--accent); padding: 6px 8px; }
+  .btn.small { padding: 5px 10px; font-size: 13px; border-radius: 8px; }
+  .btn:disabled { opacity: .5; cursor: default; }
+  .hidden { display: none !important; }
+
+  /* ---- shell ---- */
+  .topbar { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--bg) 88%, transparent);
+            backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); border-bottom: 1px solid var(--line);
+            padding: calc(env(safe-area-inset-top) + 10px) 20px 0; }
+  .topbar-row { max-width: 1240px; margin: 0 auto; display: flex; align-items: center; gap: 12px; }
+  .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .badge-logo { width: 30px; height: 30px; border-radius: 50%; background: var(--accent-fill); display: grid; place-items: center; flex: none; }
+  .brand-name { font-weight: 750; font-size: 16px; }
+  .brand-sub { font-size: 11.5px; color: var(--text2); }
+  .spacer { flex: 1; }
+  .tabs { max-width: 1240px; margin: 8px auto 0; display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
+  .tab { border: none; background: none; padding: 9px 12px 10px; font-weight: 650; color: var(--text2); cursor: pointer;
+         border-bottom: 2.5px solid transparent; white-space: nowrap; }
+  .tab.on { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab .count { font-size: 11px; background: var(--line); border-radius: 100px; padding: 1px 7px; margin-left: 4px; color: var(--text2); }
+  main { max-width: 1240px; margin: 0 auto; padding: 18px 20px 120px; }
+
+  .phi-banner { max-width: 1240px; margin: 0 auto; font-size: 12px; color: var(--text2); padding: 6px 20px 0; }
+  .phi-banner b { color: var(--text); }
+
+  /* ---- filters ---- */
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 16px; }
+  .filters input[type=search] { max-width: 260px; }
+  .filters select { width: auto; max-width: 200px; }
+  .chk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text2); cursor: pointer; }
+  .chk input { width: auto; }
+
+  /* ---- case grid ---- */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+  .ccard { background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow); border: 1px solid var(--line);
+           padding: 14px 15px 12px; cursor: pointer; display: flex; flex-direction: column; gap: 6px; transition: transform .12s; }
+  .ccard:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+  .ccard.archived { opacity: .6; }
+  .cno { font-size: 11.5px; font-weight: 750; color: var(--accent); letter-spacing: .4px; font-variant-numeric: tabular-nums; }
+  .ctitle { font-weight: 700; font-size: 15.5px; line-height: 1.3; }
+  .cmeta { font-size: 12.5px; color: var(--text2); }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chip { font-size: 11.5px; font-weight: 650; padding: 2px 8px; border-radius: 100px; background: var(--card2); border: 1px solid var(--line); color: var(--text2); }
+  .chip.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+  .stage { font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: .4px; }
+  .empty { text-align: center; color: var(--text2); padding: 60px 20px; }
+  .empty h3 { color: var(--text); margin-bottom: 6px; }
+
+  /* ---- detail ---- */
+  .crumb { margin-bottom: 10px; }
+  .dhead { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; margin-bottom: 14px; }
+  .dhead h1 { font-size: 23px; line-height: 1.25; }
+  .dcols { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+  @media (max-width: 880px) { .dcols { grid-template-columns: 1fr; } }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 16px; margin-bottom: 14px; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .5px; color: var(--text2); font-weight: 750; margin-bottom: 8px;
+              display: flex; align-items: center; gap: 8px; }
+  .panel h2 .spacer { flex: 1; }
+  .sec { border-top: 1px solid var(--line); padding: 12px 0; }
+  .sec:first-of-type { border-top: none; padding-top: 2px; }
+  .sec-label { font-size: 12px; font-weight: 750; color: var(--text2); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 5px; display: flex; gap: 8px; align-items: center; }
+  .sec-body { white-space: pre-wrap; }
+  .sec-body.placeholder { color: var(--text2); font-style: italic; }
+  .editable { cursor: text; border-radius: 8px; padding: 3px 6px; margin: -3px -6px; }
+  .editable:hover { background: var(--card2); }
+  .kv { display: grid; grid-template-columns: 120px 1fr; gap: 6px 10px; font-size: 13.5px; }
+  .kv dt { color: var(--text2); }
+  .wf-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--line); }
+  .wf-row:first-of-type { border-top: none; }
+  .wf-row .lbl { flex: 1; font-size: 13.5px; }
+  .wf-row select { width: auto; padding: 5px 8px; font-size: 13px; }
+  .toggle { width: 22px; height: 22px; border-radius: 6px; border: 2px solid var(--line); display: grid; place-items: center; cursor: pointer; background: var(--card); flex: none; }
+  .toggle.on { background: var(--accent-fill); border-color: var(--accent-fill); }
+  .folder-card { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 12px; background: var(--card2); border: 1px dashed var(--line); }
+  .folder-card .ico { font-size: 22px; }
+  .warnbox { background: var(--warn-soft); color: var(--warn); border-radius: 10px; padding: 9px 12px; font-size: 13px; margin-top: 8px; }
+  .warnbox b { color: inherit; }
+
+  /* ---- timeline ---- */
+  .tl-wrap { position: relative; width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tl-wrap .tl-svg { min-width: 760px; }
+  .tl-svg { width: 100%; display: block; overflow: visible; }
+  .tl-axis { stroke: var(--line); stroke-width: 2; }
+  .tl-tick { stroke: var(--line); stroke-width: 1; }
+  .tl-ticklbl { fill: var(--text2); font-size: 10.5px; }
+  .tl-zero { stroke: var(--text2); stroke-width: 1; stroke-dasharray: 3 3; }
+  .tl-mark { stroke: var(--card); stroke-width: 2; cursor: pointer; }
+  .tl-hit { fill: transparent; cursor: pointer; }
+  .tl-lbl { fill: var(--text); font-size: 11px; font-weight: 600; }
+  .tl-lbl2 { fill: var(--text2); font-size: 10.5px; }
+  .tl-lane-lbl { fill: var(--text); font-size: 12px; font-weight: 650; cursor: pointer; }
+  .tl-lane-sub { fill: var(--text2); font-size: 10.5px; }
+  .tl-lane-bg { fill: var(--card2); }
+  .tip { position: fixed; z-index: 90; pointer-events: none; background: var(--text); color: var(--bg); border-radius: 9px;
+         padding: 7px 10px; font-size: 12.5px; max-width: 280px; opacity: 0; transition: opacity .12s; }
+  .tip.show { opacity: 1; }
+  .tip b { display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--text2); margin-top: 6px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .ev-list { margin-top: 10px; border-top: 1px solid var(--line); }
+  .ev-row { display: grid; grid-template-columns: 92px 18px 1fr auto; gap: 8px; align-items: start; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
+  .ev-row .when { color: var(--text2); font-variant-numeric: tabular-nums; font-size: 12.5px; padding-top: 1px; }
+  .ev-row .what b { font-weight: 650; }
+  .ev-row .what .n { color: var(--text2); font-size: 12.5px; white-space: pre-wrap; }
+
+  /* ---- board ---- */
+  .board { display: grid; grid-template-columns: repeat(5, minmax(220px, 1fr)); gap: 12px; overflow-x: auto; padding-bottom: 8px; }
+  .col { background: var(--card2); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; min-height: 200px; }
+  .col h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--text2); margin: 2px 4px 10px; display: flex; gap: 6px; }
+  .col.drop { outline: 2px dashed var(--accent); }
+  .bcard { background: var(--card); border: 1px solid var(--line); border-radius: 11px; padding: 9px 10px; margin-bottom: 8px; cursor: grab; box-shadow: var(--shadow); }
+  .bcard .ctitle { font-size: 13.5px; }
+  .bcard .row { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+
+  /* ---- access ---- */
+  table.t { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  table.t th { text-align: left; font-size: 11.5px; text-transform: uppercase; letter-spacing: .4px; color: var(--text2); padding: 6px 8px; border-bottom: 1px solid var(--line); }
+  table.t td { padding: 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  table.t select { width: auto; padding: 4px 8px; }
+  .tscroll { overflow-x: auto; }
+
+  /* ---- sheet (modal) ---- */
+  .scrim { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 60; display: flex; align-items: flex-start; justify-content: center; padding: 40px 14px; overflow-y: auto; }
+  .sheet { background: var(--bg); border-radius: 16px; width: 100%; max-width: 620px; box-shadow: 0 20px 60px rgba(0,0,0,.25); }
+  .sheet.wide { max-width: 980px; }
+  .sheet-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  .sheet-head h3 { flex: 1; font-size: 16.5px; }
+  .sheet-body { padding: 6px 18px 18px; }
+  .sheet-foot { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 18px 16px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+  .three { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0 12px; }
+  @media (max-width: 560px) { .two, .three { grid-template-columns: 1fr; } }
+  .datebox { background: var(--accent-soft); border-radius: 12px; padding: 4px 12px 12px; margin-top: 12px; }
+  .datebox .hint { margin-top: 8px; color: var(--accent); }
+  .seg { display: inline-flex; background: var(--card2); border: 1px solid var(--line); border-radius: 9px; padding: 2px; }
+  .seg button { border: none; background: none; padding: 5px 10px; border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text2); }
+  .seg button.on { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
+
+  /* ---- login / gate ---- */
+  .gate { min-height: 100vh; display: grid; place-items: center; padding: 20px; }
+  .gate-card { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 26px; width: 100%; max-width: 380px; box-shadow: var(--shadow); }
+  .gate-card h1 { font-size: 21px; margin: 10px 0 4px; }
+  .gate-card .btn { width: 100%; margin-top: 14px; }
+  .msg { font-size: 13px; margin-top: 10px; }
+  .msg.error { color: var(--danger); }
+  .msg.ok { color: var(--accent); }
+
+  .toast { position: fixed; bottom: calc(env(safe-area-inset-bottom) + 26px); left: 50%; transform: translateX(-50%) translateY(20px);
+           background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 100px; font-size: 14px; font-weight: 600;
+           z-index: 100; opacity: 0; transition: all .3s; pointer-events: none; max-width: calc(100vw - 32px); text-align: center; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+  .toast-action { margin-left: 10px; border: none; background: rgba(255,255,255,.22); color: inherit; font-weight: 700; border-radius: 7px; padding: 3px 10px; cursor: pointer; }
+  .sync { font-size: 11px; font-weight: 700; padding: 4px 10px; border-radius: 100px; background: var(--card); color: var(--text2); border: 1px solid var(--line); }
+  .sync.on { color: var(--accent); }
+  @media (max-width: 600px) { .brand-sub { display: none; } main { padding: 14px 14px 110px; } .topbar { padding-left: 14px; padding-right: 14px; } }
+</style>
+</head>
+<body>
+<!-- ============ Sign-in ============ -->
+<div id="login" class="gate hidden">
+  <div class="gate-card">
+    <div class="badge-logo" aria-hidden="true">
+      <svg width="18" height="18" viewBox="0 0 48 48"><line x1="14" y1="35" x2="27" y2="13" stroke="#fff" stroke-width="8" stroke-linecap="round"/><line x1="24" y1="35" x2="35" y2="19" stroke="#fff" stroke-width="8" stroke-linecap="round"/><circle cx="35" cy="30" r="6" fill="#fff"/></svg>
+    </div>
+    <h1>Teaching Cases</h1>
+    <div class="hint">Sign in with your Research Tracker account.</div>
+    <label class="f" for="login-email">Email</label>
+    <input id="login-email" type="email" autocomplete="username" placeholder="you@rushortho.com">
+    <label class="f" for="login-password">Password</label>
+    <input id="login-password" type="password" autocomplete="current-password">
+    <button class="btn" id="login-submit">Sign In</button>
+    <div id="login-msg" class="msg"></div>
+    <div class="hint" style="margin-top:14px">Forgot your password? Reset it from the <a href="../">Research Tracker</a> sign-in page — it's the same account.</div>
+  </div>
+</div>
+
+<!-- ============ No access yet ============ -->
+<div id="noaccess" class="gate hidden">
+  <div class="gate-card">
+    <div class="badge-logo" aria-hidden="true">
+      <svg width="18" height="18" viewBox="0 0 48 48"><line x1="14" y1="35" x2="27" y2="13" stroke="#fff" stroke-width="8" stroke-linecap="round"/><line x1="24" y1="35" x2="35" y2="19" stroke="#fff" stroke-width="8" stroke-linecap="round"/><circle cx="35" cy="30" r="6" fill="#fff"/></svg>
+    </div>
+    <h1>Teaching Cases</h1>
+    <div id="noaccess-body" class="hint"></div>
+    <button class="btn" id="request-btn">Request access</button>
+    <button class="btn secondary" id="noaccess-signout" style="margin-top:8px">Sign out</button>
+    <div class="hint" style="margin-top:14px"><a href="../">← Back to the Research Tracker</a></div>
+  </div>
+</div>
+
+<!-- ============ App ============ -->
+<div id="app" class="hidden">
+  <div class="topbar">
+    <div class="topbar-row">
+      <div class="brand">
+        <div class="badge-logo" aria-hidden="true">
+          <svg width="16" height="16" viewBox="0 0 48 48"><line x1="14" y1="35" x2="27" y2="13" stroke="#fff" stroke-width="8" stroke-linecap="round"/><line x1="24" y1="35" x2="35" y2="19" stroke="#fff" stroke-width="8" stroke-linecap="round"/><circle cx="35" cy="30" r="6" fill="#fff"/></svg>
+        </div>
+        <div style="min-width:0">
+          <div class="brand-name">Teaching Cases</div>
+          <div class="brand-sub">Midwest Orthopaedics at Rush · <a href="../">Research Tracker</a></div>
+        </div>
+      </div>
+      <div class="spacer"></div>
+      <span id="sync" class="sync">Connecting…</span>
+      <button class="btn small" id="new-case-btn">+ New case</button>
+    </div>
+    <nav class="tabs" id="tabs"></nav>
+  </div>
+  <div class="phi-banner">No names, MRNs or real dates here — dates are stored as time from surgery. Patient identity lives only in the key sheet on the Rush drive.</div>
+  <main id="main"></main>
+</div>
+
+<div id="sheet-root"></div>
+<div id="tip" class="tip"></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+/* ============================================================================
+   MOR Teaching Cases
+   Same Supabase project and login as the Research Tracker (one account), but separate tables
+   (teaching_cases, case_access) with their own approved-people-only access rules, enforced in
+   the database. See supabase/teaching-cases-setup.sql.
+
+   PRIVACY DESIGN — the database never sees PHI:
+   • No patient name or MRN fields exist. A case is known by its case number (CASE-0007).
+   • Real dates are typed into the browser, converted to "days from index surgery", and thrown
+     away. Only the surgery YEAR is kept. Real dates stay in the key sheet on the Rush drive.
+   • Free-text fields are scanned for date/MRN/name/phone patterns before saving.
+   • Media stay on the Rush/MOR drive; the case stores only a link to the folder.
+   ============================================================================ */
+
+const SUPABASE_URL = "https://wqgiqiqatdmoxpjbzxoj.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndxZ2lxaXFhdGRtb3hwamJ6eG9qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM1MDY3MzAsImV4cCI6MjA5OTA4MjczMH0.8e0yLOvtafSBZLJa9AmLX7CKC7_8cBqPyujk2VZKb3E";
+const SUPABASE_LIB_URLS = [
+  "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js",
+  "https://unpkg.com/@supabase/supabase-js@2/dist/umd/supabase.min.js",
+  "https://cdnjs.cloudflare.com/ajax/libs/supabase-js/2.39.7/supabase.min.js"
+];
+const XLSX_LIB_URL = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+
+/* ============ Vocabularies ============ */
+const REGIONS = ["Knee", "Hip", "Shoulder", "Elbow", "Foot & Ankle", "Hand & Wrist", "Spine", "Other"];
+const SIDES = ["Right", "Left", "Bilateral", "N/A"];
+const AGE_BANDS = ["<18", "18–29", "30s", "40s", "50s", "60s", "70s", "80s", "90+"];
+const SEXES = ["Female", "Male", "Other"];
+const PROCEDURES = [
+  "MPFL reconstruction", "Tibial tubercle osteotomy", "Trochleoplasty", "Osteochondral allograft (OCA)",
+  "MACI / ACI", "Particulated juvenile cartilage", "Microfracture / marrow stimulation", "Meniscal allograft transplant",
+  "Meniscus repair", "ACL reconstruction", "Revision ACL reconstruction", "Multiligament knee reconstruction",
+  "High tibial osteotomy", "Distal femoral osteotomy", "Hip arthroscopy — FAI / labral repair", "Labral reconstruction",
+  "Periacetabular osteotomy (PAO)", "Rotator cuff repair", "Superior capsular reconstruction", "Shoulder stabilization",
+  "Biologic injection (PRP / BMAC)", "Nonoperative"
+];
+const SECTIONS = [
+  ["history", "Clinical history", "Presenting complaint, prior treatment, relevant history. Use relative time (\"2 years of pain\"), never dates."],
+  ["exam", "Physical exam", "Key findings. Exam video lives in the media folder."],
+  ["imaging", "Imaging", "X-ray / MRI / CT findings, measurements (TT-TG, CDI, alpha angle…)."],
+  ["diagnosisDetail", "Diagnosis", "Working and final diagnosis."],
+  ["treatment", "Treatment & surgical findings", "Procedure details, arthroscopic / open findings, implants."],
+  ["outcome", "Outcome", "Course, PROMs, return to activity, complications."],
+  ["teaching", "Teaching points", "What should the audience take away?"]
+];
+// Event types. Colors are a validated categorical order (see :root); shape + text label always
+// accompany color so identity never rests on color alone.
+const EVENT_TYPES = {
+  visit:        { label: "Clinic visit",   color: "var(--ev-visit)",        shape: "circle" },
+  surgery:      { label: "Surgery",        color: "var(--ev-surgery)",      shape: "diamond" },
+  injection:    { label: "Injection",      color: "var(--ev-injection)",    shape: "triangle" },
+  outcome:      { label: "Outcome / PROM", color: "var(--ev-outcome)",      shape: "star" },
+  complication: { label: "Complication",   color: "var(--ev-complication)", shape: "cross" },
+  rehab:        { label: "Rehab / RTS",    color: "var(--ev-rehab)",        shape: "square" },
+  imaging:      { label: "Imaging",        color: "var(--ev-imaging)",      shape: "square-rot" },
+  other:        { label: "Other",          color: "var(--ev-other)",        shape: "circle" }
+};
+const STAGES = [
+  { key: "new",       label: "New" },
+  { key: "confirmed", label: "Indications confirmed" },
+  { key: "media",     label: "Media pulled" },
+  { key: "drafted",   label: "Presentation drafted" },
+  { key: "presented", label: "Presented" }
+];
+const STAGE_COLORS = { new: "var(--text2)", confirmed: "var(--ev-visit)", media: "var(--ev-imaging)", drafted: "var(--ev-surgery)", presented: "var(--accent)" };
+
+/* ============ State ============ */
+let sb = null;
+let currentUser = null;
+let myRole = null;           // requested | viewer | editor | owner | revoked | null
+let cases = [];              // rows from teaching_cases
+let profiles = [];           // {id, name, email} from the tracker's profiles
+let accessRows = [];         // owner only
+let view = { tab: "cases", caseId: null };
+let filters = { q: "", region: "", procedure: "", stage: "", ra: "", archived: false };
+let journeyFilters = { region: "", procedure: "", anchor: "index" };
+let realtime = null;
+// Real surgery dates typed during this visit, per case — held in memory only so adding several
+// events doesn't mean retyping the DOS each time. Never written to storage or the database.
+const sessionDOS = {};
+
+/* ============ Utilities ============ */
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function uid() {
+  if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 3 | 8)).toString(16); });
+}
+function caseLabel(c) { return "CASE-" + String(c.case_no || 0).padStart(4, "0"); }
+function d(c) { return (c && c.data) || {}; }
+const $ = id => document.getElementById(id);
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove("show"), 3600);
+}
+function toastAction(msg, label, fn) {
+  const t = $("toast");
+  t.textContent = "";
+  const s = document.createElement("span"); s.textContent = msg;
+  const b = document.createElement("button"); b.className = "toast-action"; b.textContent = label;
+  b.onclick = () => { t.classList.remove("show"); clearTimeout(t._h); fn(); };
+  t.append(s, b);
+  t.classList.add("show");
+  clearTimeout(t._h);
+  t._h = setTimeout(() => t.classList.remove("show"), 7000);
+}
+
+/* ============ Dates → days from surgery ============ */
+// Parse a date the user typed (yyyy-mm-dd from <input type=date>, m/d/yy(yy), or an Excel serial)
+// into a UTC day count. Returns null if it isn't a date.
+function toDayNumber(v) {
+  if (v == null || v === "") return null;
+  if (typeof v === "number" && isFinite(v)) {
+    if (v > 20000 && v < 80000) return Math.round(v) - 25569;   // Excel serial → days since 1970
+    return null;
+  }
+  if (v instanceof Date && !isNaN(v)) return Math.floor(Date.UTC(v.getFullYear(), v.getMonth(), v.getDate()) / 864e5);
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (m) return Math.floor(Date.UTC(+m[1], +m[2] - 1, +m[3]) / 864e5);
+  m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/);
+  if (m) {
+    let y = +m[3]; if (y < 100) y += y < 70 ? 2000 : 1900;
+    return Math.floor(Date.UTC(y, +m[1] - 1, +m[2]) / 864e5);
+  }
+  if (/^\d+(\.\d+)?$/.test(s)) return toDayNumber(Number(s));
+  const t = Date.parse(s);
+  if (!isNaN(t)) { const dt = new Date(t); return Math.floor(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate()) / 864e5); }
+  return null;
+}
+function yearOfDayNumber(n) { return new Date(n * 864e5).getUTCFullYear(); }
+function relDays(dateVal, dosVal) {
+  const a = toDayNumber(dateVal), b = toDayNumber(dosVal);
+  if (a == null || b == null) return null;
+  return a - b;
+}
+function fmtRel(days) {
+  if (days == null || isNaN(days)) return "—";
+  if (days === 0) return "Day 0";
+  const a = Math.abs(days), sign = days < 0 ? "−" : "+";
+  let s;
+  if (a < 14) s = a + " d";
+  else if (a < 120) s = Math.round(a / 7) + " wk";
+  else if (a < 730) s = Math.round(a / 30.44) + " mo";
+  else s = (a / 365.25).toFixed(a < 3650 ? 1 : 0).replace(/\.0$/, "") + " yr";
+  return sign + s;
+}
+function fmtRelLong(days) {
+  if (days == null || isNaN(days)) return "";
+  if (days === 0) return "Day of index surgery";
+  return fmtRel(Math.abs(days)).replace(/^[+−]/, "") + (days < 0 ? " before surgery" : " after surgery");
+}
+
+/* ============ PHI scanner ============ */
+// Not a guarantee — a tripwire for the common slips: a typed date, an MRN, a name with a title.
+const PHI_PATTERNS = [
+  [/\b\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4}\b/, "a date"],
+  [/\b(19|20)\d{2}-\d{2}-\d{2}\b/, "a date"],
+  [/\b(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sep(t|tember)?|oct(ober)?|nov(ember)?|dec(ember)?)\.?\s+\d{1,2}(st|nd|rd|th)?\b/i, "a date"],
+  [/\b(mrn|medical record|acct|account\s*#)\b/i, "a record number"],
+  [/\b\d{6,10}\b/, "a long number (MRN?)"],
+  [/\b\d{3}-\d{2}-\d{4}\b/, "an SSN"],
+  [/\(?\b\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b/, "a phone number"],
+  [/[\w.+-]+@[\w-]+\.[\w.]+/, "an email address"],
+  [/\b(mr|mrs|ms|miss|mx)\.?\s+[A-Z][a-z]+/, "a name"],
+  [/\b(9\d|1[01]\d)\s*(-|\s)?(y\/?o|yo|year[- ]old|years old)\b/i, "an age over 89"],
+  [/\b(dob|date of birth|ssn|address)\b/i, "an identifier label"]
+];
+function scanPHI(text) {
+  const found = [];
+  const s = String(text || "");
+  for (const [re, what] of PHI_PATTERNS) {
+    const m = s.match(re);
+    if (m && !found.some(f => f.what === what)) found.push({ what, sample: m[0] });
+  }
+  return found;
+}
+function phiMessage(found) {
+  return "This looks like it may contain " + found.map(f => what(f)).join(", ") + ".";
+  function what(f) { return f.what + " (“" + f.sample + "”)"; }
+}
+
+/* ============ Folder links ============ */
+function folderLinkWarning(url) {
+  if (!url) return "";
+  let u;
+  try { u = new URL(url); } catch (e) { return "That isn't a full link — paste the whole address starting with https://"; }
+  if (u.protocol !== "https:") return "Use the https:// link from OneDrive / SharePoint.";
+  const okHost = /(^|\.)sharepoint\.com$|(^|\.)onedrive\.live\.com$|(^|\.)1drv\.ms$/i.test(u.hostname);
+  if (!okHost) return "This doesn't look like a Rush/MOR OneDrive or SharePoint link. Media should stay on the Rush drive.";
+  if (/(\b\d{6,10}\b)/.test(decodeURIComponent(u.pathname))) return "The folder path contains a long number — make sure the folder isn't named with an MRN.";
+  return "";
+}
+
+/* ============ Stage ============ */
+function stageOf(c) {
+  const x = d(c);
+  if (x.presentedAt) return "presented";
+  if (x.presentationDrafted) return "drafted";
+  if (x.photosPulled) return "media";
+  if (x.indicationsConf === "Yes") return "confirmed";
+  return "new";
+}
+// Moving a case on the board sets the flags that define that stage (and clears later ones).
+function stagePatch(stageKey, c) {
+  const x = d(c);
+  const i = STAGES.findIndex(s => s.key === stageKey);
+  return {
+    indicationsConf: i >= 1 ? "Yes" : (x.indicationsConf === "Yes" ? "Pending" : (x.indicationsConf || "")),
+    photosPulled: i >= 2,
+    presentationDrafted: i >= 3,
+    presentedAt: i >= 4 ? (x.presentedAt || "Presented") : ""
+  };
+}
+
+/* ============ Supabase ============ */
+function loadScript(src, ms) {
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    const t = setTimeout(() => { s.remove(); rej(new Error("timeout")); }, ms || 9000);
+    s.src = src;
+    s.onload = () => { clearTimeout(t); res(); };
+    s.onerror = () => { clearTimeout(t); s.remove(); rej(new Error("failed")); };
+    document.head.appendChild(s);
+  });
+}
+async function loadSupabaseLib() {
+  if (window.supabase) return;
+  for (const u of SUPABASE_LIB_URLS) { try { await loadScript(u); if (window.supabase) return; } catch (e) { /* next */ } }
+  throw new Error("Could not load the sync library");
+}
+function setSync(on, text) { const el = $("sync"); el.textContent = text; el.classList.toggle("on", !!on); }
+function show(which) {
+  ["login", "noaccess", "app"].forEach(id => $(id).classList.toggle("hidden", id !== which));
+}
+
+async function boot() {
+  try {
+    await loadSupabaseLib();
+    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    sb.auth.onAuthStateChange((event, session) => {
+      if (event === "SIGNED_OUT") { currentUser = null; show("login"); }
+    });
+    const { data } = await sb.auth.getSession();
+    if (data && data.session) await afterSignIn(data.session.user);
+    else show("login");
+  } catch (e) {
+    console.warn(e);
+    show("login");
+    $("login-msg").className = "msg error";
+    $("login-msg").textContent = "Couldn't reach the server — check your connection and reload.";
+  }
+}
+
+async function afterSignIn(user) {
+  currentUser = user;
+  const { data, error } = await sb.from("case_access").select("role").eq("user_id", user.id).maybeSingle();
+  if (error && /relation .* does not exist|case_access/i.test(error.message || "")) {
+    show("noaccess");
+    $("noaccess-body").textContent = "Teaching Cases hasn't been switched on in the database yet.";
+    $("request-btn").classList.add("hidden");
+    return;
+  }
+  myRole = data ? data.role : null;
+  if (!canView()) { renderNoAccess(); return; }
+  show("app");
+  await Promise.all([loadCases(), loadProfiles()]);
+  if (isOwner()) await loadAccess();
+  subscribe();
+  readHash();
+  render();
+}
+function canView() { return ["viewer", "editor", "owner"].includes(myRole); }
+function canEdit() { return ["editor", "owner"].includes(myRole); }
+function isOwner() { return myRole === "owner"; }
+
+function renderNoAccess() {
+  show("noaccess");
+  const body = $("noaccess-body"), btn = $("request-btn");
+  btn.classList.remove("hidden");
+  btn.disabled = false;
+  if (myRole === "requested") {
+    body.textContent = "Your request is waiting for approval. You'll get in as soon as it's approved — just reload this page.";
+    btn.textContent = "Request sent ✓"; btn.disabled = true;
+  } else if (myRole === "revoked") {
+    body.textContent = "Your access to Teaching Cases was turned off. You can ask for it again.";
+    btn.textContent = "Ask again";
+  } else {
+    body.textContent = "Teaching Cases is limited to people Dr. Yanke approves. You're signed in as " + (currentUser.email || "") + ".";
+    btn.textContent = "Request access";
+  }
+}
+async function requestAccess() {
+  const me = profiles.find(p => p.id === currentUser.id);
+  const row = { user_id: currentUser.id, email: currentUser.email, name: (me && me.name) || "", role: "requested" };
+  const res = myRole === "revoked"
+    ? await sb.from("case_access").update({ role: "requested" }).eq("user_id", currentUser.id)
+    : await sb.from("case_access").insert(row);
+  if (res.error) { toast("Couldn't send the request: " + res.error.message); return; }
+  myRole = "requested";
+  renderNoAccess();
+  toast("Request sent — Dr. Yanke will see it under Access.");
+}
+
+async function loadCases() {
+  const { data, error } = await sb.from("teaching_cases").select("*").order("case_no", { ascending: true });
+  if (error) { setSync(false, "Offline"); toast("Couldn't load cases: " + error.message); return; }
+  cases = data || [];
+  setSync(true, "Synced");
+}
+async function loadProfiles() {
+  try {
+    const { data } = await sb.from("items").select("id,data").eq("kind", "profile");
+    profiles = (data || []).map(r => ({ id: r.id, name: (r.data && r.data.name) || "", email: (r.data && r.data.email) || "" }))
+      .filter(p => p.name || p.email)
+      .sort((a, b) => (a.name || a.email).localeCompare(b.name || b.email));
+  } catch (e) { profiles = []; }
+}
+async function loadAccess() {
+  const { data } = await sb.from("case_access").select("*");
+  accessRows = data || [];
+}
+function subscribe() {
+  if (realtime) return;
+  realtime = sb.channel("teaching-cases")
+    .on("postgres_changes", { event: "*", schema: "public", table: "teaching_cases" }, payload => {
+      const row = payload.new;
+      if (!row || !row.id) return;
+      const i = cases.findIndex(c => c.id === row.id);
+      if (i >= 0) cases[i] = row; else cases.push(row);
+      cases.sort((a, b) => a.case_no - b.case_no);
+      setSync(true, "Live");
+      if (!document.querySelector(".scrim") && !document.activeElement.matches("textarea,input")) render();
+    })
+    .subscribe();
+}
+
+/* ============ Writes ============ */
+// Every edit goes through patch_case, which merges only the fields sent — and timeline events
+// one at a time — so two people working on the same case never erase each other's work.
+async function patchCase(id, patch, archived) {
+  if (!canEdit()) { toast("You have view-only access."); return null; }
+  const args = { case_id: id, patch: patch || {} };
+  if (archived != null) args.set_archived = archived;
+  const { data, error } = await sb.rpc("patch_case", args);
+  if (error) { toast("Not saved: " + error.message); setSync(false, "Error"); return null; }
+  const row = Array.isArray(data) ? data[0] : data;
+  const i = cases.findIndex(c => c.id === id);
+  if (row && i >= 0) cases[i] = row;
+  setSync(true, "Synced");
+  return row;
+}
+async function createCase(dataObj) {
+  if (!canEdit()) { toast("You have view-only access."); return null; }
+  const { data, error } = await sb.from("teaching_cases").insert({ data: dataObj }).select().single();
+  if (error) { toast("Couldn't create the case: " + error.message); return null; }
+  cases.push(data);
+  cases.sort((a, b) => a.case_no - b.case_no);
+  return data;
+}
+
+/* ============ Routing ============ */
+function readHash() {
+  const h = location.hash.replace(/^#/, "");
+  const m = h.match(/^case\/([\w-]+)/);
+  if (m) { view = { tab: "cases", caseId: m[1] }; return; }
+  if (["cases", "journeys", "board", "access"].includes(h)) view = { tab: h, caseId: null };
+}
+function go(tab, caseId) {
+  view = { tab, caseId: caseId || null };
+  const h = caseId ? "case/" + caseId : tab;
+  if (location.hash.replace(/^#/, "") !== h) history.pushState(null, "", "#" + h);
+  render();
+  window.scrollTo(0, 0);
+}
+window.addEventListener("popstate", () => { readHash(); render(); });
+
+/* ============ Render ============ */
+function render() {
+  if (!currentUser || !canView()) return;
+  $("new-case-btn").classList.toggle("hidden", !canEdit());
+  const active = cases.filter(c => !c.archived);
+  const pending = accessRows.filter(r => r.role === "requested").length;
+  const tabs = [["cases", "Cases", active.length], ["journeys", "Journeys"], ["board", "Board"]];
+  if (isOwner()) tabs.push(["access", "Access", pending || null]);
+  $("tabs").innerHTML = tabs.map(([k, l, n]) =>
+    `<button class="tab ${view.tab === k ? "on" : ""}" data-tab="${k}">${l}${n ? `<span class="count">${n}</span>` : ""}</button>`).join("");
+  $("tabs").querySelectorAll(".tab").forEach(b => b.onclick = () => go(b.dataset.tab));
+  const main = $("main");
+  if (view.caseId) { const c = cases.find(x => x.id === view.caseId); if (c) { renderCase(main, c); return; } }
+  if (view.tab === "journeys") renderJourneys(main);
+  else if (view.tab === "board") renderBoard(main);
+  else if (view.tab === "access" && isOwner()) renderAccess(main);
+  else renderCases(main);
+}
+
+function filteredCases() {
+  const q = filters.q.trim().toLowerCase();
+  return cases.filter(c => {
+    const x = d(c);
+    if (!filters.archived && c.archived) return false;
+    if (filters.region && x.region !== filters.region) return false;
+    if (filters.procedure && x.primaryOp !== filters.procedure) return false;
+    if (filters.stage && stageOf(c) !== filters.stage) return false;
+    if (filters.ra && x.raResponsible !== filters.ra) return false;
+    if (q) {
+      const hay = [caseLabel(c), x.title, x.primaryOp, x.diagnosis, x.region, (x.tags || []).join(" "), x.raResponsible,
+        ...SECTIONS.map(s => x[s[0]])].join(" ").toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+function optionList(values, selected, blank) {
+  return (blank != null ? `<option value="">${esc(blank)}</option>` : "") +
+    values.map(v => `<option ${v === selected ? "selected" : ""} value="${esc(v)}">${esc(v)}</option>`).join("");
+}
+function allProcedures() {
+  const s = new Set(PROCEDURES);
+  cases.forEach(c => { if (d(c).primaryOp) s.add(d(c).primaryOp); });
+  return [...s].sort();
+}
+function raNames() {
+  const s = new Set(profiles.map(p => p.name).filter(Boolean));
+  cases.forEach(c => { if (d(c).raResponsible) s.add(d(c).raResponsible); });
+  return [...s].sort();
+}
+
+function renderCases(main) {
+  const list = filteredCases();
+  const usedProcs = [...new Set(cases.map(c => d(c).primaryOp).filter(Boolean))].sort();
+  main.innerHTML = `
+    <div class="filters">
+      <input type="search" id="f-q" placeholder="Search cases, diagnoses, notes…" value="${esc(filters.q)}">
+      <select id="f-region">${optionList(REGIONS, filters.region, "All regions")}</select>
+      <select id="f-proc">${optionList(usedProcs, filters.procedure, "All procedures")}</select>
+      <select id="f-stage">${optionList([], "", "Any stage")}${STAGES.map(s => `<option value="${s.key}" ${filters.stage === s.key ? "selected" : ""}>${s.label}</option>`).join("")}</select>
+      <select id="f-ra">${optionList(raNames(), filters.ra, "Any RA")}</select>
+      <label class="chk"><input type="checkbox" id="f-arch" ${filters.archived ? "checked" : ""}> Show archived</label>
+      <div class="spacer"></div>
+      ${canEdit() ? `<button class="btn secondary small" id="import-btn">Import spreadsheet</button>` : ""}
+    </div>
+    ${list.length ? `<div class="grid">${list.map(caseCard).join("")}</div>` :
+      cases.length ? `<div class="empty"><h3>No cases match</h3>Try clearing a filter.</div>` :
+      `<div class="empty"><h3>No teaching cases yet</h3>${canEdit() ? "Add one with <b>+ New case</b>, or bring in your tracking sheet with <b>Import spreadsheet</b>." : "Cases will appear here once someone adds them."}</div>`}`;
+  const bind = (id, key, ev) => { const el = $(id); if (el) el.addEventListener(ev || "change", () => { filters[key] = el.type === "checkbox" ? el.checked : el.value; renderKeepFocus(id); }); };
+  bind("f-q", "q", "input"); bind("f-region", "region"); bind("f-proc", "procedure"); bind("f-stage", "stage"); bind("f-ra", "ra"); bind("f-arch", "archived");
+  main.querySelectorAll(".ccard").forEach(el => el.onclick = () => go("cases", el.dataset.id));
+  const ib = $("import-btn"); if (ib) ib.onclick = openImport;
+}
+function renderKeepFocus(id) {
+  const el = $(id); const pos = el && el.selectionStart;
+  render();
+  const n = $(id); if (n && id === "f-q") { n.focus(); try { n.setSelectionRange(pos, pos); } catch (e) {} }
+}
+function caseCard(c) {
+  const x = d(c), st = stageOf(c);
+  const stage = STAGES.find(s => s.key === st);
+  const bits = [x.region, x.side && x.side !== "N/A" ? x.side : "", x.ageBand, x.sex].filter(Boolean).join(" · ");
+  return `<div class="ccard ${c.archived ? "archived" : ""}" data-id="${c.id}">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+      <span class="cno">${caseLabel(c)}${x.surgeryYear ? " · " + esc(x.surgeryYear) : ""}</span>
+      <span class="stage" style="color:${STAGE_COLORS[st]}">${esc(stage.label)}</span>
+    </div>
+    <div class="ctitle">${esc(x.title || x.primaryOp || "Untitled case")}</div>
+    ${bits ? `<div class="cmeta">${esc(bits)}</div>` : ""}
+    ${x.primaryOp && x.title ? `<div class="cmeta">${esc(x.primaryOp)}</div>` : ""}
+    ${miniTimeline(c)}
+    <div class="chips">
+      ${x.raResponsible ? `<span class="chip">RA: ${esc(x.raResponsible)}</span>` : ""}
+      ${x.folderUrl ? `<span class="chip on">Media linked</span>` : ""}
+      ${c.archived ? `<span class="chip">Archived</span>` : ""}
+      ${(x.tags || []).slice(0, 3).map(t => `<span class="chip">${esc(t)}</span>`).join("")}
+    </div>
+  </div>`;
+}
+
+/* ============ Timeline drawing ============ */
+// Time from surgery spans months before to years after, so a linear axis crushes the early
+// post-op period. A signed square-root scale keeps 6 weeks and 5 years both readable; tick labels
+// carry the real intervals.
+const TICKS = [[-730, "−2y"], [-365, "−1y"], [-180, "−6mo"], [-90, "−3mo"], [-30, "−1mo"], [0, "Surgery"],
+  [42, "6wk"], [90, "3mo"], [180, "6mo"], [365, "1y"], [730, "2y"], [1825, "5y"], [3650, "10y"]];
+function sq(v) { return Math.sign(v) * Math.sqrt(Math.abs(v)); }
+function makeScale(minD, maxD, x0, x1) {
+  const lo = sq(Math.min(minD, -30)), hi = sq(Math.max(maxD, 90));
+  return v => x0 + (sq(v) - lo) / (hi - lo || 1) * (x1 - x0);
+}
+function liveEvents(c) {
+  const ev = d(c).events || {};
+  return Object.keys(ev).map(k => Object.assign({ id: k }, ev[k])).filter(e => !e.archived && typeof e.day === "number")
+    .sort((a, b) => a.day - b.day);
+}
+function shapePath(shape, x, y, r) {
+  switch (shape) {
+    case "diamond": return `<path d="M${x} ${y - r * 1.25}L${x + r * 1.25} ${y}L${x} ${y + r * 1.25}L${x - r * 1.25} ${y}Z"`;
+    case "triangle": return `<path d="M${x} ${y - r * 1.2}L${x + r * 1.1} ${y + r * .8}L${x - r * 1.1} ${y + r * .8}Z"`;
+    case "square": return `<rect x="${x - r * .9}" y="${y - r * .9}" width="${r * 1.8}" height="${r * 1.8}" rx="2"`;
+    case "square-rot": return `<rect x="${x - r * .9}" y="${y - r * .9}" width="${r * 1.8}" height="${r * 1.8}" rx="${r * .9}" ry="2"`;
+    case "cross": return `<path d="M${x - r} ${y - r}L${x + r} ${y + r}M${x + r} ${y - r}L${x - r} ${y + r}" stroke-width="3.2" stroke-linecap="round"`;
+    case "star": {
+      let p = ""; for (let i = 0; i < 10; i++) { const a = Math.PI / 5 * i - Math.PI / 2, rr = i % 2 ? r * .55 : r * 1.3; p += (i ? "L" : "M") + (x + rr * Math.cos(a)).toFixed(1) + " " + (y + rr * Math.sin(a)).toFixed(1); }
+      return `<path d="${p}Z"`;
+    }
+    default: return `<circle cx="${x}" cy="${y}" r="${r}"`;
+  }
+}
+function markSVG(e, x, y, r, extra) {
+  const t = EVENT_TYPES[e.type] || EVENT_TYPES.other;
+  const base = shapePath(t.shape, x, y, r);
+  const paint = t.shape === "cross" ? `fill="none" stroke="${t.color}"` : `fill="${t.color}" class="tl-mark"`;
+  return `${base} ${paint} ${extra || ""}/>`;
+}
+function miniTimeline(c) {
+  const evs = liveEvents(c);
+  if (!evs.length) return "";
+  const W = 260, H = 26;
+  const sc = makeScale(evs[0].day, evs[evs.length - 1].day, 8, W - 8);
+  return `<svg class="tl-svg" viewBox="0 0 ${W} ${H}" aria-label="Timeline with ${evs.length} events">
+    <line x1="4" x2="${W - 4}" y1="${H / 2}" y2="${H / 2}" class="tl-axis"/>
+    <line x1="${sc(0)}" x2="${sc(0)}" y1="3" y2="${H - 3}" class="tl-zero"/>
+    ${evs.map(e => markSVG(e, sc(e.day), H / 2, 5)).join("")}
+  </svg>`;
+}
+function tickSVG(sc, minD, maxD, top, bottom) {
+  const lo = Math.min(minD, -30), hi = Math.max(maxD, 90);
+  return TICKS.filter(([v]) => v >= lo - 1 && v <= hi + 1).map(([v, l]) =>
+    `<line class="${v === 0 ? "tl-zero" : "tl-tick"}" x1="${sc(v)}" x2="${sc(v)}" y1="${top}" y2="${bottom}"/>
+     <text class="tl-ticklbl" x="${sc(v)}" y="${bottom + 14}" text-anchor="middle">${l}</text>`).join("");
+}
+// Full timeline for one case, with labels staggered so neighbours don't collide.
+function caseTimeline(c) {
+  const evs = liveEvents(c);
+  if (!evs.length) return `<div class="hint" style="padding:16px 0">No events yet.${canEdit() ? " Add the surgery, visits, imaging and follow-ups to see this patient's journey." : ""}</div>`;
+  const W = 900, PAD = 40, axisY = 70, H = 150;
+  const sc = makeScale(evs[0].day, evs[evs.length - 1].day, PAD, W - PAD);
+  // Stagger labels: alternate above/below, and push to a second row when crowded.
+  const rows = { up: [], down: [] };
+  const placed = evs.map((e, i) => {
+    const x = sc(e.day), side = i % 2 ? "down" : "up";
+    const w = Math.max(60, (e.label || EVENT_TYPES[e.type].label).length * 6.2);
+    let level = 0; while ((rows[side][level] || -1e9) > x - w / 2) level++;
+    rows[side][level] = x + w / 2 + 6;
+    return { e, x, side, level };
+  });
+  const svg = placed.map(({ e, x, side, level }) => {
+    const ly = side === "up" ? axisY - 32 - level * 30 : axisY + 26 + level * 30;
+    const t = EVENT_TYPES[e.type] || EVENT_TYPES.other;
+    return `${level ? `<line x1="${x}" x2="${x}" y1="${axisY}" y2="${side === "up" ? ly + 16 : ly - 12}" stroke="var(--line)" stroke-width="1"/>` : ""}
+      ${markSVG(e, x, axisY, 7)}
+      <text class="tl-lbl" x="${x}" y="${ly}" text-anchor="middle">${esc(trunc(e.label || t.label, 26))}</text>
+      <text class="tl-lbl2" x="${x}" y="${ly + 12}" text-anchor="middle">${fmtRel(e.day)}</text>
+      <circle class="tl-hit" cx="${x}" cy="${axisY}" r="14" data-tip="${esc(tipHTML(c, e))}" data-ev="${e.id}"/>`;
+  }).join("");
+  const upRows = Math.max(1, rows.up.length), downRows = Math.max(1, rows.down.length);
+  const vbTop = axisY - 32 - (upRows - 1) * 30 - 16;              // room above the highest label row
+  const tickY = axisY + 26 + (downRows - 1) * 30 + 30;            // tick labels below the lowest row
+  const vbH = tickY + 8 - vbTop;
+  const ticks = tickSVG(sc, evs[0].day, evs[evs.length - 1].day, axisY - 4, axisY + 4)
+    .replace(/class="tl-ticklbl" x="([\d.]+)" y="[\d.]+"/g, `class="tl-ticklbl" x="$1" y="${tickY}"`);
+  return `<div class="tl-wrap"><svg class="tl-svg" viewBox="0 ${vbTop} ${W} ${vbH}" role="img" aria-label="Patient journey timeline">
+    <line x1="${PAD - 20}" x2="${W - PAD + 20}" y1="${axisY}" y2="${axisY}" class="tl-axis"/>
+    <line x1="${PAD - 20}" x2="${W - PAD + 20}" y1="${tickY - 13}" y2="${tickY - 13}" stroke="var(--line)" stroke-width="1"/>
+    ${ticks}
+    ${svg}
+  </svg></div>${legendHTML(evs)}`;
+}
+function trunc(s, n) { s = String(s || ""); return s.length > n ? s.slice(0, n - 1) + "…" : s; }
+function tipHTML(c, e) {
+  const t = EVENT_TYPES[e.type] || EVENT_TYPES.other;
+  return `<b>${esc(e.label || t.label)}</b>${esc(t.label)} · ${esc(fmtRelLong(e.day))}${e.notes ? "<br>" + esc(trunc(e.notes, 140)) : ""}`;
+}
+function legendHTML(evs) {
+  const types = [...new Set(evs.map(e => e.type))];
+  return `<div class="legend">${types.map(k => { const t = EVENT_TYPES[k] || EVENT_TYPES.other;
+    return `<span><svg width="14" height="14" viewBox="0 0 14 14">${markSVG({ type: k }, 7, 7, 4.5)}</svg>${esc(t.label)}</span>`; }).join("")}</div>`;
+}
+function bindTips(root) {
+  const tip = $("tip");
+  root.querySelectorAll("[data-tip]").forEach(el => {
+    el.addEventListener("mouseenter", ev => { tip.innerHTML = el.dataset.tip; tip.classList.add("show"); moveTip(ev); });
+    el.addEventListener("mousemove", moveTip);
+    el.addEventListener("mouseleave", () => tip.classList.remove("show"));
+  });
+  function moveTip(ev) { tip.style.left = Math.min(ev.clientX + 14, innerWidth - 290) + "px"; tip.style.top = (ev.clientY + 14) + "px"; }
+}
+
+/* ============ Case detail ============ */
+function renderCase(main, c) {
+  const x = d(c), st = stageOf(c), ed = canEdit();
+  const evs = liveEvents(c);
+  const folderWarn = folderLinkWarning(x.folderUrl);
+  main.innerHTML = `
+    <div class="crumb"><button class="btn ghost" id="back">← All cases</button></div>
+    <div class="dhead">
+      <div style="flex:1;min-width:240px">
+        <div class="cno">${caseLabel(c)}${x.surgeryYear ? " · Surgery " + esc(x.surgeryYear) : ""}${c.archived ? " · ARCHIVED" : ""}</div>
+        <h1>${esc(x.title || x.primaryOp || "Untitled case")}</h1>
+        <div class="cmeta" style="margin-top:4px">${esc([x.region, x.side && x.side !== "N/A" ? x.side : "", x.ageBand, x.sex].filter(Boolean).join(" · "))}</div>
+        <div class="chips" style="margin-top:8px">
+          <span class="chip on" style="color:${STAGE_COLORS[st]}">${esc(STAGES.find(s => s.key === st).label)}</span>
+          ${(x.tags || []).map(t => `<span class="chip">${esc(t)}</span>`).join("")}
+        </div>
+      </div>
+      ${ed ? `<button class="btn secondary small" id="edit-details">Edit details</button>
+        <button class="btn secondary small" id="archive-btn">${c.archived ? "Restore" : "Archive"}</button>` : ""}
+    </div>
+
+    <div class="panel">
+      <h2>Patient journey <span class="spacer"></span>${ed ? `<button class="btn small" id="add-ev">+ Add event</button>` : ""}</h2>
+      ${caseTimeline(c)}
+      ${evs.length ? `<div class="ev-list">${evs.map(e => { const t = EVENT_TYPES[e.type] || EVENT_TYPES.other; return `
+        <div class="ev-row">
+          <div class="when">${fmtRel(e.day)}</div>
+          <svg width="16" height="16" viewBox="0 0 16 16">${markSVG(e, 8, 8, 5)}</svg>
+          <div class="what"><b>${esc(e.label || t.label)}</b> <span class="hint">· ${esc(t.label)}</span>${e.notes ? `<div class="n">${esc(e.notes)}</div>` : ""}</div>
+          <div>${ed ? `<button class="btn ghost small" data-edit-ev="${e.id}">Edit</button>` : ""}</div>
+        </div>`; }).join("")}</div>` : ""}
+    </div>
+
+    <div class="dcols">
+      <div>
+        <div class="panel">
+          <h2>Clinical summary</h2>
+          ${SECTIONS.map(([k, label, ph]) => `
+            <div class="sec" data-sec="${k}">
+              <div class="sec-label">${esc(label)}</div>
+              <div class="sec-body ${x[k] ? "" : "placeholder"} ${ed ? "editable" : ""}" data-edit-sec="${k}">${x[k] ? esc(x[k]) : (ed ? esc(ph) : "—")}</div>
+            </div>`).join("")}
+        </div>
+      </div>
+      <div>
+        <div class="panel">
+          <h2>Media</h2>
+          ${x.folderUrl ? `<div class="folder-card"><div class="ico">📁</div><div style="flex:1;min-width:0">
+              <div style="font-weight:650">Rush drive folder</div><div class="hint">Opens in OneDrive — Rush sign-in required</div></div>
+              <a class="btn small" href="${esc(x.folderUrl)}" target="_blank" rel="noopener noreferrer" id="open-folder">Open ↗</a></div>
+              ${folderWarn ? `<div class="warnbox">${esc(folderWarn)}</div>` : ""}`
+            : `<div class="hint">No folder linked. Create a folder named <b>${caseLabel(c)}</b> on the Rush/MOR drive for the exam video, scope photos and video, then paste its link here.</div>`}
+          ${ed ? `<button class="btn ghost small" id="edit-folder" style="margin-top:8px">${x.folderUrl ? "Change link" : "+ Link folder"}</button>` : ""}
+        </div>
+        <div class="panel">
+          <h2>Workflow</h2>
+          <div class="wf-row"><span class="lbl">Indications conference</span>
+            <select id="wf-ind" ${ed ? "" : "disabled"}>${optionList(["", "Pending", "Yes", "No"].slice(1), x.indicationsConf || "", "—")}</select></div>
+          <div class="wf-row"><span class="lbl">RA responsible</span>
+            <select id="wf-ra" ${ed ? "" : "disabled"}>${optionList(raNames(), x.raResponsible || "", "Unassigned")}</select></div>
+          ${["photosPulled|Photos / video pulled", "presentationDrafted|Presentation drafted"].map(s => { const [k, l] = s.split("|"); return `
+          <div class="wf-row"><span class="lbl">${l}</span><div class="toggle ${x[k] ? "on" : ""}" data-flag="${k}" role="checkbox" aria-checked="${!!x[k]}" tabindex="0">${x[k] ? `<svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 6.5l2.5 2.5L10 3" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round"/></svg>` : ""}</div></div>`; }).join("")}
+          <div class="wf-row"><span class="lbl">Presented at</span></div>
+          <input id="wf-presented" placeholder="e.g. AANA 2027 instructional course" value="${esc(x.presentedAt || "")}" ${ed ? "" : "disabled"}>
+        </div>
+        <div class="panel">
+          <h2>Details</h2>
+          <dl class="kv">
+            <dt>Primary op</dt><dd>${esc(x.primaryOp || "—")}</dd>
+            <dt>Diagnosis</dt><dd>${esc(x.diagnosis || "—")}</dd>
+            <dt>Region / side</dt><dd>${esc([x.region, x.side].filter(Boolean).join(" · ") || "—")}</dd>
+            <dt>Age / sex</dt><dd>${esc([x.ageBand, x.sex].filter(Boolean).join(" · ") || "—")}</dd>
+            <dt>Surgery year</dt><dd>${esc(x.surgeryYear || "—")}</dd>
+          </dl>
+        </div>
+      </div>
+    </div>`;
+  $("back").onclick = () => go("cases");
+  bindTips(main);
+  if (!ed) return;
+  $("edit-details").onclick = () => openCaseForm(c);
+  $("archive-btn").onclick = async () => {
+    const to = !c.archived;
+    const row = await patchCase(c.id, {}, to);
+    if (!row) return;
+    render();
+    if (to) toastAction("Archived — find it with “Show archived” on the Cases tab.", "Undo", async () => { await patchCase(c.id, {}, false); render(); toast("Restored."); });
+    else toast("Restored to the active case list.");
+  };
+  $("add-ev").onclick = () => openEventForm(c, null);
+  main.querySelectorAll("[data-edit-ev]").forEach(b => b.onclick = () => openEventForm(c, b.dataset.editEv));
+  main.querySelectorAll("[data-ev]").forEach(el => el.addEventListener("click", () => openEventForm(c, el.dataset.ev)));
+  main.querySelectorAll("[data-edit-sec]").forEach(el => el.onclick = () => editSection(c, el.dataset.editSec, el));
+  $("edit-folder").onclick = () => openFolderForm(c);
+  $("wf-ind").onchange = async e => { if (await patchCase(c.id, { indicationsConf: e.target.value })) { render(); toast("Indications conference: " + (e.target.value || "cleared") + "."); } };
+  $("wf-ra").onchange = async e => { if (await patchCase(c.id, { raResponsible: e.target.value })) { render(); toast(e.target.value ? e.target.value + " is now responsible for this case." : "RA unassigned."); } };
+  main.querySelectorAll("[data-flag]").forEach(el => {
+    const flip = async () => { const k = el.dataset.flag; const v = !x[k]; if (await patchCase(c.id, { [k]: v })) { render(); toast((k === "photosPulled" ? "Photos / video pulled" : "Presentation drafted") + (v ? " ✓ — case moved along on the Board." : " — unchecked.")); } };
+    el.onclick = flip; el.onkeydown = e => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); flip(); } };
+  });
+  $("wf-presented").onchange = async e => {
+    const v = e.target.value.trim();
+    const found = scanPHI(v);
+    if (found.length) { toast(phiMessage(found) + " Not saved."); e.target.value = x.presentedAt || ""; return; }
+    if (await patchCase(c.id, { presentedAt: v })) { render(); toast(v ? "Marked as presented — it's in the Presented column on the Board." : "Presentation cleared."); }
+  };
+}
+
+// Inline section editor with a PHI tripwire before saving.
+function editSection(c, key, el) {
+  const x = d(c);
+  const sec = el.closest(".sec");
+  sec.innerHTML = `<div class="sec-label">${esc(SECTIONS.find(s => s[0] === key)[1])}</div>
+    <textarea rows="5" id="sec-ta">${esc(x[key] || "")}</textarea>
+    <div id="sec-warn"></div>
+    <div style="display:flex;gap:8px;margin-top:8px"><button class="btn small" id="sec-save">Save</button><button class="btn secondary small" id="sec-cancel">Cancel</button></div>`;
+  const ta = $("sec-ta"); ta.focus();
+  let override = false;
+  $("sec-cancel").onclick = () => render();
+  $("sec-save").onclick = async () => {
+    const v = ta.value.replace(/\s+$/, "");
+    const found = scanPHI(v);
+    if (found.length && !override) {
+      $("sec-warn").innerHTML = `<div class="warnbox"><b>Check for PHI.</b> ${esc(phiMessage(found))} Remove it, or click Save again if it's not identifying.</div>`;
+      override = true; return;
+    }
+    if (await patchCase(c.id, { [key]: v })) { render(); toast("Saved."); }
+  };
+}
+
+/* ============ Sheets (modals) ============ */
+function openSheet(title, bodyHTML, footHTML, wide) {
+  closeSheet();
+  const root = $("sheet-root");
+  root.innerHTML = `<div class="scrim"><div class="sheet ${wide ? "wide" : ""}" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+    <div class="sheet-head"><h3>${esc(title)}</h3><button class="btn ghost" data-close>Close</button></div>
+    <div class="sheet-body">${bodyHTML}</div>
+    ${footHTML ? `<div class="sheet-foot">${footHTML}</div>` : ""}</div></div>`;
+  root.querySelector("[data-close]").onclick = closeSheet;
+  root.querySelector(".scrim").addEventListener("mousedown", e => { if (e.target.classList.contains("scrim")) closeSheet(); });
+  return root;
+}
+function closeSheet() { $("sheet-root").innerHTML = ""; }
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet(); });
+
+function datalist(id, values) { return `<datalist id="${id}">${values.map(v => `<option value="${esc(v)}">`).join("")}</datalist>`; }
+
+// New case and Edit details share this form. On a new case the real dates are typed here,
+// converted to days-from-surgery, and dropped.
+function openCaseForm(c) {
+  const isNew = !c, x = c ? d(c) : {};
+  const body = `
+    <label class="f">Teaching title</label>
+    <input id="cf-title" placeholder="e.g. Recurrent instability with trochlear dysplasia" value="${esc(x.title || "")}">
+    <div class="two">
+      <div><label class="f">Primary op</label><input id="cf-op" list="dl-procs" value="${esc(x.primaryOp || "")}" placeholder="Pick or type">${datalist("dl-procs", allProcedures())}</div>
+      <div><label class="f">Diagnosis</label><input id="cf-dx" value="${esc(x.diagnosis || "")}" placeholder="e.g. Patellar instability"></div>
+    </div>
+    <div class="three">
+      <div><label class="f">Region</label><select id="cf-region">${optionList(REGIONS, x.region || "", "—")}</select></div>
+      <div><label class="f">Side</label><select id="cf-side">${optionList(SIDES, x.side || "", "—")}</select></div>
+      <div><label class="f">Tags</label><input id="cf-tags" value="${esc((x.tags || []).join(", "))}" placeholder="comma, separated"></div>
+    </div>
+    <div class="three">
+      <div><label class="f">Age</label><select id="cf-age">${optionList(AGE_BANDS, x.ageBand || "", "—")}</select></div>
+      <div><label class="f">Sex</label><select id="cf-sex">${optionList(SEXES, x.sex || "", "—")}</select></div>
+      <div><label class="f">RA responsible</label><select id="cf-ra">${optionList(raNames(), x.raResponsible || "", "Unassigned")}</select></div>
+    </div>
+    ${isNew ? `
+    <div class="datebox">
+      <div class="two">
+        <div><label class="f">Date of surgery (DOS)</label><input type="date" id="cf-dos"></div>
+        <div><label class="f">Date of visit</label><input type="date" id="cf-visit"></div>
+        <div><label class="f">DOS 2 <span class="hint">(optional)</span></label><input type="date" id="cf-dos2"></div>
+        <div><label class="f">DOS 3 <span class="hint">(optional)</span></label><input type="date" id="cf-dos3"></div>
+      </div>
+      <div class="hint">🔒 Dates are converted to time from surgery (e.g. “+6 wk”) and only the surgery year is saved. Keep the real dates in the key sheet on the Rush drive.</div>
+    </div>
+    <label class="f">Indications conference</label>
+    <select id="cf-ind">${optionList(["Pending", "Yes", "No"], "", "—")}</select>` : `
+    <label class="f">Surgery year</label><input id="cf-year" inputmode="numeric" maxlength="4" value="${esc(x.surgeryYear || "")}">`}
+    <div id="cf-warn"></div>`;
+  const root = openSheet(isNew ? "New teaching case" : "Edit details — " + caseLabel(c), body,
+    `<button class="btn secondary" data-close2>Cancel</button><button class="btn" id="cf-save">${isNew ? "Create case" : "Save"}</button>`);
+  root.querySelector("[data-close2]").onclick = closeSheet;
+  let override = false;
+  $("cf-save").onclick = async () => {
+    const v = id => ($(id) ? $(id).value.trim() : "");
+    const patch = {
+      title: v("cf-title"), primaryOp: v("cf-op"), diagnosis: v("cf-dx"), region: v("cf-region"), side: v("cf-side"),
+      ageBand: v("cf-age"), sex: v("cf-sex"), raResponsible: v("cf-ra"),
+      tags: v("cf-tags").split(",").map(s => s.trim()).filter(Boolean)
+    };
+    const found = scanPHI([patch.title, patch.diagnosis, patch.tags.join(" ")].join(" \n "));
+    if (found.length && !override) { $("cf-warn").innerHTML = `<div class="warnbox"><b>Check for PHI.</b> ${esc(phiMessage(found))} Fix it, or click again to save anyway.</div>`; override = true; return; }
+    if (!isNew) {
+      const y = v("cf-year");
+      if (y && !/^(19|20)\d{2}$/.test(y)) { $("cf-warn").innerHTML = `<div class="warnbox">Surgery year should be four digits, e.g. 2024.</div>`; return; }
+      patch.surgeryYear = y ? Number(y) : null;
+      if (await patchCase(c.id, patch)) { closeSheet(); render(); toast("Details saved."); }
+      return;
+    }
+    const dos = v("cf-dos"), visit = v("cf-visit"), dos2 = v("cf-dos2"), dos3 = v("cf-dos3");
+    if (!dos && (visit || dos2 || dos3)) { $("cf-warn").innerHTML = `<div class="warnbox">Enter the date of surgery first — the other dates are measured from it.</div>`; return; }
+    patch.indicationsConf = v("cf-ind");
+    patch.events = buildDateEvents({ dos, visit, dos2, dos3, primaryOp: patch.primaryOp });
+    if (dos) patch.surgeryYear = yearOfDayNumber(toDayNumber(dos));
+    $("cf-save").disabled = true;
+    const row = await createCase(patch);
+    $("cf-save").disabled = false;
+    if (!row) return;
+    if (dos) sessionDOS[row.id] = dos;
+    closeSheet();
+    go("cases", row.id);
+    toast(caseLabel(row) + " created — name its Rush drive folder " + caseLabel(row) + " and add it to the key sheet.");
+  };
+}
+function buildDateEvents({ dos, visit, dos2, dos3, primaryOp }) {
+  const ev = {};
+  if (!dos) return ev;
+  ev[uid()] = { type: "surgery", day: 0, index: true, label: primaryOp || "Index surgery" };
+  const add = (val, type, label) => { const r = relDays(val, dos); if (r != null) ev[uid()] = { type, day: r, label }; };
+  add(visit, "visit", "Clinic visit");
+  add(dos2, "surgery", "Surgery 2");
+  add(dos3, "surgery", "Surgery 3");
+  return ev;
+}
+
+function openFolderForm(c) {
+  const x = d(c);
+  openSheet("Link media folder — " + caseLabel(c), `
+    <div class="hint" style="margin-top:8px">In OneDrive / SharePoint, open the case folder → <b>Share</b> → set to <b>People in Rush / MOR</b> (never “Anyone”) → <b>Copy link</b>, and paste it here. Name the folder <b>${caseLabel(c)}</b>, not with patient details.</div>
+    <label class="f">Folder link</label>
+    <input id="ff-url" placeholder="https://rushortho-my.sharepoint.com/…" value="${esc(x.folderUrl || "")}">
+    <div id="ff-warn"></div>`,
+    `${x.folderUrl ? `<button class="btn secondary" id="ff-clear">Remove link</button>` : ""}<button class="btn" id="ff-save">Save link</button>`);
+  const inp = $("ff-url");
+  const check = () => { const w = folderLinkWarning(inp.value.trim()); $("ff-warn").innerHTML = w ? `<div class="warnbox">${esc(w)}</div>` : ""; return w; };
+  inp.oninput = check;
+  let override = false;
+  $("ff-save").onclick = async () => {
+    const url = inp.value.trim();
+    const w = check();
+    if (w && /isn't a full link|https:\/\//.test(w)) return;
+    if (w && !override) { override = true; $("ff-warn").innerHTML += `<div class="hint" style="margin-top:6px">Click Save again to keep it anyway.</div>`; return; }
+    if (await patchCase(c.id, { folderUrl: url })) { closeSheet(); render(); toast("Folder linked — “Open ↗” on the case takes you there."); }
+  };
+  const cl = $("ff-clear");
+  if (cl) cl.onclick = async () => { const old = x.folderUrl; if (await patchCase(c.id, { folderUrl: "" })) { closeSheet(); render(); toastAction("Link removed.", "Undo", async () => { await patchCase(c.id, { folderUrl: old }); render(); }); } };
+}
+
+// Event form: "when" can be a real date (converted using the DOS, which is never saved) or an
+// interval typed directly ("6 weeks after").
+function openEventForm(c, evId) {
+  const e = evId ? Object.assign({ id: evId }, (d(c).events || {})[evId]) : { type: "visit", day: null };
+  const hasDos = !!sessionDOS[c.id];
+  const body = `
+    <div class="two">
+      <div><label class="f">Type</label><select id="ef-type">${Object.keys(EVENT_TYPES).map(k => `<option value="${k}" ${e.type === k ? "selected" : ""}>${EVENT_TYPES[k].label}</option>`).join("")}</select></div>
+      <div><label class="f">Label</label><input id="ef-label" value="${esc(e.label || "")}" placeholder="e.g. 6-week post-op, MRI, KOOS 82"></div>
+    </div>
+    <label class="f">When</label>
+    <div class="seg" id="ef-mode"><button data-m="interval" class="${hasDos ? "" : "on"}">Time from surgery</button><button data-m="date" class="${hasDos ? "on" : ""}">Use dates</button></div>
+    <div id="ef-interval" class="${hasDos ? "hidden" : ""}" style="margin-top:8px">
+      <div class="three">
+        <input id="ef-n" type="number" min="0" step="1" value="${e.day != null ? intervalOf(e.day).n : ""}" placeholder="6">
+        <select id="ef-unit">${["days", "weeks", "months", "years"].map(u => `<option ${e.day != null && intervalOf(e.day).unit === u ? "selected" : ""}>${u}</option>`).join("")}</select>
+        <select id="ef-dir"><option value="after" ${e.day != null && e.day < 0 ? "" : "selected"}>after surgery</option><option value="before" ${e.day != null && e.day < 0 ? "selected" : ""}>before surgery</option></select>
+      </div>
+      <div class="hint" style="margin-top:4px">0 = day of the index surgery.</div>
+    </div>
+    <div id="ef-date" class="datebox ${hasDos ? "" : "hidden"}">
+      <div class="two">
+        <div><label class="f">Date of index surgery</label><input type="date" id="ef-dos" value="${esc(sessionDOS[c.id] || "")}"></div>
+        <div><label class="f">Date of this event</label><input type="date" id="ef-when"></div>
+      </div>
+      <div class="hint">🔒 Only the difference is saved (e.g. “+6 wk”). The surgery date is remembered until you close this tab, then forgotten.</div>
+    </div>
+    <label class="f">Notes</label>
+    <textarea id="ef-notes" rows="3" placeholder="Findings, PROM scores, what was done…">${esc(e.notes || "")}</textarea>
+    <div id="ef-warn"></div>`;
+  openSheet(evId ? "Edit event" : "Add event — " + caseLabel(c), body,
+    `${evId ? `<button class="btn secondary" id="ef-remove" style="margin-right:auto">Remove</button>` : ""}<button class="btn" id="ef-save">${evId ? "Save" : "Add to timeline"}</button>`);
+  let mode = hasDos ? "date" : "interval";
+  $("ef-mode").querySelectorAll("button").forEach(b => b.onclick = () => {
+    mode = b.dataset.m;
+    $("ef-mode").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+    $("ef-interval").classList.toggle("hidden", mode !== "interval");
+    $("ef-date").classList.toggle("hidden", mode !== "date");
+  });
+  let override = false;
+  $("ef-save").onclick = async () => {
+    let day;
+    if (mode === "date") {
+      const dos = $("ef-dos").value, when = $("ef-when").value;
+      if (!dos || !when) { $("ef-warn").innerHTML = `<div class="warnbox">Enter both dates — or switch to “Time from surgery”.</div>`; return; }
+      day = relDays(when, dos);
+      sessionDOS[c.id] = dos;
+    } else {
+      const n = Number($("ef-n").value);
+      if ($("ef-n").value === "" || isNaN(n) || n < 0) { $("ef-warn").innerHTML = `<div class="warnbox">Enter how long before or after surgery.</div>`; return; }
+      const mult = { days: 1, weeks: 7, months: 30.44, years: 365.25 }[$("ef-unit").value];
+      day = Math.round(n * mult) * ($("ef-dir").value === "before" ? -1 : 1);
+    }
+    const label = $("ef-label").value.trim(), notes = $("ef-notes").value.trim();
+    const found = scanPHI(label + "\n" + notes);
+    if (found.length && !override) { $("ef-warn").innerHTML = `<div class="warnbox"><b>Check for PHI.</b> ${esc(phiMessage(found))} Fix it, or click again to save anyway.</div>`; override = true; return; }
+    const ev = { type: $("ef-type").value, day, label, notes };
+    if (evId && e.index) ev.index = true;
+    const patch = { events: { [evId || uid()]: ev } };
+    if (mode === "date" && !d(c).surgeryYear) patch.surgeryYear = yearOfDayNumber(toDayNumber($("ef-dos").value));
+    if (await patchCase(c.id, patch)) { closeSheet(); render(); toast((evId ? "Event updated" : "Added to the timeline") + " at " + fmtRel(day) + "."); }
+  };
+  const rm = $("ef-remove");
+  if (rm) rm.onclick = async () => {
+    const old = (d(c).events || {})[evId];
+    if (await patchCase(c.id, { events: { [evId]: Object.assign({}, old, { archived: true }) } })) {
+      closeSheet(); render();
+      toastAction("Event removed from the timeline.", "Undo", async () => { await patchCase(c.id, { events: { [evId]: Object.assign({}, old, { archived: false }) } }); render(); toast("Event restored."); });
+    }
+  };
+}
+function intervalOf(day) {
+  const a = Math.abs(day);
+  if (a && a % 365 === 0) return { n: a / 365, unit: "years" };
+  if (a >= 60 && Math.abs(a / 30.44 - Math.round(a / 30.44)) < 0.05) return { n: Math.round(a / 30.44), unit: "months" };
+  if (a && a % 7 === 0) return { n: a / 7, unit: "weeks" };
+  return { n: a, unit: "days" };
+}
+
+/* ============ Journeys (all cases, aligned at surgery) ============ */
+function renderJourneys(main) {
+  const usedProcs = [...new Set(cases.map(c => d(c).primaryOp).filter(Boolean))].sort();
+  const list = cases.filter(c => !c.archived && liveEvents(c).length &&
+    (!journeyFilters.region || d(c).region === journeyFilters.region) &&
+    (!journeyFilters.procedure || d(c).primaryOp === journeyFilters.procedure));
+  let body;
+  if (!list.length) {
+    body = `<div class="empty"><h3>No journeys to show</h3>Cases appear here once they have timeline events.</div>`;
+  } else {
+    const all = list.flatMap(liveEvents);
+    const minD = Math.min(...all.map(e => e.day)), maxD = Math.max(...all.map(e => e.day));
+    const W = 1180, L = 320, R = 30, LANE = 44, TOP = 10;
+    const sc = makeScale(minD, maxD, L, W - R);
+    const H = TOP + list.length * LANE + 30;
+    const lanes = list.map((c, i) => {
+      const y = TOP + i * LANE + LANE / 2, x = d(c), evs = liveEvents(c);
+      const span = evs.length > 1 ? `<line x1="${sc(evs[0].day)}" x2="${sc(evs[evs.length - 1].day)}" y1="${y}" y2="${y}" stroke="var(--text2)" stroke-opacity=".35" stroke-width="2"/>` : "";
+      return `<text class="tl-lane-lbl" x="10" y="${y - 3}" data-open="${c.id}">${esc(caseLabel(c))} · ${esc(trunc(x.title || x.primaryOp || "", 30))}</text>
+        <text class="tl-lane-sub" x="10" y="${y + 12}">${esc(trunc([x.primaryOp, x.ageBand, x.sex].filter(Boolean).join(" · "), 46))}</text>
+        ${span}
+        ${evs.map(e => `${markSVG(e, sc(e.day), y, 6)}<circle class="tl-hit" cx="${sc(e.day)}" cy="${y}" r="12" data-tip="${esc(`<b>${esc(caseLabel(c))}</b>` + tipHTML(c, e))}" data-open="${c.id}"/>`).join("")}`;
+    }).join("");
+    body = `<div class="panel" style="overflow-x:auto"><svg class="tl-svg" viewBox="0 0 ${W} ${H}" style="min-width:760px" role="img" aria-label="Patient journeys aligned at surgery">
+      ${list.map((c, i) => i % 2 ? "" : `<rect class="tl-lane-bg" x="0" y="${TOP + i * LANE}" width="${W}" height="${LANE}" rx="6"/>`).join("")}
+      ${tickSVG(sc, minD, maxD, TOP, H - 30)}
+      ${lanes}
+    </svg>${legendHTML(all)}</div>
+    <div class="hint">Every case is lined up at its index surgery (Day 0) so you can compare courses side by side. Hover a marker for details; click a case to open it.</div>`;
+  }
+  main.innerHTML = `
+    <div class="filters">
+      <select id="j-region">${optionList(REGIONS, journeyFilters.region, "All regions")}</select>
+      <select id="j-proc">${optionList(usedProcs, journeyFilters.procedure, "All procedures")}</select>
+      <span class="hint">${list.length} case${list.length === 1 ? "" : "s"}</span>
+    </div>${body}`;
+  $("j-region").onchange = e => { journeyFilters.region = e.target.value; render(); };
+  $("j-proc").onchange = e => { journeyFilters.procedure = e.target.value; render(); };
+  bindTips(main);
+  main.querySelectorAll("[data-open]").forEach(el => el.addEventListener("click", () => { $("tip").classList.remove("show"); go("cases", el.dataset.open); }));
+}
+
+/* ============ Board ============ */
+function renderBoard(main) {
+  const list = cases.filter(c => !c.archived);
+  const ed = canEdit();
+  main.innerHTML = `<div class="board">${STAGES.map((s, si) => {
+    const inCol = list.filter(c => stageOf(c) === s.key);
+    return `<div class="col" data-stage="${s.key}"><h3><span style="color:${STAGE_COLORS[s.key]}">●</span>${esc(s.label)} <span class="count">${inCol.length}</span></h3>
+      ${inCol.map(c => { const x = d(c); return `<div class="bcard" draggable="${ed}" data-id="${c.id}">
+        <div class="cno">${caseLabel(c)}</div><div class="ctitle">${esc(trunc(x.title || x.primaryOp || "Untitled", 60))}</div>
+        <div class="row"><span class="cmeta" style="flex:1">${esc(x.raResponsible || "Unassigned")}</span>
+        ${ed && si < STAGES.length - 1 ? `<button class="btn ghost small" data-next="${c.id}" title="Move to ${esc(STAGES[si + 1].label)}">Next ›</button>` : ""}</div></div>`; }).join("")}
+    </div>`; }).join("")}</div>
+    <div class="hint" style="margin-top:8px">${ed ? "Drag a card to another column, or tap “Next ›”. " : ""}Stages follow the Workflow checkboxes on each case.</div>`;
+  main.querySelectorAll(".bcard").forEach(el => {
+    el.addEventListener("click", e => { if (!e.target.closest("[data-next]")) go("cases", el.dataset.id); });
+    el.addEventListener("dragstart", e => e.dataTransfer.setData("text/plain", el.dataset.id));
+  });
+  main.querySelectorAll("[data-next]").forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const c = cases.find(x => x.id === b.dataset.next);
+    const i = STAGES.findIndex(s => s.key === stageOf(c));
+    moveStage(c, STAGES[i + 1].key);
+  });
+  if (!ed) return;
+  main.querySelectorAll(".col").forEach(col => {
+    col.addEventListener("dragover", e => { e.preventDefault(); col.classList.add("drop"); });
+    col.addEventListener("dragleave", () => col.classList.remove("drop"));
+    col.addEventListener("drop", e => {
+      e.preventDefault(); col.classList.remove("drop");
+      const c = cases.find(x => x.id === e.dataTransfer.getData("text/plain"));
+      if (c && stageOf(c) !== col.dataset.stage) moveStage(c, col.dataset.stage);
+    });
+  });
+}
+async function moveStage(c, stageKey) {
+  const before = {}; const p = stagePatch(stageKey, c);
+  Object.keys(p).forEach(k => before[k] = d(c)[k] == null ? "" : d(c)[k]);
+  if (await patchCase(c.id, p)) {
+    render();
+    toastAction(caseLabel(c) + " → " + STAGES.find(s => s.key === stageKey).label + ".", "Undo", async () => { await patchCase(c.id, before); render(); toast("Moved back."); });
+  }
+}
+
+/* ============ Access (owner) ============ */
+function renderAccess(main) {
+  const byId = Object.fromEntries(accessRows.map(r => [r.user_id, r]));
+  const nameOf = r => { const p = profiles.find(x => x.id === r.user_id); return (p && p.name) || r.name || r.email || "Unknown"; };
+  const requests = accessRows.filter(r => r.role === "requested");
+  const members = accessRows.filter(r => ["viewer", "editor", "owner"].includes(r.role));
+  const revoked = accessRows.filter(r => r.role === "revoked");
+  const addable = profiles.filter(p => !byId[p.id] || byId[p.id].role === "revoked");
+  main.innerHTML = `
+    ${requests.length ? `<div class="panel"><h2>Requests waiting</h2>
+      <table class="t"><tbody>${requests.map(r => `<tr><td><b>${esc(nameOf(r))}</b><div class="hint">${esc(r.email || "")}</div></td>
+        <td style="text-align:right;white-space:nowrap"><button class="btn small" data-grant="${r.user_id}" data-role="viewer">Approve (view)</button>
+        <button class="btn secondary small" data-grant="${r.user_id}" data-role="editor">Approve (edit)</button>
+        <button class="btn ghost small" data-grant="${r.user_id}" data-role="revoked">Decline</button></td></tr>`).join("")}</tbody></table></div>` : ""}
+    <div class="panel"><h2>People with access</h2>
+      <div class="tscroll"><table class="t"><thead><tr><th>Person</th><th>Access</th></tr></thead><tbody>
+      ${members.map(r => `<tr><td><b>${esc(nameOf(r))}</b><div class="hint">${esc(r.email || "")}</div></td>
+        <td><select data-role-for="${r.user_id}">${[["viewer", "Can view"], ["editor", "Can edit"], ["owner", "Owner (approves people)"], ["revoked", "Remove access"]]
+          .map(([k, l]) => `<option value="${k}" ${r.role === k ? "selected" : ""}>${l}</option>`).join("")}</select></td></tr>`).join("")}
+      </tbody></table></div>
+      <div class="hint" style="margin-top:8px"><b>View</b> — read cases and open media links. <b>Edit</b> — add and change cases. <b>Owner</b> — also approves people. Media folders still need their own Rush drive sharing.</div>
+    </div>
+    <div class="panel"><h2>Add someone</h2>
+      ${addable.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap"><select id="add-person" style="max-width:320px">${addable.map(p => `<option value="${p.id}">${esc(p.name || p.email)}${p.email && p.name ? " — " + esc(p.email) : ""}</option>`).join("")}</select>
+        <select id="add-role" style="width:auto"><option value="viewer">Can view</option><option value="editor">Can edit</option></select>
+        <button class="btn" id="add-go">Give access</button></div>` : `<div class="hint">Everyone with a Research Tracker account already has access.</div>`}
+      <div class="hint" style="margin-top:8px">Only people with a Research Tracker account appear here. Invite new people from the tracker's Settings first.</div>
+    </div>
+    ${revoked.length ? `<div class="panel"><h2>Previously removed</h2><div class="hint">${revoked.map(r => esc(nameOf(r))).join(", ")} — re-add them above.</div></div>` : ""}`;
+  main.querySelectorAll("[data-grant]").forEach(b => b.onclick = () => setAccess(b.dataset.grant, b.dataset.role));
+  main.querySelectorAll("[data-role-for]").forEach(s => s.onchange = () => setAccess(s.dataset.roleFor, s.value));
+  const ag = $("add-go");
+  if (ag) ag.onclick = () => setAccess($("add-person").value, $("add-role").value);
+}
+async function setAccess(userId, role) {
+  const p = profiles.find(x => x.id === userId) || {};
+  const existing = accessRows.find(r => r.user_id === userId);
+  const res = existing
+    ? await sb.from("case_access").update({ role, granted_by: currentUser.id }).eq("user_id", userId)
+    : await sb.from("case_access").insert({ user_id: userId, email: p.email || "", name: p.name || "", role, granted_by: currentUser.id });
+  if (res.error) { toast("Not changed: " + res.error.message); await loadAccess(); render(); return; }
+  await loadAccess();
+  render();
+  const who = p.name || p.email || "They";
+  toast(role === "revoked" ? who + "'s access removed — re-add them under Add someone." :
+        role === "owner" ? who + " is now an owner and can approve people." :
+        who + (role === "editor" ? " can now view and edit cases." : " can now view cases."));
+}
+
+/* ============ Spreadsheet import ============ */
+// Column headers from the existing tracking sheet. Patient and MRN are read ONLY to build a key
+// sheet the user downloads to their own computer — they are never sent to the database.
+const IMPORT_COLUMNS = {
+  caseId: ["case id", "case", "case #", "case no"],
+  patient: ["patient", "patient name", "name"],
+  mrn: ["mrn", "medical record number"],
+  indicationsConf: ["indications conf?", "indications conf", "indications conference", "indications"],
+  raResponsible: ["ra responsible", "ra", "research assistant"],
+  primaryOp: ["primary op", "primary operation", "procedure", "primary procedure"],
+  dos: ["dos", "date of surgery", "dos 1", "dos1"],
+  dos2: ["dos 2", "dos2"],
+  dos3: ["dos 3", "dos3"],
+  visit: ["date of visit", "visit date", "visit"],
+  photosPulled: ["pulled photos/vids?", "pulled photos/vids", "pulled photos", "photos pulled", "pulled photos/videos?"],
+  presentationDrafted: ["presentation drafted", "presentation drafted?", "drafted"]
+};
+const PHI_IMPORT_KEYS = ["patient", "mrn"];
+function normHeader(h) { return String(h || "").trim().toLowerCase().replace(/\s+/g, " "); }
+function mapHeaders(headers) {
+  const map = {}, ignored = [];
+  headers.forEach((h, i) => {
+    const n = normHeader(h);
+    const key = Object.keys(IMPORT_COLUMNS).find(k => IMPORT_COLUMNS[k].includes(n));
+    if (key && map[key] == null) map[key] = i; else if (n) ignored.push(h);
+  });
+  return { map, ignored };
+}
+function truthy(v) { return /^(y|yes|x|✓|✔|true|done|1|complete|completed)$/i.test(String(v == null ? "" : v).trim()); }
+function indicationsValue(v) {
+  const s = String(v == null ? "" : v).trim();
+  if (!s) return "";
+  if (truthy(s)) return "Yes";
+  if (/^(n|no|false|0)$/i.test(s)) return "No";
+  return "Pending";
+}
+function parseCSV(text) {
+  const rows = []; let row = [], cell = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (q) {
+      if (ch === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else q = false; }
+      else cell += ch;
+    } else if (ch === '"') q = true;
+    else if (ch === ",") { row.push(cell); cell = ""; }
+    else if (ch === "\n" || ch === "\r") { if (ch === "\r" && text[i + 1] === "\n") i++; row.push(cell); rows.push(row); row = []; cell = ""; }
+    else cell += ch;
+  }
+  if (cell !== "" || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(c => String(c).trim() !== ""));
+}
+// Turn sheet rows into case records + the private key-sheet rows.
+function rowsToImport(rows) {
+  if (!rows.length) return { items: [], ignored: [], map: {} };
+  const { map, ignored } = mapHeaders(rows[0]);
+  const get = (r, k) => map[k] == null ? "" : r[map[k]];
+  const items = rows.slice(1).map((r, i) => {
+    const dos = get(r, "dos");
+    const primaryOp = String(get(r, "primaryOp") || "").trim();
+    const data = {
+      title: "",
+      primaryOp,
+      raResponsible: String(get(r, "raResponsible") || "").trim(),
+      indicationsConf: indicationsValue(get(r, "indicationsConf")),
+      photosPulled: truthy(get(r, "photosPulled")),
+      presentationDrafted: truthy(get(r, "presentationDrafted")),
+      events: buildDateEvents({ dos, visit: get(r, "visit"), dos2: get(r, "dos2"), dos3: get(r, "dos3"), primaryOp })
+    };
+    const dn = toDayNumber(dos);
+    if (dn != null) data.surgeryYear = yearOfDayNumber(dn);
+    return {
+      line: i + 2,
+      caseId: String(get(r, "caseId") || "").trim().toUpperCase(),
+      data,
+      hasDos: dn != null,
+      key: { patient: get(r, "patient"), mrn: get(r, "mrn"), dos: fmtKeyDate(dos), dos2: fmtKeyDate(get(r, "dos2")), dos3: fmtKeyDate(get(r, "dos3")), visit: fmtKeyDate(get(r, "visit")) }
+    };
+  }).filter(it => it.data.primaryOp || it.key.patient || it.key.mrn || it.hasDos);
+  return { items, ignored, map };
+}
+function fmtKeyDate(v) {
+  const n = toDayNumber(v);
+  if (n == null) return v == null ? "" : String(v);
+  const dt = new Date(n * 864e5);
+  return (dt.getUTCMonth() + 1) + "/" + dt.getUTCDate() + "/" + dt.getUTCFullYear();
+}
+function csvCell(v) { const s = String(v == null ? "" : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+
+let importState = null;
+function openImport() {
+  importState = null;
+  openSheet("Import tracking spreadsheet", `
+    <div class="hint" style="margin-top:8px">Choose your .xlsx or .csv. Recognised columns: <b>Patient, MRN, Indications Conf?, RA Responsible, primary op, DOS, DOS 2, DOS 3, Date of Visit, Pulled photos/vids?, Presentation drafted</b> (and <b>Case ID</b> to update existing cases).</div>
+    <div class="datebox"><div class="hint">🔒 The file is read in your browser. <b>Patient</b> and <b>MRN</b> are never uploaded, and dates are converted to time from surgery. You'll get a key sheet linking each new case number to its patient — save that to the Rush drive.</div></div>
+    <label class="f">Spreadsheet</label>
+    <input type="file" id="imp-file" accept=".xlsx,.xls,.csv,text/csv">
+    <div id="imp-preview"></div>`,
+    `<button class="btn" id="imp-go" disabled>Import</button>`, true);
+  $("imp-file").onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    $("imp-preview").innerHTML = `<div class="hint" style="margin-top:10px">Reading…</div>`;
+    try {
+      const rows = await readSheetFile(f);
+      importState = rowsToImport(rows);
+      renderImportPreview();
+    } catch (err) {
+      $("imp-preview").innerHTML = `<div class="warnbox">Couldn't read that file: ${esc(err.message)}</div>`;
+    }
+  };
+  $("imp-go").onclick = runImport;
+}
+async function readSheetFile(f) {
+  if (/\.csv$/i.test(f.name) || f.type === "text/csv") return parseCSV(await f.text());
+  if (!window.XLSX) await loadScript(XLSX_LIB_URL, 15000);
+  const wb = window.XLSX.read(await f.arrayBuffer(), { type: "array" });
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  return window.XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: "" });
+}
+function renderImportPreview() {
+  const { items, ignored, map } = importState;
+  const existing = new Set(cases.map(caseLabel));
+  items.forEach(it => { it.update = !!(it.caseId && existing.has(it.caseId)); });
+  const missing = ["primaryOp", "dos"].filter(k => map[k] == null);
+  $("imp-preview").innerHTML = `
+    ${missing.length ? `<div class="warnbox">Couldn't find a column for: ${missing.map(k => IMPORT_COLUMNS[k][0]).join(", ")}.</div>` : ""}
+    ${ignored.length ? `<div class="hint" style="margin-top:8px">Ignored columns: ${esc(ignored.join(", "))}</div>` : ""}
+    <div class="hint" style="margin:10px 0 6px"><b>${items.length}</b> rows · ${items.filter(i => i.update).length} update existing cases · ${items.filter(i => !i.hasDos).length} without a surgery date (no timeline)</div>
+    <div class="tscroll" style="max-height:340px;overflow-y:auto"><table class="t"><thead><tr><th>Row</th><th>Becomes</th><th>Primary op</th><th>Year</th><th>Timeline</th><th>RA</th><th>Ind.</th><th>Media</th><th>Drafted</th></tr></thead><tbody>
+    ${items.map(it => `<tr><td>${it.line}</td><td>${it.update ? esc(it.caseId) + " (update)" : "New case"}</td><td>${esc(it.data.primaryOp || "—")}</td>
+      <td>${esc(it.data.surgeryYear || "—")}</td><td>${Object.values(it.data.events).map(e => fmtRel(e.day)).join(", ") || "—"}</td>
+      <td>${esc(it.data.raResponsible || "—")}</td><td>${esc(it.data.indicationsConf || "—")}</td><td>${it.data.photosPulled ? "✓" : ""}</td><td>${it.data.presentationDrafted ? "✓" : ""}</td></tr>`).join("")}
+    </tbody></table></div>
+    <div class="hint" style="margin-top:8px">Patient names and MRNs are not shown or uploaded.</div>`;
+  $("imp-go").disabled = !items.length;
+}
+async function runImport() {
+  if (!importState || !importState.items.length) return;
+  const btn = $("imp-go"); btn.disabled = true;
+  const keyRows = [];
+  let made = 0, updated = 0, failed = 0;
+  for (const it of importState.items) {
+    btn.textContent = "Importing " + (made + updated + failed + 1) + " of " + importState.items.length + "…";
+    let row;
+    if (it.update) {
+      const c = cases.find(x => caseLabel(x) === it.caseId);
+      const p = Object.assign({}, it.data);
+      delete p.title;
+      if (liveEvents(c).length) delete p.events;      // don't duplicate an existing timeline
+      row = await patchCase(c.id, p);
+      if (row) updated++;
+    } else {
+      row = await createCase(it.data);
+      if (row) made++;
+    }
+    if (!row) { failed++; continue; }
+    keyRows.push([caseLabel(row), it.key.patient, it.key.mrn, it.key.dos, it.key.dos2, it.key.dos3, it.key.visit]);
+  }
+  const csv = [["Case ID", "Patient", "MRN", "DOS", "DOS 2", "DOS 3", "Date of Visit"], ...keyRows].map(r => r.map(csvCell).join(",")).join("\r\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  importState = null;
+  openSheet("Import finished", `
+    <p style="margin-top:10px"><b>${made}</b> new case${made === 1 ? "" : "s"}, <b>${updated}</b> updated${failed ? `, <b style="color:var(--danger)">${failed} failed</b>` : ""}.</p>
+    <div class="datebox"><div class="hint" style="color:var(--text)"><b>Download the key sheet now.</b> It links each case number to the patient, MRN and real dates. Save it to the Rush/MOR drive (not your desktop), then delete it from Downloads. Add a <b>Case ID</b> column to your master sheet so future imports update instead of duplicating.</div></div>`,
+    `<a class="btn" href="${url}" download="teaching-cases-key-sheet.csv" id="key-dl">Download key sheet</a>`);
+  $("key-dl").addEventListener("click", () => toast("Key sheet downloaded — move it to the Rush drive."));
+  render();
+  toast("Imported " + (made + updated) + " case" + (made + updated === 1 ? "" : "s") + ".");
+}
+
+/* ============ Wiring ============ */
+$("login-submit").onclick = async () => {
+  const email = $("login-email").value.trim(), password = $("login-password").value;
+  const msg = $("login-msg");
+  if (!email || !password) { msg.className = "msg error"; msg.textContent = "Enter your email and password."; return; }
+  msg.className = "msg"; msg.textContent = "Signing in…";
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) { msg.className = "msg error"; msg.textContent = /invalid/i.test(error.message) ? "That email and password don't match." : error.message; return; }
+  msg.textContent = "";
+  await afterSignIn(data.user);
+};
+$("login-password").addEventListener("keydown", e => { if (e.key === "Enter") $("login-submit").click(); });
+$("request-btn").onclick = requestAccess;
+$("noaccess-signout").onclick = async () => { await sb.auth.signOut(); show("login"); };
+$("new-case-btn").onclick = () => openCaseForm(null);
+
+if (!window.__CASES_TEST__) boot();
+</script>
+</body>
+</html>
