@@ -685,7 +685,26 @@ function upsertProfile(name, extra) {
   p.email = currentUser.email;
   if (name != null) p.name = name;
   if (extra) Object.assign(p, extra);
-  saveLocal(); pushItem("profile", p);
+  saveLocal(); pushProfileKeepingOrgChart(p);
+}
+// Same hazard as deadline links, different record. A profile row carries two kinds of field:
+// yours (name, alert address) and the org chart's (position, who you report to, linked accounts,
+// admin), which only an admin may set. Saving your own profile writes the WHOLE row, so a tab
+// opened before an admin placed you on the org chart would quietly put you back where you were.
+// `admin` is already pinned by a database trigger; these are not, so re-read them before writing.
+const ORG_CHART_FIELDS = ["position", "reportsTo", "linkedTo", "linkedAccountIds", "primary"];
+async function pushProfileKeepingOrgChart(p) {
+  if (sb && !isAdmin()) {
+    try {
+      const { data, error } = await sb.from("items").select("data").eq("id", p.id).maybeSingle();
+      if (!error && data && data.data) {
+        ORG_CHART_FIELDS.forEach(f => {
+          if (data.data[f] !== undefined) p[f] = data.data[f];
+        });
+      }
+    } catch (e) { /* offline — write what we have rather than lose the user's own edit */ }
+  }
+  return pushItem("profile", p);
 }
 // Admin-only edit of somebody else's record (org chart). Kept separate from upsertProfile so
 // the "this is me" path can't accidentally be used to rewrite another person's row.
