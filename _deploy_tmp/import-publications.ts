@@ -93,13 +93,21 @@ const norm = (t: string) =>
   (t || "").toLowerCase().replace(/<[^>]+>/g, " ").replace(/[^a-z0-9 ]+/g, " ")
     .replace(/\s+/g, " ").trim();
 
-function titleOverlap(a: string, b: string): number {
+// Scored against the COMBINED length of both titles, not the shorter one. Dividing by the shorter
+// title gave a perfect score to any short nickname that happened to share a couple of words:
+// "PFA Outcomes" matched a paper on intraoperative planning for tubercle distalisation at 1.0,
+// and "SPE and PHI in Trochlear Dysplasia" matched an unrelated tibial tubercle paper. A tracker
+// title is often a two-word shorthand, so this case is the rule here, not the exception.
+//
+// `hits` is returned alongside because a ratio alone can't tell "two words in common out of three"
+// from "nine out of twelve", and only the second is evidence of the same paper.
+function titleOverlap(a: string, b: string): { score: number; hits: number } {
   const words = (t: string) => new Set(norm(t).split(" ").filter((w) => w.length > 4));
   const A = words(a), B = words(b);
-  if (!A.size || !B.size) return 0;
+  if (!A.size || !B.size) return { score: 0, hits: 0 };
   let hits = 0;
   A.forEach((w) => { if (B.has(w)) hits++; });
-  return hits / Math.min(A.size, B.size);
+  return { score: (2 * hits) / (A.size + B.size), hits };
 }
 
 Deno.serve(async (req) => {
@@ -170,7 +178,13 @@ Deno.serve(async (req) => {
     // goes to Adam rather than being guessed at.
     const scored = studies
       .filter((s) => !s.data?.publication)
-      .map((s) => ({ s, score: titleOverlap(p.title, s.data?.title || "") }))
+      .map((s) => {
+        const direct = titleOverlap(p.title, s.data?.title || "");
+        // A study's nickname is sometimes the only place the real subject is written down, so a
+        // paper may match that where it doesn't match the formal title.
+        const nick = titleOverlap(p.title, s.data?.nickname || "");
+        return { s, ...(nick.score > direct.score ? nick : direct) };
+      })
       .sort((a, b) => b.score - a.score);
     const best = scored[0];
     const second = scored[1];
@@ -180,7 +194,9 @@ Deno.serve(async (req) => {
       authors: p.authors, authorList: p.authorList, importedOn: new Date().toISOString().slice(0, 10),
     };
 
-    if (best && best.score >= 0.75 && (!second || best.score >= second.score * 1.3)) {
+    // Four shared words is the floor: below that a "match" is coincidence between short titles.
+    const CONFIDENT = best && best.score >= 0.6 && best.hits >= 4;
+    if (CONFIDENT && (!second || best.score >= second.score * 1.3)) {
       attached.push({ pmid: p.pmid, title: p.title.slice(0, 70), to: best.s.data.title?.slice(0, 70), overlap: +best.score.toFixed(2) });
       writes.push({
         id: best.s.id, kind: "study", workspace, updated_at: new Date().toISOString(),
@@ -189,7 +205,7 @@ Deno.serve(async (req) => {
       byPmid.set(p.pmid, best.s);
       continue;
     }
-    if (best && best.score >= 0.75) {
+    if (CONFIDENT) {
       ambiguous.push({ pmid: p.pmid, title: p.title.slice(0, 70), candidates: scored.slice(0, 3).map((x) => x.s.data.title?.slice(0, 60)) });
       continue;
     }

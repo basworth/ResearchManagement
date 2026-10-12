@@ -11,19 +11,25 @@ const src = fs.readFileSync(PROJECT + "/supabase/functions/import-publications/i
 // a copy would drift, and then the test would be checking something the function doesn't do.
 const normSrc = src.slice(src.indexOf("const norm ="), src.indexOf("function titleOverlap"));
 const overlapSrc = src.slice(src.indexOf("function titleOverlap"), src.indexOf("Deno.serve"));
-const strip = (t) => t.replace(/: *string/g, "").replace(/: *number/g, "").replace(/\): *\w+ *\{/, ") {");
+// Enough TypeScript stripping to run the real source rather than a copy of it. The return type
+// is an object literal now, so that form has to go too.
+const strip = (t) => t
+  .replace(/\): *\{[^}]*\} *\{/g, ") {")      // ): { score; hits } {
+  .replace(/: *string/g, "").replace(/: *number/g, "")
+  .replace(/\): *\w+ *\{/g, ") {");
 const { norm, titleOverlap } = new Function(strip(normSrc) + strip(overlapSrc) + "; return { norm, titleOverlap };")();
 
 let pass = 0, fail = 0;
 const check = (n, c, d) => c ? (console.log("  ok  ", n), pass++) : (console.log("  FAIL", n, d === undefined ? "" : "->" + JSON.stringify(d)), fail++);
 
 // The thresholds the function uses, restated here so a change to either is deliberate.
-const ATTACH = 0.75, MARGIN = 1.3;
+const ATTACH = 0.6, MIN_HITS = 4, MARGIN = 1.3;
 function decide(paperTitle, studyTitles) {
-  const scored = studyTitles.map(t => ({ t, score: titleOverlap(paperTitle, t) })).sort((a, b) => b.score - a.score);
+  const scored = studyTitles.map(t => ({ t, ...titleOverlap(paperTitle, t) })).sort((a, b) => b.score - a.score);
   const [best, second] = scored;
-  if (best && best.score >= ATTACH && (!second || best.score >= second.score * MARGIN)) return { verdict: "attach", to: best.t, score: +best.score.toFixed(2) };
-  if (best && best.score >= ATTACH) return { verdict: "ambiguous", score: +best.score.toFixed(2) };
+  const confident = best && best.score >= ATTACH && best.hits >= MIN_HITS;
+  if (confident && (!second || best.score >= second.score * MARGIN)) return { verdict: "attach", to: best.t, score: +best.score.toFixed(2) };
+  if (confident) return { verdict: "ambiguous", score: +best.score.toFixed(2) };
   return { verdict: "create", score: best ? +best.score.toFixed(2) : 0 };
 }
 
@@ -53,10 +59,24 @@ check("a paper matching two studies closely is flagged, not attached",
   twins.verdict === "ambiguous", twins);
 
 console.log("\n-- Scoring behaves sensibly --");
-check("identical titles score 1", titleOverlap("Microfracture dead or the future", "Microfracture: dead or the future?") === 1);
-check("nothing in common scores 0", titleOverlap("Rotator cuff repair outcomes", "Ethanol exposure in mice") === 0);
+check("identical titles score 1", titleOverlap("Microfracture dead or the future", "Microfracture: dead or the future?").score === 1);
+check("nothing in common scores 0", titleOverlap("Rotator cuff repair outcomes", "Ethanol exposure in mice").score === 0);
 check("short words are ignored, so 'the' and 'and' can't carry a match",
-  titleOverlap("the and for with of", "the and for with of") === 0);
+  titleOverlap("the and for with of", "the and for with of").score === 0);
+
+console.log("\n-- Short internal nicknames can't win by coincidence --");
+// Both of these scored a PERFECT 1.0 under the old rule, which divided by the shorter title, and
+// would have marked two unrelated live studies as published.
+const nick1 = decide("High Accuracy of Intraoperative Planning for Tibial Tubercle Distalization Osteotomy",
+  ["PFA Outcomes", "Tibial tubercle distalization planning accuracy study"]);
+check("a two-word nickname does not capture a long paper title", nick1.to !== "PFA Outcomes", nick1);
+const nick2 = decide("Tibial Tubercle-Posterior Cruciate Ligament Distance Fails to Capture Patellar Instability",
+  ["SPE and PHI in Trochlear Dysplasia", "Unrelated meniscus work"]);
+check("...nor does a short acronym title", nick2.verdict === "create", nick2);
+check("a genuinely matching long title still attaches",
+  decide("Tibial Tubercle-to-Posterior Cruciate Ligament Measurement in Patellar Instability",
+    ["Tibial Tubercle-to-Posterior Cruciate Ligament Measurement in Patellar Instability Patients",
+     "Something else entirely about rotator cuffs"]).verdict === "attach");
 
 console.log("\n-- The function itself --");
 check("it defaults to NOT writing", /const dryRun = body\.dryRun !== false/.test(src));
