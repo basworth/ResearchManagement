@@ -91,6 +91,28 @@ const text = () => doc.getElementById("main").textContent.replace(/\s+/g, " ");
   check("the fullest spelling of the name wins over the initial", /Divesh Sachdev/.test(names[0]), names[0]);
   check("Smelley is second with two", /Smelley/.test(names[1]), names);
 
+
+  console.log("\n-- Finding a co-author among hundreds --");
+  window.eval("coauthorName = null; coauthorQuery = ''; coauthorsExpanded = false; render();");
+  await wait(100);
+  check("there's a search box over the co-author list", !!doc.getElementById("coauthor-search"));
+  // It's a placeholder, which lives in an attribute rather than the page's text.
+  check("...that says how many there are",
+    /Search 3 co-authors/.test(doc.getElementById("coauthor-search").placeholder),
+    doc.getElementById("coauthor-search").placeholder);
+  window.eval("coauthorQuery = 'smel'; render();");
+  await wait(100);
+  const matches = [...doc.querySelectorAll("[data-coauthor]")].map(e => e.textContent.replace(/\s+/g, " ").trim());
+  check("a partial name narrows the list", matches.length === 1 && /Smelley/.test(matches[0]), matches);
+  check("...and says how many matched", /1 match/.test(text()));
+  window.eval("coauthorQuery = 'zzzz'; render();");
+  await wait(100);
+  check("a name nobody has says so plainly", /Nobody by that name/.test(text()));
+  check("...rather than showing everyone", doc.querySelectorAll("[data-coauthor]").length === 0);
+  window.eval("coauthorQuery = ''; render();");
+  await wait(100);
+  check("clearing the search brings the list back", doc.querySelectorAll("[data-coauthor]").length === 3);
+
   console.log("\n-- One co-author's work with Adam --");
   [...doc.querySelectorAll("[data-coauthor]")].find(e => /Sachdev/.test(e.textContent)).click();
   await wait(120);

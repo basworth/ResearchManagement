@@ -1020,6 +1020,9 @@ let detailStudyId = null;
 // tab so the tab bar doesn't grow an eighth button for something opened a few times a month.
 let showPublications = false;
 let coauthorName = null;
+// 452 co-authors is too many to list, and the person you want is usually someone you can name.
+let coauthorQuery = "";
+let coauthorsExpanded = false;
 // Centralized "navigate into a study" entry point. Resets the collapsible-section state (see
 // sectionStateForStudy / studySectionState below) so every fresh open recomputes open/closed
 // per section from scratch — including reopening the SAME study after leaving it — while
@@ -4244,7 +4247,7 @@ function publicationBodyHTML(s) {
   const cite = [p.journal, p.year].filter(Boolean).join(" · ");
   return `
     <div style="font-size:14px;font-weight:600;line-height:1.4">${esc(p.title || s.title)}</div>
-    ${cite ? `<div style="font-size:13px;color:var(--text2);margin-top:2px">${esc(cite)}</div>` : ""}
+    ${cite ? `<div style="font-size:13px;color:var(--text2);margin-top:2px">${esc(cite)}${(() => { const c = citationsFor(p.pmid); return c == null ? "" : ` · ${c} citation${c === 1 ? "" : "s"} (iCite)`; })()}</div>` : ""}
     ${authors.length ? `
       <div style="font-size:12px;color:var(--text2);font-weight:600;margin:10px 0 4px">Authors (${authors.length})</div>
       <div style="font-size:13.5px;line-height:1.6">${authors.map((a, i) => {
@@ -4598,6 +4601,76 @@ function statTileHTML(big, label, sub) {
     </div>`;
 }
 
+// ---------- Citations, from NIH's iCite ----------
+// iCite publishes citation counts for anything with a PMID, free, no key, and it answers
+// cross-origin — so the app reads it directly. The counts are stored in ONE row alongside the
+// Scholar readings rather than on each of the 276 studies: a refresh would otherwise rewrite
+// every study record, and a citation count is not really a property of the project anyway.
+//
+// These numbers are not Google Scholar's and will be lower. iCite counts citations from
+// PubMed-indexed literature only; Scholar counts books, theses, preprints and much else. Both are
+// kept, labelled, and never averaged together.
+const ICITE_URL = "https://icite.od.nih.gov/api/pubs?pmids=";
+
+function hIndexFrom(counts) {
+  const desc = counts.slice().sort((a, b) => b - a);
+  let h = 0;
+  desc.forEach((c, i) => { if (c >= i + 1) h = i + 1; });
+  return h;
+}
+async function refreshCitations(btn) {
+  const papers = publishedPapers();
+  const pmids = papers.map(x => x.p.pmid).filter(Boolean);
+  if (!pmids.length) { toast("No papers with a PubMed ID yet"); return; }
+  if (btn) { btn.disabled = true; btn.textContent = "Checking…"; }
+  const counts = {};
+  try {
+    for (let i = 0; i < pmids.length; i += 100) {
+      const batch = pmids.slice(i, i + 100);
+      const res = await fetch(ICITE_URL + batch.join(","));
+      if (!res.ok) throw new Error("iCite replied " + res.status);
+      const j = await res.json();
+      (j.data || []).forEach(d => { if (d && d.pmid != null) counts[String(d.pmid)] = Number(d.citation_count) || 0; });
+      if (btn) btn.textContent = `Checking… ${Math.min(i + 100, pmids.length)}/${pmids.length}`;
+    }
+  } catch (e) {
+    console.warn("icite failed", e);
+    toast("Couldn't reach iCite — try again in a moment");
+    if (btn) { btn.disabled = false; btn.textContent = "Refresh citations"; }
+    return;
+  }
+  const list = pmids.map(id => counts[id] ?? 0);
+  const total = list.reduce((a, b) => a + b, 0);
+  const h = hIndexFrom(list);
+  const i10 = list.filter(c => c >= 10).length;
+  const date = todayStr();
+
+  state.scholar = state.scholar || { id: SCHOLAR_ID, points: [] };
+  state.scholar.icite = { asOf: date, counts, total, h, i10, papers: pmids.length };
+  // One reading per source per day, so repeated refreshes don't stack up identical points.
+  state.scholar.points = (state.scholar.points || [])
+    .filter(x => !(x.date === date && x.source === "icite"))
+    .concat([{ date, h, i10, citations: total, source: "icite" }]);
+  saveLocal();
+  pushItem("scholar", state.scholar);
+  render();
+  toast(`Citations updated — h-index ${h} across ${pmids.length} papers`);
+}
+// Papers with the most citations behind them, for the dashboard.
+function mostCitedPapers(n) {
+  const counts = (state.scholar && state.scholar.icite && state.scholar.icite.counts) || null;
+  if (!counts) return [];
+  return publishedPapers()
+    .map(({ p, study }) => ({ p, study, cites: counts[p.pmid] ?? 0 }))
+    .filter(x => x.cites > 0)
+    .sort((a, b) => b.cites - a.cites)
+    .slice(0, n || 10);
+}
+function citationsFor(pmid) {
+  const c = state.scholar && state.scholar.icite && state.scholar.icite.counts;
+  return c ? (c[pmid] ?? null) : null;
+}
+
 function renderPublications() {
   $title.textContent = "Publications";
   const papers = publishedPapers();
@@ -4637,8 +4710,11 @@ function renderPublications() {
   const maxJournal = Math.max(...journalRows.map(r => r[1]));
 
   const coauthors = coauthorStats();
-  const topCo = coauthors.slice(0, 15);
-  const maxCo = topCo.length ? topCo[0].papers : 1;
+  const coQ = coauthorQuery.trim().toLowerCase();
+  const coMatches = coQ ? coauthors.filter(c => c.name.toLowerCase().includes(coQ)) : coauthors;
+  // Searching means you know who you want, so show every match; otherwise the top handful.
+  const topCo = (coQ || coauthorsExpanded) ? coMatches : coMatches.slice(0, 15);
+  const maxCo = coauthors.length ? coauthors[0].papers : 1;
 
   const pendingCount = (state.studies || []).filter(s => !s.publication).length;
   const metrics = (state.scholar && Array.isArray(state.scholar.points)) ? state.scholar.points.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))) : [];
@@ -4667,38 +4743,78 @@ function renderPublications() {
   topicRows.forEach(([t, n]) => { html += barRowHTML(esc(t), n, maxTopic, "var(--teal)"); });
   html += `<div style="font-size:11.5px;color:var(--text2);margin-top:8px">A paper can sit under more than one topic.</div></div>`;
 
-  html += `<div class="section-title">Most frequent co-authors</div><div class="card">`;
+  html += `<div class="section-title">Co-authors</div><div class="card">`;
+  html += searchBoxHTML("coauthor-search", coauthorQuery, "Search " + coauthors.length + " co-authors by name");
+  if (coQ) {
+    html += `<div style="font-size:12px;color:var(--text2);margin:6px 0 2px">${coMatches.length} ${coMatches.length === 1 ? "match" : "matches"}</div>`;
+  }
+  if (!coMatches.length) {
+    html += `<div style="color:var(--text2);font-size:13.5px;padding:6px 0">Nobody by that name. Try a surname.</div>`;
+  }
   topCo.forEach(c => {
     const span = c.years.length ? Math.min(...c.years) + "–" + Math.max(...c.years) : "";
     html += `<div data-coauthor="${esc(c.key)}" style="cursor:pointer">
         ${barRowHTML(`<span style="color:var(--blue)">${esc(c.name)}</span>`, c.papers, maxCo, "var(--blue)", span ? ` · ${span}` : "")}
       </div>`;
   });
-  if (coauthors.length > topCo.length) {
-    html += `<div style="font-size:12px;color:var(--text2);margin-top:6px">…and ${coauthors.length - topCo.length} more. Tap a name to see their work with you.</div>`;
+  if (!coQ && coMatches.length > topCo.length) {
+    html += `<button class="mini-btn" id="co-more" style="margin-top:8px">Show all ${coMatches.length} co-authors</button>`;
+  } else if (!coQ && coauthorsExpanded && coauthors.length > 15) {
+    html += `<button class="mini-btn" id="co-less" style="margin-top:8px">Show only the top 15</button>`;
   }
-  html += `</div>`;
+  html += `<div style="font-size:11.5px;color:var(--text2);margin-top:6px">Tap a name to see their work with you.</div></div>`;
 
   html += `<div class="section-title">Journals</div><div class="card">`;
   journalRows.forEach(([j, n]) => { html += barRowHTML(esc(j), n, maxJournal, "var(--orange)"); });
   html += `</div>`;
 
-  // Citation metrics are typed in, not scraped: Google Scholar blocks automated access, and a
-  // number that silently stops updating is worse than one you know the date of.
-  html += `<div class="section-title">Citation metrics</div><div class="card">`;
-  if (latest) {
-    html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-        ${statTileHTML(latest.h ?? "—", "h-index", "as of " + fmtDate(latest.date))}
-        ${statTileHTML(latest.i10 ?? "—", "i10-index")}
-        ${statTileHTML(latest.citations ?? "—", "citations")}
+  // Two sources, side by side and never mixed: iCite is computed from these 276 papers and
+  // refreshes itself; Scholar is typed in. They disagree by design, so both are labelled.
+  const ic = state.scholar && state.scholar.icite;
+  const topCited = mostCitedPapers(8);
+  html += `<div class="section-title">Citations</div><div class="card">`;
+  if (ic) {
+    html += `<div style="display:flex;gap:8px;flex-wrap:wrap">
+        ${statTileHTML(ic.h, "h-index", "NIH iCite")}
+        ${statTileHTML(ic.i10, "i10-index", "papers with 10+")}
+        ${statTileHTML(ic.total.toLocaleString(), "citations", "as of " + fmtDate(ic.asOf))}
       </div>`;
-    if (metrics.length > 1) {
-      const maxH = Math.max(...metrics.map(m => Number(m.h) || 0));
-      html += `<div style="font-size:12px;color:var(--text2);font-weight:600;margin:8px 0 2px">h-index over time</div>`;
-      metrics.forEach(m => { html += barRowHTML(fmtDate(m.date), Number(m.h) || 0, maxH, "var(--indigo)"); });
-    }
   } else {
-    html += `<div style="color:var(--text2);font-size:13.5px;line-height:1.5">Nothing recorded yet. Add your Google Scholar numbers and they'll chart over time as you add more.</div>`;
+    html += `<div style="color:var(--text2);font-size:13.5px;line-height:1.5">
+        NIH's iCite publishes citation counts for every paper with a PubMed ID. Pull them in and
+        your h-index is computed from your own ${papers.length} papers — no typing, and it updates
+        whenever you ask it to.
+      </div>`;
+  }
+  html += `<button class="mini-btn" id="cite-refresh" style="margin-top:10px">${ic ? "Refresh citations" : "Fetch citations from iCite"}</button>
+    <div style="font-size:11.5px;color:var(--text2);margin-top:6px">
+      iCite counts citations from PubMed-indexed work only, so these run lower than Google
+      Scholar's. Neither is wrong; they count different things.
+    </div></div>`;
+
+  if (topCited.length) {
+    const maxC = topCited[0].cites;
+    html += `<div class="section-title">Most cited</div><div class="card">`;
+    topCited.forEach(({ p, study, cites }) => {
+      html += `<div data-open-study="${esc(study.id)}" style="cursor:pointer">
+          ${barRowHTML(`<span style="color:var(--blue)">${esc(p.title.slice(0, 70))}</span>`, cites, maxC, "var(--indigo)", p.year ? ` · ${esc(p.year)}` : "")}
+        </div>`;
+    });
+    html += `</div>`;
+  }
+
+  // Google Scholar, by hand.
+  const scholarPoints = metrics.filter(m => m.source !== "icite");
+  const latestScholar = scholarPoints[scholarPoints.length - 1];
+  html += `<div class="section-title">Google Scholar</div><div class="card">`;
+  if (latestScholar) {
+    html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        ${statTileHTML(latestScholar.h ?? "—", "h-index", "as of " + fmtDate(latestScholar.date))}
+        ${statTileHTML(latestScholar.i10 ?? "—", "i10-index")}
+        ${statTileHTML(latestScholar.citations ?? "—", "citations")}
+      </div>`;
+  } else {
+    html += `<div style="color:var(--text2);font-size:13.5px;line-height:1.5">Scholar blocks automated reading, so these are typed in — a few seconds, a couple of times a year.</div>`;
   }
   html += `<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
       <input id="sch-date" type="date" value="${esc(todayStr())}" style="border:none;background:var(--bg);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
@@ -4706,9 +4822,18 @@ function renderPublications() {
       <input id="sch-i10" type="number" min="0" placeholder="i10" style="width:80px;border:none;background:var(--bg);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
       <input id="sch-cites" type="number" min="0" placeholder="citations" style="width:110px;border:none;background:var(--bg);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
       <button class="mini-btn" id="sch-add" style="margin-top:0">Record</button>
-    </div>
-    <div style="font-size:11.5px;color:var(--text2);margin-top:6px">From your Google Scholar profile page. Scholar blocks automated reading, so these are entered by hand — a few seconds, a couple of times a year.</div>
-  </div>`;
+    </div></div>`;
+
+  // The chart only means anything with more than one reading, and the two sources are drawn
+  // separately — a line that jumped between them would be describing nothing.
+  ["icite", "scholar"].forEach(src => {
+    const pts = metrics.filter(m => (m.source === "icite") === (src === "icite"));
+    if (pts.length < 2) return;
+    const maxH = Math.max(...pts.map(m => Number(m.h) || 0));
+    html += `<div class="section-title">h-index over time · ${src === "icite" ? "iCite" : "Scholar"}</div><div class="card">`;
+    pts.forEach(m => { html += barRowHTML(fmtDate(m.date), Number(m.h) || 0, maxH, src === "icite" ? "var(--indigo)" : "var(--teal)"); });
+    html += `</div>`;
+  });
 
   html += `<div class="section-title">Still in progress</div><div class="card">
       <div style="font-size:13.5px;line-height:1.5">${pendingCount} ${pendingCount === 1 ? "study is" : "studies are"} not yet published. Open a co-author to see which of them that person is on.</div>
@@ -4719,6 +4844,13 @@ function renderPublications() {
   $main.querySelectorAll("[data-coauthor]").forEach(el => el.onclick = () => {
     coauthorName = el.dataset.coauthor; render();
   });
+  bindSearchBox("coauthor-search", (v) => { coauthorQuery = v; });
+  const moreBtn = document.getElementById("co-more");
+  if (moreBtn) moreBtn.onclick = () => { coauthorsExpanded = true; render(); };
+  const lessBtn = document.getElementById("co-less");
+  if (lessBtn) lessBtn.onclick = () => { coauthorsExpanded = false; render(); };
+  const refresh = document.getElementById("cite-refresh");
+  if (refresh) refresh.onclick = () => refreshCitations(refresh);
   const add = document.getElementById("sch-add");
   if (add) add.onclick = () => {
     const h = document.getElementById("sch-h").value.trim();
@@ -4727,8 +4859,8 @@ function renderPublications() {
     const date = document.getElementById("sch-date").value || todayStr();
     if (!h && !i10 && !cites) { toast("Enter at least one number"); return; }
     state.scholar = state.scholar || { id: SCHOLAR_ID, points: [] };
-    state.scholar.points = (state.scholar.points || []).filter(x => x.date !== date);
-    state.scholar.points.push({ date, h: h ? Number(h) : null, i10: i10 ? Number(i10) : null, citations: cites ? Number(cites) : null });
+    state.scholar.points = (state.scholar.points || []).filter(x => !(x.date === date && x.source !== "icite"));
+    state.scholar.points.push({ date, source: "scholar", h: h ? Number(h) : null, i10: i10 ? Number(i10) : null, citations: cites ? Number(cites) : null });
     saveLocal();
     pushItem("scholar", state.scholar);
     render();
@@ -4787,7 +4919,7 @@ function renderCoauthor() {
       }).join(", ");
       html += `<div style="padding:7px 0;border-bottom:0.5px solid var(--line)">
           <div style="font-size:14px;font-weight:600;line-height:1.35;cursor:pointer;color:var(--blue)" data-open-study="${esc(study.id)}">${esc(p.title)}</div>
-          <div style="font-size:12.5px;color:var(--text2);margin-top:2px">${esc(p.journal || "")}${p.year ? " · " + esc(p.year) : ""}</div>
+          <div style="font-size:12.5px;color:var(--text2);margin-top:2px">${esc(p.journal || "")}${p.year ? " · " + esc(p.year) : ""}${(() => { const c = citationsFor(p.pmid); return c == null ? "" : ` · ${c} citation${c === 1 ? "" : "s"}`; })()}</div>
           <div style="font-size:12px;color:var(--text2);margin-top:3px;line-height:1.5">${list}</div>
         </div>`;
     });
