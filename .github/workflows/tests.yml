@@ -1,0 +1,42 @@
+# Runs the research tracker's test suite in GitHub's cloud, so it no longer depends on anyone's
+# laptop being open. Two triggers:
+#   - every push, so a regression is caught when it is introduced rather than the next morning
+#   - every morning, to catch anything that rots without a push (a changed dependency, say)
+# GitHub emails the repository owner when a scheduled run fails.
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    # 11:00 UTC is about 6am Chicago. Cron here is always UTC, unlike the in-app schedules.
+    - cron: "0 11 * * *"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install test dependencies
+        run: npm install --no-save jsdom typescript
+
+      # The suite reads research-tracker.html, the name the file has in Adam's workspace folder.
+      # In this repo the same file is index.html, because that is what Netlify serves. One copy
+      # keeps both names working rather than rewriting the path in seventy test files.
+      - name: Stage the app under the name the tests expect
+        run: cp index.html research-tracker.html
+
+      - name: Run the suite
+        run: node tests/run-all.js
+        env:
+          NODE_PATH: ${{ github.workspace }}/node_modules
+          # Two at a time: GitHub's smallest runners have two cores, and four parallel jsdom boots
+          # over a 560 KB page thrash rather than finish faster.
+          TEST_CONCURRENCY: 2
