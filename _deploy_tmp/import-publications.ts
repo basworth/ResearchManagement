@@ -18,6 +18,17 @@ import { DOMParser, type Element } from "https://deno.land/x/deno_dom@v0.1.45/de
 
 const EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/";
 
+// Called from the tracker's own origin, so it needs the same CORS block every other function
+// here has. Without it the browser refuses before the request is even sent, and the only clue is
+// a bare "Failed to fetch" that looks like the network is down.
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+const json = (b: unknown, s = 200) =>
+  new Response(JSON.stringify(b), { status: s, headers: { ...CORS, "Content-Type": "application/json" } });
+
 // Full forename, not initials. "Yanke AB" matches both Adam B Yanke and Amy B Yanke — a
 // veterinary neurologist whose papers were nearly imported as his. The full-name index separates
 // them exactly, where guessing from affiliations needed a human for 45 of 293 records.
@@ -73,7 +84,8 @@ function titleOverlap(a: string, b: string): number {
 }
 
 Deno.serve(async (req) => {
-  if (req.method !== "POST") return new Response("POST only", { status: 405 });
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
+  if (req.method !== "POST") return new Response("POST only", { status: 405, headers: CORS });
 
   // Admin only, and identified by their own token rather than a shared secret: this writes
   // hundreds of studies, and it should be obvious afterwards who ran it.
@@ -89,12 +101,12 @@ Deno.serve(async (req) => {
   );
   const { data: userData } = await userClient.auth.getUser();
   const caller = userData?.user;
-  if (!caller) return Response.json({ error: "Sign in first" }, { status: 401 });
+  if (!caller) return json({ error: "Sign in first" }, 401);
 
   const { data: profRow } = await db.from("items").select("data, workspace")
     .eq("kind", "profile").eq("id", caller.id).maybeSingle();
   if (!profRow?.data?.admin) {
-    return Response.json({ error: "Admins only" }, { status: 403 });
+    return json({ error: "Admins only" }, 403);
   }
 
   const body = await req.json().catch(() => ({}));
@@ -107,7 +119,7 @@ Deno.serve(async (req) => {
   const search = await fetch(`${EUTILS}esearch.fcgi?db=pubmed&retmax=1000&retmode=json&term=${term}`)
     .then((r) => r.json());
   const pmids: string[] = search?.esearchresult?.idlist ?? [];
-  if (!pmids.length) return Response.json({ error: "PubMed returned nothing for " + author }, { status: 502 });
+  if (!pmids.length) return json({ error: "PubMed returned nothing for " + author }, 502);
 
   // ---- 2. the records, in batches, politely ----
   const papers: Paper[] = [];
@@ -183,12 +195,12 @@ Deno.serve(async (req) => {
   if (!dryRun && writes.length) {
     for (let i = 0; i < writes.length; i += 50) {
       const { error } = await db.from("items").upsert(writes.slice(i, i + 50));
-      if (error) return Response.json({ error: error.message, writtenBeforeFailure: written }, { status: 500 });
+      if (error) return json({ error: error.message, writtenBeforeFailure: written }, 500);
       written += writes.slice(i, i + 50).length;
     }
   }
 
-  return Response.json({
+  return json({
     dryRun, author, workspace,
     pubmedRecords: papers.length,
     wouldCreate: created.length,

@@ -69,6 +69,9 @@ check("it only reads studies from one workspace", /\.eq\("workspace", workspace\
 check("it stamps every row it writes", /workspace,\s*updated_at/.test(src));
 check("a paper already linked is skipped", /alreadyLinked/.test(src));
 check("it reports what it matched so the judgement can be checked", /attached,/.test(src) && /ambiguous,/.test(src));
+check("it answers the browser's CORS preflight", /OPTIONS/.test(src) && /Access-Control-Allow-Origin/.test(src));
+check("...and every reply carries the headers, not just the happy path",
+  !/Response\.json\(/.test(src), "still using Response.json somewhere");
 
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
