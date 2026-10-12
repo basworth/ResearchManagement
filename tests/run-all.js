@@ -64,13 +64,17 @@ const files = fs.readdirSync(DIR)
   .sort()
   .filter((f, i) => shardCount === 1 || (i % shardCount) === (shardNo - 1));
 
-// Six tests read the edge-function sources under supabase/functions. Those live in Adam's
-// workspace folder but are deliberately NOT published to the public repo, so in CI they have
-// nothing to read. Skipping them there is honest — reporting them as failures would train
+// Some tests read files under supabase/ — the edge-function sources and the setup SQL. Those live
+// in Adam's workspace folder but are deliberately NOT published to the public repo, so in CI they
+// have nothing to read. Skipping them there is honest — reporting them as failures would train
 // everyone to ignore a red run, which is how the last five broken tests went unnoticed.
-const needsFunctions = fs.existsSync(path.join(DIR, "..", "supabase", "functions"))
+//
+// Matches the whole `supabase/` folder, not just `supabase/functions`: the first version of this
+// check looked only for the functions path and let a test that reads supabase/*.sql through,
+// which turned the very first CI run red.
+const needsFunctions = fs.existsSync(path.join(DIR, "..", "supabase"))
   ? []
-  : files.filter(f => /supabase\/functions/.test(fs.readFileSync(path.join(DIR, f), "utf8")));
+  : files.filter(f => /supabase\//.test(fs.readFileSync(path.join(DIR, f), "utf8")));
 const toRun = files.filter(f => !needsFunctions.includes(f));
 
 const failures = [];
@@ -121,7 +125,7 @@ const secs = Math.round((Date.now() - started) / 1000);
 console.log("\n");
 if (!failures.length) {
   console.log(`ALL CLEAR — ${passed} test files passed in ${secs}s${shardArg ? " (slice " + shardArg + ")" : ""}.`
-    + (needsFunctions.length ? `\n(${needsFunctions.length} skipped — they read supabase/functions, which isn't in this checkout.)` : ""));
+    + (needsFunctions.length ? `\n(${needsFunctions.length} skipped — they read files under supabase/, which isn't in this checkout.)` : ""));
   process.exit(0);
 }
 console.log(`${failures.length} of ${toRun.length} test files FAILED (${secs}s):\n`);
