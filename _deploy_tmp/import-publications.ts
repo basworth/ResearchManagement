@@ -11,10 +11,11 @@
 // POST body: { dryRun?: boolean, author?: string, workspace?: string }
 //   dryRun (default TRUE) reports what it would do and writes nothing. Pass false to apply.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-// Deno has no DOMParser — that is a browser API, and the compile check passes only because its
-// type definitions include the DOM lib. Without this import the function would deploy cleanly and
-// then throw "DOMParser is not defined" on its first real call.
-import { DOMParser, type Element } from "https://deno.land/x/deno_dom@v0.1.45/deno-dom-wasm.ts";
+// No XML DOM library on purpose. Deno has no built-in DOMParser, and deno_dom pulls in a WASM
+// parser that took the deployed bundle to 1.45 MB — at which point the function answered from
+// some origins and failed with a bare "Failed to fetch" from the app. PubMed's XML is
+// machine-generated and completely regular, so reading it with string matching is both
+// sufficient and an order of magnitude smaller.
 
 const EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/";
 
@@ -40,27 +41,45 @@ type Paper = {
   authors: Author[]; authorList: string;
 };
 
-const text = (el: Element | null) => (el?.textContent ?? "").trim();
+// XML entities, limited to the five that matter plus numeric escapes. PubMed titles carry things
+// like &lt;i&gt; around gene names and &amp; in journal titles.
+function unescapeXml(t: string): string {
+  return t
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+    .replace(/&amp;/g, "&");                       // last, or the others would double-decode
+}
+// First <tag>…</tag> inside a chunk. Tags here never nest with themselves, which is what makes
+// this safe without a real parser.
+function tag(chunk: string, name: string): string {
+  const m = new RegExp("<" + name + "(?:\\s[^>]*)?>([\\s\\S]*?)</" + name + ">").exec(chunk);
+  return m ? unescapeXml(m[1].replace(/<[^>]+>/g, "")).trim() : "";
+}
+function tagAll(chunk: string, name: string): string[] {
+  const out: string[] = [];
+  const re = new RegExp("<" + name + "(?:\\s[^>]*)?>([\\s\\S]*?)</" + name + ">", "g");
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(chunk))) out.push(m[1]);
+  return out;
+}
 
 function parseArticles(xml: string): Paper[] {
-  const doc = new DOMParser().parseFromString(xml, "text/xml");
-  if (!doc) return [];
-  return [...doc.querySelectorAll("PubmedArticle")].map((a) => {
-    const q = (sel: string) => text(a.querySelector(sel));
-    const authors: Author[] = [...a.querySelectorAll("AuthorList > Author")].map((au) => ({
-      last: text(au.querySelector("LastName")),
-      fore: text(au.querySelector("ForeName")),
-      initials: text(au.querySelector("Initials")),
+  return tagAll(xml, "PubmedArticle").map((a) => {
+    const authors: Author[] = tagAll(a, "Author").map((au) => ({
+      last: tag(au, "LastName"), fore: tag(au, "ForeName"), initials: tag(au, "Initials"),
     })).filter((x) => x.last);
-    const ids = [...a.querySelectorAll("ArticleIdList > ArticleId")];
-    const doi = ids.find((x) => x.getAttribute("IdType") === "doi");
+    // The DOI sits in an ArticleId carrying IdType="doi"; take that one specifically.
+    const doi = (/<ArticleId[^>]*IdType="doi"[^>]*>([\s\S]*?)<\/ArticleId>/.exec(a)?.[1] ?? "").trim();
+    // PMID appears again inside each reference, so anchor on the one in MedlineCitation.
+    const cite = /<MedlineCitation[\s\S]*?<\/MedlineCitation>/.exec(a)?.[0] ?? a;
+    const pmid = tag(cite.slice(0, 400), "PMID");
+    const pubDate = /<PubDate>([\s\S]*?)<\/PubDate>/.exec(a)?.[1] ?? "";
     return {
-      pmid: q("MedlineCitation > PMID"),
-      doi: text(doi ?? null),
-      title: q("ArticleTitle"),
-      journal: q("Journal > ISOAbbreviation") || q("Journal > Title"),
-      year: q("JournalIssue > PubDate > Year") ||
-            q("JournalIssue > PubDate > MedlineDate").slice(0, 4),
+      pmid, doi,
+      title: tag(a, "ArticleTitle"),
+      journal: tag(a, "ISOAbbreviation") || tag(a, "Title"),
+      year: tag(pubDate, "Year") || tag(pubDate, "MedlineDate").slice(0, 4),
       authors,
       authorList: authors.map((x) => [x.fore || x.initials, x.last].filter(Boolean).join(" ")).join(", "),
     };

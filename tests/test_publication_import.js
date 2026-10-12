@@ -63,7 +63,9 @@ check("it defaults to NOT writing", /const dryRun = body\.dryRun !== false/.test
 check("it requires an admin", /Admins only/.test(src));
 check("it identifies the caller from their own token", /auth\.getUser\(\)/.test(src));
 check("it uses the full forename, not initials", /Full Author Name/.test(src) && /Yanke Adam B/.test(src));
-check("it imports a DOM parser that exists in Deno", /deno_dom/.test(src));
+check("it carries no WASM XML parser — that bundle broke the function",
+  !/^\s*import[^\n]*deno_dom/m.test(src));
+check("...and doesn't reach for the browser's DOMParser either", !/new DOMParser\(/.test(src));
 check("it never deletes", !/\.delete\(/.test(src));
 check("it only reads studies from one workspace", /\.eq\("workspace", workspace\)/.test(src));
 check("it stamps every row it writes", /workspace,\s*updated_at/.test(src));
@@ -72,6 +74,35 @@ check("it reports what it matched so the judgement can be checked", /attached,/.
 check("it answers the browser's CORS preflight", /OPTIONS/.test(src) && /Access-Control-Allow-Origin/.test(src));
 check("...and every reply carries the headers, not just the happy path",
   !/Response\.json\(/.test(src), "still using Response.json somewhere");
+
+
+console.log("\n-- Reading PubMed's XML --");
+{
+  const block = src.slice(src.indexOf("function unescapeXml"), src.indexOf("// Title matching has to tolerate"));
+  const stripTs = t => t.replace(/: *string\[\]/g, "").replace(/: *string/g, "").replace(/: *Paper\[\]/g, "")
+    .replace(/: *Author\[\]/g, "").replace(/: *RegExpExecArray \| null/g, "")
+    .replace(/const out: *\w+\[\] *=/g, "const out =").replace(/\): *\w+(\[\])? *\{/g, ") {")
+    .replace(/^type [\s\S]*?};$/gm, "");
+  const { parseArticles } = new Function(stripTs(block) + "; return { parseArticles };")();
+  // A record shaped like the real thing, including the traps: a PMID repeated inside a reference
+  // list, an entity in the title, and the DOI sitting among other ArticleIds.
+  const xml = `<PubmedArticleSet><PubmedArticle><MedlineCitation Status="MEDLINE">
+<PMID Version="1">42490302</PMID>
+<Article><Journal><ISOAbbreviation>Arthroscopy</ISOAbbreviation>
+<JournalIssue><PubDate><Year>2026</Year></PubDate></JournalIssue></Journal>
+<ArticleTitle>Isolated MPFL Reconstruction &amp; Patellar Height.</ArticleTitle>
+<AuthorList><Author><LastName>Sachdev</LastName><ForeName>Divesh</ForeName><Initials>D</Initials></Author>
+<Author><LastName>Yanke</LastName><ForeName>Adam B</ForeName><Initials>AB</Initials></Author></AuthorList></Article>
+<ReferenceList><Reference><ArticleIdList><ArticleId IdType="pubmed">11111111</ArticleId></ArticleIdList></Reference></ReferenceList>
+</MedlineCitation><PubmedData><ArticleIdList><ArticleId IdType="pubmed">42490302</ArticleId>
+<ArticleId IdType="doi">10.1002/arj.70422</ArticleId></ArticleIdList></PubmedData></PubmedArticle></PubmedArticleSet>`;
+  const [p] = parseArticles(xml);
+  check("the article's own PMID, not one from its reference list", p.pmid === "42490302", p.pmid);
+  check("the DOI is picked by its IdType", p.doi === "10.1002/arj.70422", p.doi);
+  check("journal and year", p.journal === "Arthroscopy" && p.year === "2026", [p.journal, p.year]);
+  check("the title's entity is decoded", p.title.includes("&") && !p.title.includes("&amp;"), p.title);
+  check("every author, in order", p.authorList === "Divesh Sachdev, Adam B Yanke", p.authorList);
+}
 
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
