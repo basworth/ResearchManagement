@@ -55,7 +55,8 @@ fs.writeFileSync(path.join(WORK, "deno.d.ts"), DENO_DTS);
 const slugs = fs.readdirSync(FN_DIR).filter(d => fs.existsSync(path.join(FN_DIR, d, "index.ts")));
 console.log("\n-- Functions found --");
 check("Every edge function is present",
-  ["admin-requests", "ingest-email", "invite-user", "request-update", "stage-alerts", "task-emails"].every(s => slugs.includes(s)),
+  ["admin-requests", "ingest-email", "invite-user", "request-update", "stage-alerts", "task-emails",
+   "import-publications"].every(s => slugs.includes(s)),
   slugs.join(", "));
 
 const copies = [];

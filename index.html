@@ -2614,7 +2614,12 @@ function studyMatchesSearch(s, query) {
   const q = (query || "").trim().toLowerCase();
   if (!q) return true;
   const team = Array.isArray(s.team) ? s.team.join(", ") : (s.team || "");
-  return [s.title, s.nickname, s.pi, s.irb, team].some(v => (v || "").toLowerCase().includes(q));
+  // Published papers also match on their journal and on every co-author — "who did I publish the
+  // saddle work with" is the question this is here to answer, and those names are mostly people
+  // outside the roster, so nothing else on the study would find them.
+  const pub = s.publication || {};
+  return [s.title, s.nickname, s.pi, s.irb, team, pub.journal, pub.authorList, pub.pmid, pub.doi]
+    .some(v => (v || "").toLowerCase().includes(q));
 }
 // Renders a text search box (magnifying-glass icon + optional clear button). Paired with
 // bindSearchBox() below, which wires it up so re-rendering on every keystroke doesn't steal
@@ -3880,7 +3885,7 @@ const PHASE_SECTIONS = {
   // Tasks stay open here on purpose: accepted is not done. Proofs, page charges and copyright
   // forms all land in this window, and it's the phase where a paper most easily goes quiet.
   "Accepted / In Press": ["manuscript", "authors", "abstracts", "workingDocs", "notes", "tasks"],
-  "Published":          ["manuscript", "abstracts", "authors", "workingDocs", "notes"],
+  "Published":          ["publication", "manuscript", "abstracts", "authors", "workingDocs", "notes"],
   "On Hold":            ["notes", "tasks"]
 };
 function sectionsForPhase(phase) { return PHASE_SECTIONS[phase] || PHASE_SECTIONS["Concept"]; }
@@ -4210,6 +4215,31 @@ function bindDecisionRow(root, s) {
 // on the study page next to Abstract Submissions (both are day-to-day progress, not structural
 // study setup) instead of the Edit Study sheet, at Adam's explicit request (2026-09-15): "day to
 // day tracking and updates" should not require opening Edit Study.
+// A published paper, as PubMed has it. Separate from "Proposed Authors" on purpose: that section
+// plans an author list from the internal roster, while this records the list as it was actually
+// printed — mostly people who will never be in the roster. Overwriting one with the other would
+// lose whichever came first.
+function publicationBodyHTML(s) {
+  const p = s.publication;
+  if (!p) return "";
+  const authors = Array.isArray(p.authors) ? p.authors : [];
+  const cite = [p.journal, p.year].filter(Boolean).join(" · ");
+  return `
+    <div style="font-size:14px;font-weight:600;line-height:1.4">${esc(p.title || s.title)}</div>
+    ${cite ? `<div style="font-size:13px;color:var(--text2);margin-top:2px">${esc(cite)}</div>` : ""}
+    ${authors.length ? `
+      <div style="font-size:12px;color:var(--text2);font-weight:600;margin:10px 0 4px">Authors (${authors.length})</div>
+      <div style="font-size:13.5px;line-height:1.6">${authors.map((a, i) => {
+        const name = [a.fore || a.initials, a.last].filter(Boolean).join(" ");
+        const isYou = /^yanke$/i.test(a.last || "");
+        return `<span style="${isYou ? "font-weight:800" : ""}">${esc(name)}</span>${i < authors.length - 1 ? ", " : ""}`;
+      }).join("")}</div>` : ""}
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      ${p.pmid ? `<a class="mini-btn" href="https://pubmed.ncbi.nlm.nih.gov/${esc(p.pmid)}/" target="_blank" rel="noopener" style="text-decoration:none">PubMed ${esc(p.pmid)} ↗</a>` : ""}
+      ${p.doi ? `<a class="mini-btn" href="https://doi.org/${esc(p.doi)}" target="_blank" rel="noopener" style="text-decoration:none">DOI ↗</a>` : ""}
+      ${authors.length ? `<button type="button" class="mini-btn" id="pub-copy-authors">Copy author list</button>` : ""}
+    </div>`;
+}
 function manuscriptBodyHTML(s) {
   const d = s.decision || "";
   const showRevision = decisionWantsRevision(d);
@@ -4491,6 +4521,7 @@ function renderStudyDetail() {
     manuscript: !!(s.journal || s.submittedDate || s.journalTrackingId || s.revisionsReceivedDate
       || s.revisionsDeadline || s.decision || (s.priorSubmissions || []).length
       || slotEntries(s, "submitted").length || anyRevisionDocs(s)),
+    publication: !!s.publication,
     deadlines: linkedGrantMeetings.length > 0,
     tasks: tasks.length > 0
   };
@@ -4528,6 +4559,8 @@ function renderStudyDetail() {
     // answers the question the collapsed header is really being asked.
     manuscript: [s.journal, s.decision && s.decision !== "Awaiting decision" ? s.decision : ""]
       .filter(Boolean).join(" · ") || (s.decision === "Awaiting decision" ? "awaiting decision" : ""),
+    // The collapsed header answers "where did this come out" without opening anything.
+    publication: s.publication ? [s.publication.journal, s.publication.year].filter(Boolean).join(" · ") : "",
     deadlines: linkedGrantMeetings.length || "",
     tasks: tasks.filter(t => !t.done).length || "",
     enrollment: hasContent.enrollment ? (s.enrollCurrent || 0) + "/" + (s.enrollTarget || "?") : "",
@@ -4708,6 +4741,8 @@ function renderStudyDetail() {
       </div>
     </div>
   `, sectionBadge.abstracts)}
+
+  ${s.publication ? collapsibleSection("publication", "Publication", publicationBodyHTML(s), sectionBadge.publication) : ""}
 
   ${collapsibleSection("manuscript", "Manuscript Submission", manuscriptBodyHTML(s), sectionBadge.manuscript)}
 
@@ -4986,6 +5021,17 @@ function renderStudyDetail() {
   if (docAddBtn) docAddBtn.onclick = () => {
     if (blockOfflineEdit("Adding a document")) return;
     openAddDocSheet(s);
+  };
+
+  const pubCopy = document.getElementById("pub-copy-authors");
+  if (pubCopy) pubCopy.onclick = () => {
+    const a = (s.publication && s.publication.authors) || [];
+    const text = a.map(x => [x.fore || x.initials, x.last].filter(Boolean).join(" ")).join(", ");
+    if (!text) { toast("No authors recorded for this paper"); return; }
+    navigator.clipboard.writeText(text)
+      .then(() => toast("Author list copied"))
+      // Same fallback as the Proposed Authors copy: the clipboard API needs a secure context.
+      .catch(() => window.prompt("Copy the author list:", text));
   };
 
   $main.querySelectorAll("[data-slot-hist]").forEach(b => b.onclick = () => {
