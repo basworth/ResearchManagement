@@ -166,6 +166,10 @@ Deno.serve(async (req) => {
   studies.forEach((s) => { const p = s.data?.publication?.pmid; if (p) byPmid.set(String(p), s); });
 
   const created: string[] = [];
+  // Below the attach threshold but not nothing. A tracker title is often an internal shorthand —
+  // "MISHA 6 Month Data" — that no title-matching rule can reconcile with a formal paper title,
+  // so these are reported for a human to confirm rather than guessed at or silently duplicated.
+  const possible: { pmid: string; title: string; maybe: string; score: number }[] = [];
   const attached: { pmid: string; title: string; to: string; overlap: number }[] = [];
   const alreadyLinked: string[] = [];
   const ambiguous: { pmid: string; title: string; candidates: string[] }[] = [];
@@ -210,6 +214,10 @@ Deno.serve(async (req) => {
       continue;
     }
 
+    if (best && best.hits >= 2 && best.score >= 0.25) {
+      possible.push({ pmid: p.pmid, title: p.title.slice(0, 70), maybe: best.s.data.title?.slice(0, 70), score: +best.score.toFixed(2) });
+    }
+
     // Nothing matches: a paper from before the tracker existed. New Published study.
     created.push(p.pmid);
     writes.push({
@@ -242,8 +250,10 @@ Deno.serve(async (req) => {
     wouldAttachToExisting: attached.length,
     alreadyLinked: alreadyLinked.length,
     needsYourEye: ambiguous.length,
+    possibleDuplicates: possible.length,
     written,
     attached,          // every match it made, so the judgement can be checked
     ambiguous,         // and everything it refused to guess at
+    possible,          // weaker resemblances, in case a paper is already tracked under a nickname
   });
 });
