@@ -486,6 +486,10 @@
     <button data-tab="notes"><span class="icon">🗒</span>Notes</button>
     <button data-tab="settings"><span class="icon">⚙</span>Settings</button>
   </nav>
+  <button id="feedback-btn" title="Suggest a change or report a problem"
+    style="position:fixed;right:14px;bottom:72px;z-index:40;border:none;background:var(--blue);color:#fff;border-radius:22px;padding:10px 16px;font-size:13.5px;font-weight:700;font-family:inherit;cursor:pointer;box-shadow:0 2px 10px rgba(0,0,0,.25)">
+    Suggest a change
+  </button>
 </div>
 <div id="toast" class="toast"></div>
 
@@ -2169,12 +2173,13 @@ async function pushAllLocal() {
     // would silently wipe them on a full re-push.
     { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null, nameAliases: state.nameAliases || {}, stageAdds: state.stageAdds || [] }, updated_at: now() }
   ];
-  await sb.from("items").upsert(rows);
+  // Every row needs the workspace stamp; the database rejects the whole batch without it.
+  await sb.from("items").upsert(rows.map(r => Object.assign({ workspace: myWorkspace }, r)));
   // upload any locally stored files one at a time (they can be large)
   for (const st of state.studies) {
     for (const dc of (st.docs || [])) {
       const c = localStorage.getItem("rt-file-" + dc.id);
-      if (c) await sb.from("items").upsert({ id: dc.id, kind: "file", data: { name: dc.name, content: c }, updated_at: now() });
+      if (c) await sb.from("items").upsert({ id: dc.id, kind: "file", data: { name: dc.name, content: c }, updated_at: now(), workspace: myWorkspace });
     }
   }
 }
@@ -4011,6 +4016,88 @@ function docEntryRowHTML(e, opts) {
 // The history is collapsed rather than listed because the current version is what people open
 // ninety-nine times in a hundred — but it says how many are under there, so nobody has to wonder
 // whether replacing a draft lost the last one.
+// Only the document types this study actually holds are shown. Listing all seven slots meant
+// most studies displayed six empty boxes, and the one real document was lost among them. The
+// empty ones are not gone — "Add a document" offers every type, so nothing became unreachable.
+function workingDocsBodyHTML(s) {
+  const all = DOC_SLOTS.map(sl => sl.key).concat(["other"]);
+  const filled = all.filter(k => slotEntries(s, k).length > 0);
+  if (!filled.length) {
+    return `
+      <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin:0 2px 10px 2px">
+        No documents yet. Add a link or drop a file in — abstracts, the protocol, the data
+        spreadsheet, whatever this study runs on.
+      </div>
+      <button type="button" id="doc-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:10px 16px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">＋ Add a document</button>`;
+  }
+  return `
+    <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:0 2px 10px 2px">
+      Every document takes a <b>link or an uploaded file</b>, whichever you have, and you can drop
+      a file straight onto one. Adding a newer version keeps the old one — nothing is replaced away.
+    </div>
+    ${filled.map(k => docSlotHTML(s, k)).join("")}
+    <button type="button" id="doc-add" style="border:none;background:var(--bg);color:var(--text);border-radius:8px;padding:10px 16px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit;margin-top:4px">＋ Add a document</button>`;
+}
+// One sheet for "what kind, and link or file". The type list is the same DOC_SLOTS every study
+// has always had — this only changes when you're asked to choose, not what you can choose.
+function openAddDocSheet(s) {
+  const types = DOC_SLOTS.concat([OTHER_SLOT]);
+  openSheet("Add a document", `
+    <div class="frow"><label>Type</label>
+      <select id="doc-type" style="flex:1">
+        ${types.map(t => `<option value="${esc(t.key)}">${esc(t.label)}</option>`).join("")}
+      </select>
+    </div>
+    <div class="frow" style="margin-top:10px"><label>Add as</label>
+      <select id="doc-how" style="flex:1">
+        <option value="link">A link</option>
+        <option value="upload">An uploaded file</option>
+      </select>
+    </div>
+    <div id="doc-link-row" style="margin-top:10px">
+      <input id="doc-link" placeholder="Paste the link…" autocapitalize="off" autocorrect="off"
+        style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+    </div>
+    <div id="doc-file-row" style="margin-top:10px;display:none">
+      <input type="file" id="doc-file" style="font-size:14px">
+      <div style="font-size:12px;color:var(--text2);margin-top:6px">You can also drop a file straight onto a document once it's listed.</div>
+    </div>`,
+    () => {
+      const key = document.getElementById("doc-type").value;
+      const how = document.getElementById("doc-how").value;
+      if (how === "link") {
+        const url = (document.getElementById("doc-link").value || "").trim();
+        if (!url) { toast("Paste a link, or switch to uploading a file"); return false; }
+        addSlotEntry(s, key, { id: uid(), kind: "link", url, label: "", by: me(), date: todayStr() });
+        render();
+        toast(`Added to ${slotLabel(key)}`);
+        return true;
+      }
+      const f = document.getElementById("doc-file").files[0];
+      if (!f) { toast("Choose a file first"); return false; }
+      // The upload is slow enough to need its own closing — the sheet stays put until the file
+      // is actually stored, so a failure is seen rather than hidden behind a closed sheet.
+      storeUploadedFile(f).then(entry => {
+        if (!entry) return;                       // storeUploadedFile has already said why
+        addSlotEntry(s, key, entry);
+        closeSheet();
+        render();
+        toast(`Uploaded to ${slotLabel(key)}`);
+      });
+      return false;
+    },
+    (sh) => {
+      const how = sh.querySelector("#doc-how");
+      const sync = () => {
+        sh.querySelector("#doc-link-row").style.display = how.value === "link" ? "" : "none";
+        sh.querySelector("#doc-file-row").style.display = how.value === "upload" ? "" : "none";
+      };
+      how.addEventListener("change", sync);
+      sync();
+      const l = sh.querySelector("#doc-link"); if (l) l.focus();
+    },
+    { saveLabel: "Add" });
+}
 function docSlotHTML(s, key, opts) {
   opts = opts || {};
   const entries = slotEntries(s, key);
@@ -4021,10 +4108,11 @@ function docSlotHTML(s, key, opts) {
   const multi = slotIsMulti(key);
   const shown = multi ? entries : entries.slice(0, 1);
   const older = multi ? [] : entries.slice(1);
-  return `<div class="card" style="padding:10px 14px;margin-bottom:8px">
+  return `<div class="card doc-slot" data-slot-drop="${esc(key)}" style="padding:10px 14px;margin-bottom:8px;transition:background .12s,box-shadow .12s">
     <div style="font-size:12px;color:var(--text2);font-weight:600;letter-spacing:.02em">${esc(label)}</div>
     ${shown.length ? shown.map(e => docEntryRowHTML(e, { fallbackLabel: label })).join("")
-      : `<div style="color:var(--text2);font-size:13.5px;padding:6px 0">${esc(opts.empty || "Nothing here yet — paste a link or upload a file.")}</div>`}
+      : `<div style="color:var(--text2);font-size:13.5px;padding:6px 0">${esc(opts.empty || "Nothing here yet — paste a link or upload it.")}
+           <span style="opacity:.8">You can also drop a file here.</span></div>`}
     ${older.length ? `
       <button type="button" data-slot-hist="${esc(key)}" style="border:none;background:none;color:var(--blue);font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;padding:4px 0">
         ${open ? "Hide" : "Show"} ${older.length} earlier version${older.length === 1 ? "" : "s"}
@@ -4534,14 +4622,7 @@ function renderStudyDetail() {
 
   ${collapsibleSection("authors", "Proposed Authors", authorsBodyHTML(s), sectionBadge.authors)}
 
-  ${collapsibleSection("workingDocs", "Working Documents", `
-    <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:0 2px 10px 2px">
-      The live drafts for this study. Every one takes a <b>link or an uploaded file</b>, whichever
-      you have. Adding a new one keeps the previous as an earlier version — nothing is replaced away.
-    </div>
-    ${DOC_SLOTS.map(sl => docSlotHTML(s, sl.key)).join("")}
-    ${docSlotHTML(s, "other", { empty: "Anything that doesn't fit the slots above." })}
-  `, sectionBadge.workingDocs)}
+  ${collapsibleSection("workingDocs", "Working Documents", workingDocsBodyHTML(s), sectionBadge.workingDocs)}
 
   ${collapsibleSection("meetingNotes", "Meeting Notes", `
     ${meetingNotes.length ? meetingNotes.map(n => `
@@ -4811,8 +4892,19 @@ function renderStudyDetail() {
       catch (err) { toast("Device storage full — connect Team Sync for file space"); return null; }
     } else {
       try { localStorage.setItem("rt-file-" + id, dataUrl); } catch (err) {}
-      const { error } = await sb.from("items").upsert({ id, kind: "file", data: { name: f.name, content: dataUrl }, updated_at: new Date().toISOString() });
-      if (error) { toast("Upload failed — check connection"); localStorage.removeItem("rt-file-" + id); return null; }
+      // Uploads bypass pushItem and write to the table directly, so they need the workspace stamp
+      // put on by hand. Without it the database refuses the row outright — which is exactly what
+      // happened from 9 Oct, when the stamp became compulsory: every upload was rejected and the
+      // only sign was a toast blaming the connection.
+      const { error } = await sb.from("items").upsert({ id, kind: "file", data: { name: f.name, content: dataUrl }, updated_at: new Date().toISOString(), workspace: myWorkspace });
+      if (error) {
+        // A refusal and a dropped connection are different problems and must not read the same.
+        if (isServerRefusal(error)) toast("That upload was refused — " + refusalReason(error));
+        else toast("Upload failed — check your connection and try again");
+        console.warn("upload failed", error);
+        localStorage.removeItem("rt-file-" + id);
+        return null;
+      }
     }
     return { id, kind: "file", name: f.name, label: "", by: me(), date: todayStr(), size: f.size };
   }
@@ -4846,6 +4938,56 @@ function renderStudyDetail() {
     };
     slotUploadInput.click();
   });
+  // Drag and drop onto any document slot. The browser's default for a dropped file is to NAVIGATE
+  // AWAY to it, which would throw away whatever the person was in the middle of — so dragover and
+  // drop are both cancelled on the whole page, and a drop that lands outside a slot does nothing.
+  const dropHint = (el, on) => {
+    if (!el) return;
+    el.style.background = on ? "var(--bg)" : "";
+    el.style.boxShadow = on ? "inset 0 0 0 2px var(--blue)" : "";
+  };
+  $main.querySelectorAll("[data-slot-drop]").forEach(zone => {
+    const key = zone.dataset.slotDrop;
+    zone.addEventListener("dragover", (e) => {
+      if (!(e.dataTransfer && [...e.dataTransfer.types].includes("Files"))) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      dropHint(zone, true);
+    });
+    zone.addEventListener("dragleave", (e) => { if (!zone.contains(e.relatedTarget)) dropHint(zone, false); });
+    zone.addEventListener("drop", async (e) => {
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || !files.length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dropHint(zone, false);
+      if (blockOfflineEdit("Uploading a file")) return;
+      // Several at once is a normal thing to drag, and dropping four files and silently keeping
+      // one would be worse than refusing. Single-document slots take the first and say so.
+      const list = [...files];
+      const accepted = slotIsMulti(key) ? list : list.slice(0, 1);
+      if (accepted.length < list.length) {
+        toast(`${slotLabel(key)} holds one document — taking ${accepted[0].name}, drop the rest in Other Documents`);
+      }
+      let added = 0;
+      for (const f of accepted) {
+        const entry = await storeUploadedFile(f);   // reports its own failure
+        if (!entry) continue;
+        addSlotEntry(s, key, entry);
+        added++;
+      }
+      if (!added) return;
+      render();
+      toast(added === 1 ? `Uploaded to ${slotLabel(key)}` : `Uploaded ${added} files to ${slotLabel(key)}`);
+    });
+  });
+
+  const docAddBtn = document.getElementById("doc-add");
+  if (docAddBtn) docAddBtn.onclick = () => {
+    if (blockOfflineEdit("Adding a document")) return;
+    openAddDocSheet(s);
+  };
+
   $main.querySelectorAll("[data-slot-hist]").forEach(b => b.onclick = () => {
     const key = b.dataset.slotHist;
     openDocHistory[key] = !openDocHistory[key];
@@ -8530,6 +8672,70 @@ async function fetchDeadlineFeed() {
 }
 
 /* ============ Wiring ============ */
+// ---------- Suggest a change ----------
+// Anyone can file one, from any screen. It lands in its own table rather than in `items`, because
+// Adam must be able to read every lab's feedback and `items` is sealed per workspace — see
+// supabase/migrations/002-feedback.sql. Nothing here is a study record, so nothing crosses the
+// boundary that matters.
+function openFeedbackSheet() {
+  const where = (typeof tab === "string" ? tab : "") + (detailStudyId ? " / a study" : "");
+  openSheet("Suggest a change", `
+    <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin-bottom:12px">
+      Tell us what you'd like changed, or what isn't working. It goes straight to Adam — you don't
+      need to write it up formally, a sentence is plenty.
+    </div>
+    <div class="frow"><label>This is</label>
+      <select id="fb-kind" style="flex:1">
+        <option value="idea">An idea — something I'd like it to do</option>
+        <option value="problem">A problem — something isn't working</option>
+      </select>
+    </div>
+    <div style="margin-top:10px">
+      <textarea id="fb-body" rows="6" placeholder="e.g. I'd like to filter the worklist by coordinator, or: uploading a PDF does nothing when I click Upload"
+        style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;resize:vertical"></textarea>
+    </div>
+    <div style="font-size:12px;color:var(--text2);margin-top:8px">
+      Sent with your name and which screen you were on, so nobody has to ask.
+    </div>`,
+    () => {
+      const body = (document.getElementById("fb-body").value || "").trim();
+      if (!body) { toast("Write a line or two first"); return false; }
+      const kind = document.getElementById("fb-kind").value;
+      submitFeedback(kind, body, where);
+      return true;
+    },
+    (sh) => { const t = sh.querySelector("#fb-body"); if (t) t.focus(); },
+    { saveLabel: "Send" });
+}
+async function submitFeedback(kind, body, page) {
+  if (!sb) { toast("Connect Team Sync first — otherwise this can't reach anyone"); return; }
+  const p = currentUser ? profileFor(currentUser.id) : null;
+  const row = {
+    author_id: currentUser && currentUser.id,
+    author_name: (p && p.name) || me() || "",
+    author_email: (p && (p.alertEmail || p.email)) || (currentUser && currentUser.email) || "",
+    workspace: myWorkspace, kind, page: page || "", body
+  };
+  const { error } = await sb.from("feedback").insert(row);
+  if (error) {
+    console.warn("feedback failed", error);
+    toast(isServerRefusal(error) ? "That didn't send — " + refusalReason(error)
+                                 : "That didn't send — check your connection and try again");
+    return;
+  }
+  toast(kind === "problem" ? "Thank you — sent to Adam. He'll come back to you."
+                           : "Thank you — your idea is on the list.");
+}
+
+// A file dropped anywhere other than a document slot must do nothing. The browser's default is
+// to navigate away to the dropped file, which silently abandons whatever was on screen — a
+// half-written note, an open form. Slots call stopPropagation, so they never reach this.
+["dragover", "drop"].forEach(ev => window.addEventListener(ev, e => {
+  if (e.dataTransfer && [...e.dataTransfer.types].includes("Files")) e.preventDefault();
+}));
+
+document.getElementById("feedback-btn").onclick = () => openFeedbackSheet();
+
 document.querySelectorAll("nav.tabbar button").forEach(b => {
   b.onclick = () => {
     tab = b.dataset.tab;
