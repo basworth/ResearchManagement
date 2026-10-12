@@ -590,6 +590,9 @@ const ABS_LINK_STATUSES = ["Not Submitted", "Submitted", "Accepted", "Rejected"]
 const ABS_LINK_STATUS_COLORS = { "Not Submitted": "var(--text2)", Submitted: "var(--orange)", Accepted: "var(--green)", Rejected: "var(--red)" };
 const ABS_ACCEPTED_FORMATS = ["E-Poster", "Poster", "Podium"];
 const ROSTER_ID = "00000000-0000-0000-0000-000000000001";
+// Citation metrics are one row for the whole lab, like the roster — a fixed id so it can't
+// multiply into one row per device.
+const SCHOLAR_ID = "00000000-0000-0000-0000-000000000002";
 // The signed-in Supabase Auth user, set by handleAuthChange(). { id, email } or null when
 // signed out / not yet checked. This — not a typed name — is now the source of truth for
 // "who am I"; a per-user display name (state.profiles) maps it to a human-readable name.
@@ -1013,6 +1016,10 @@ let studySearchQuery = "";
 let personFilter = "mine";
 let taskFilter = "Mine";
 let detailStudyId = null;
+// The publications dashboard, and the co-author page it opens onto. Both live under the Studies
+// tab so the tab bar doesn't grow an eighth button for something opened a few times a month.
+let showPublications = false;
+let coauthorName = null;
 // Centralized "navigate into a study" entry point. Resets the collapsible-section state (see
 // sectionStateForStudy / studySectionState below) so every fresh open recomputes open/closed
 // per section from scratch — including reopening the SAME study after leaving it — while
@@ -1929,6 +1936,8 @@ async function pullAll() {
     state.filterSets = data.filter(r => r.kind === "filterSet").map(r => r.data);
     state.suggestions = data.filter(r => r.kind === "suggestion").map(r => r.data);
     state.matchHints = data.filter(r => r.kind === "matchHint").map(r => r.data);
+    const sch = data.find(r => r.kind === "scholar");
+    if (sch) state.scholar = sch.data;
     setMatchHints(state.matchHints);
     const meta = data.find(r => r.kind === "meta");
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
@@ -2104,6 +2113,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
     if (Array.isArray(data.names)) { state.roster = data.names; saveLocal(); render(); }
     return;
   }
+  if (kind === "scholar") { state.scholar = data; saveLocal(); render(); return; }
   const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : kind === "filterSet" ? state.filterSets : kind === "suggestion" ? state.suggestions : kind === "matchHint" ? state.matchHints : null;
   if (!arr) return;
   // Match on the payload's own id, not the row id: for userPref the two differ (see
@@ -2884,7 +2894,12 @@ function render() {
   const addBtn = document.getElementById("add-btn");
   addBtn.style.visibility = (tab === "settings" || tab === "notes") ? "hidden" : "visible";
   if (tab === "dashboard") renderDashboard();
-  else if (tab === "studies") detailStudyId ? renderStudyDetail() : renderStudies();
+  else if (tab === "studies") {
+    if (coauthorName) renderCoauthor();
+    else if (showPublications) renderPublications();
+    else if (detailStudyId) renderStudyDetail();
+    else renderStudies();
+  }
   else if (tab === "tasks") renderTasks();
   else if (tab === "worklist") renderWorkingList();
   else if (tab === "notes") renderTeamNotes();
@@ -2967,6 +2982,9 @@ function bindDeadlineRows(root) {
       else delete openDeadlines[d.dataset.dl];
     });
   });
+  root.querySelectorAll("[data-open-publications]").forEach(el => el.onclick = () => {
+    showPublications = true; detailStudyId = null; coauthorName = null; tab = "studies"; render();
+  });
   root.querySelectorAll("[data-open-study]").forEach(el => el.onclick = (e) => {
     e.preventDefault(); e.stopPropagation();
     // Keep the meeting this project was reached from expanded, so coming back lands where you
@@ -3031,7 +3049,7 @@ function dashboardHTML() {
       <div class="stat"><div class="num">${active.length}</div><div class="lbl">Active Studies</div></div>
       <div class="stat"><div class="num">${openTasks.length}</div><div class="lbl">Open Tasks</div></div>
       <div class="stat"><div class="num" style="color:${overdue.length ? "var(--red)" : "var(--green)"}">${overdue.length}</div><div class="lbl">Overdue</div></div>
-      <div class="stat"><div class="num">${mine.filter(s => s.phase === "Published").length}</div><div class="lbl">Published</div></div>
+      <div class="stat" data-open-publications="1" style="cursor:pointer"><div class="num">${mine.filter(s => s.phase === "Published").length}</div><div class="lbl">Published ›</div></div>
     </div>`;
 
   // Deadline boards (abstracts + grants), filtered by personal society subscriptions
@@ -4478,6 +4496,333 @@ function bindPlainFieldRow(root, id, s, key) {
     upsertStudy(s);
     toast(val ? "Saved" : "Cleared");
   };
+}
+
+/* ============ Publications dashboard ============ */
+// Everything here is derived from the imported PubMed records plus the studies already in the
+// tracker. Nothing is stored twice: recomputed on each render so it can never drift from the data.
+
+// Topics, from the words that actually appear in these titles. A fixed list rather than anything
+// clever — the point is that Adam recognises his own subject areas, and a generic keyword
+// extractor would produce "patients", "outcomes", "study".
+const PUB_TOPICS = [
+  ["Patellofemoral & instability", /patell|mpfl|trochle|tt-?tg|instability|j-?sign|dislocat/i],
+  ["Cartilage restoration",        /cartilage|chondro|oca\b|osteochondral|aci\b|maci|microfracture|defect/i],
+  ["Meniscus",                     /meniscus|meniscal|meniscectom|transplant.*menisc/i],
+  ["ACL & ligament",               /\bacl\b|cruciate|\bpcl\b|\bmcl\b|ligament reconstruct|graft/i],
+  ["Shoulder",                     /shoulder|rotator cuff|labral|labrum|biceps|glenoid|slap\b/i],
+  ["Hip",                          /\bhip\b|femoroacetabular|\bfai\b|acetabul|abductor/i],
+  ["Osteotomy & alignment",        /osteotomy|alignment|malalign|tubercle|varus|valgus|slope/i],
+  ["Biologics & injections",       /\bprp\b|platelet|biologic|stem cell|bmac|amniotic|injection|corticosteroid/i],
+  ["Imaging & measurement",        /\bmri\b|radiograph|imaging|ultrasound|\bct\b|measurement|quantitat/i],
+  ["Outcomes & PROs",              /outcome|patient-?report|\bpro\b|promis|satisfact|return to sport|mcid/i],
+  ["Basic science & biomechanics", /biomechanic|cadaver|in vitro|finite element|histolog|tensile|load/i],
+  ["Education & review",           /review|technique|instructional|editorial|commentary|letter|current concept/i],
+];
+function topicsForPaper(p) {
+  const hay = [p.title, p.journal].filter(Boolean).join(" ");
+  const hits = PUB_TOPICS.filter(([, re]) => re.test(hay)).map(([name]) => name);
+  return hits.length ? hits : ["Other"];
+}
+// One canonical key per person, so "Divesh Sachdev", "D Sachdev" and "Sachdev D" are one human.
+// Surname plus first initial: enough to merge the same person, conservative enough not to merge
+// two different ones in a field this size.
+function authorKey(a) {
+  const last = (a.last || "").toLowerCase().replace(/[^a-z]/g, "");
+  const first = ((a.fore || a.initials || "").trim()[0] || "").toLowerCase();
+  return last + "|" + first;
+}
+function authorDisplay(a) { return [a.fore || a.initials, a.last].filter(Boolean).join(" "); }
+const isYanke = (a) => (a.last || "").toLowerCase() === "yanke";
+
+// Every imported paper, newest first.
+function publishedPapers() {
+  return (state.studies || [])
+    .filter(s => s.publication && s.publication.pmid)
+    .map(s => ({ study: s, p: s.publication }))
+    .sort((a, b) => String(b.p.year || "").localeCompare(String(a.p.year || "")));
+}
+// Studies that are NOT yet published — the pipeline a co-author is currently part of. Team and
+// proposed-author lists both count: being on either is what makes a paper likely for them.
+function pendingStudiesFor(nameOrKey) {
+  const want = String(nameOrKey || "").toLowerCase();
+  return (state.studies || []).filter(s => {
+    if (s.publication) return false;
+    const people = []
+      .concat(Array.isArray(s.team) ? s.team : String(s.team || "").split(/,\s*/))
+      .concat(Array.isArray(s.authors) ? s.authors : [])
+      .concat([s.pi]);
+    return people.filter(Boolean).some(n => {
+      const t = canonName(String(n)).toLowerCase();
+      if (!t) return false;
+      const parts = t.split(/\s+/);
+      const key = (parts[parts.length - 1] || "") + "|" + ((parts[0] || "")[0] || "");
+      return t === want || key === want;
+    });
+  });
+}
+// Co-authors, counted, with the years they span and what they worked on.
+function coauthorStats() {
+  const by = {};
+  publishedPapers().forEach(({ p }) => {
+    (p.authors || []).filter(a => !isYanke(a)).forEach(a => {
+      const k = authorKey(a);
+      if (!k.startsWith("|") && k.length > 1) {
+        const e = by[k] || (by[k] = { key: k, name: authorDisplay(a), papers: 0, years: [], topics: {} });
+        // Keep the fullest spelling seen — "Divesh Sachdev" beats "D Sachdev".
+        if (authorDisplay(a).length > e.name.length) e.name = authorDisplay(a);
+        e.papers++;
+        if (p.year) e.years.push(Number(p.year));
+        topicsForPaper(p).forEach(t => { e.topics[t] = (e.topics[t] || 0) + 1; });
+      }
+    });
+  });
+  return Object.values(by).sort((a, b) => b.papers - a.papers || a.name.localeCompare(b.name));
+}
+// A plain bar, so the dashboard needs no charting library and prints sensibly.
+function barRowHTML(label, value, max, colour, extra) {
+  const pct = max ? Math.round(100 * value / max) : 0;
+  return `<div style="margin:6px 0 2px">
+      <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:600;gap:8px">
+        <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</span>
+        <span style="color:var(--text2);flex:0 0 auto">${value}${extra || ""}</span>
+      </div>
+      <div class="progressbar"><div style="width:${Math.max(pct, 2)}%;background:${colour}"></div></div>
+    </div>`;
+}
+function statTileHTML(big, label, sub) {
+  return `<div class="card" style="flex:1;min-width:120px;padding:12px 14px;margin:0">
+      <div style="font-size:26px;font-weight:800;line-height:1.1">${esc(String(big))}</div>
+      <div style="font-size:12.5px;color:var(--text2);font-weight:600">${esc(label)}</div>
+      ${sub ? `<div style="font-size:11.5px;color:var(--text2);margin-top:2px">${esc(sub)}</div>` : ""}
+    </div>`;
+}
+
+function renderPublications() {
+  $title.textContent = "Publications";
+  const papers = publishedPapers();
+  if (!papers.length) {
+    $main.innerHTML = `<div class="card" style="color:var(--text2)">No published papers recorded yet.</div>`;
+    return;
+  }
+  const years = papers.map(x => Number(x.p.year)).filter(Boolean);
+  const firstYear = Math.min(...years), lastYear = Math.max(...years);
+
+  // Papers per year, every year in the span so gaps read as gaps.
+  const perYear = {};
+  years.forEach(y => { perYear[y] = (perYear[y] || 0) + 1; });
+  const yearRow = [];
+  for (let y = firstYear; y <= lastYear; y++) yearRow.push([y, perYear[y] || 0]);
+  const maxYear = Math.max(...yearRow.map(r => r[1]));
+
+  // Where in the author list he sits — the shape of a career, not a vanity metric: first and last
+  // author counts are what promotion committees read.
+  let firstA = 0, lastA = 0, midA = 0;
+  papers.forEach(({ p }) => {
+    const list = p.authors || [];
+    const i = list.findIndex(isYanke);
+    if (i === 0) firstA++;
+    else if (i === list.length - 1 && list.length > 1) lastA++;
+    else if (i > 0) midA++;
+  });
+
+  const topics = {};
+  papers.forEach(({ p }) => topicsForPaper(p).forEach(t => { topics[t] = (topics[t] || 0) + 1; }));
+  const topicRows = Object.entries(topics).sort((a, b) => b[1] - a[1]);
+  const maxTopic = Math.max(...topicRows.map(r => r[1]));
+
+  const journals = {};
+  papers.forEach(({ p }) => { if (p.journal) journals[p.journal] = (journals[p.journal] || 0) + 1; });
+  const journalRows = Object.entries(journals).sort((a, b) => b[1] - a[1]).slice(0, 10);
+  const maxJournal = Math.max(...journalRows.map(r => r[1]));
+
+  const coauthors = coauthorStats();
+  const topCo = coauthors.slice(0, 15);
+  const maxCo = topCo.length ? topCo[0].papers : 1;
+
+  const pendingCount = (state.studies || []).filter(s => !s.publication).length;
+  const metrics = (state.scholar && Array.isArray(state.scholar.points)) ? state.scholar.points.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))) : [];
+  const latest = metrics[metrics.length - 1];
+
+  let html = `<button class="btn secondary" id="pub-back" style="margin-bottom:10px">‹ Back</button>`;
+
+  html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      ${statTileHTML(papers.length, "papers", firstYear + "–" + lastYear)}
+      ${statTileHTML(coauthors.length, "co-authors", "people you've published with")}
+      ${statTileHTML(Object.keys(journals).length, "journals")}
+      ${statTileHTML(lastA, "senior author", "last-author papers")}
+    </div>`;
+
+  html += `<div class="section-title">Papers per year</div><div class="card">`;
+  yearRow.forEach(([y, n]) => { html += barRowHTML(String(y), n, maxYear, "var(--blue)"); });
+  html += `</div>`;
+
+  html += `<div class="section-title">Where you sit on the author list</div><div class="card">
+      ${barRowHTML("First author", firstA, papers.length, "var(--green)")}
+      ${barRowHTML("Senior (last) author", lastA, papers.length, "var(--indigo)")}
+      ${barRowHTML("Middle author", midA, papers.length, "var(--text2)")}
+    </div>`;
+
+  html += `<div class="section-title">What you publish on</div><div class="card">`;
+  topicRows.forEach(([t, n]) => { html += barRowHTML(esc(t), n, maxTopic, "var(--teal)"); });
+  html += `<div style="font-size:11.5px;color:var(--text2);margin-top:8px">A paper can sit under more than one topic.</div></div>`;
+
+  html += `<div class="section-title">Most frequent co-authors</div><div class="card">`;
+  topCo.forEach(c => {
+    const span = c.years.length ? Math.min(...c.years) + "–" + Math.max(...c.years) : "";
+    html += `<div data-coauthor="${esc(c.key)}" style="cursor:pointer">
+        ${barRowHTML(`<span style="color:var(--blue)">${esc(c.name)}</span>`, c.papers, maxCo, "var(--blue)", span ? ` · ${span}` : "")}
+      </div>`;
+  });
+  if (coauthors.length > topCo.length) {
+    html += `<div style="font-size:12px;color:var(--text2);margin-top:6px">…and ${coauthors.length - topCo.length} more. Tap a name to see their work with you.</div>`;
+  }
+  html += `</div>`;
+
+  html += `<div class="section-title">Journals</div><div class="card">`;
+  journalRows.forEach(([j, n]) => { html += barRowHTML(esc(j), n, maxJournal, "var(--orange)"); });
+  html += `</div>`;
+
+  // Citation metrics are typed in, not scraped: Google Scholar blocks automated access, and a
+  // number that silently stops updating is worse than one you know the date of.
+  html += `<div class="section-title">Citation metrics</div><div class="card">`;
+  if (latest) {
+    html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        ${statTileHTML(latest.h ?? "—", "h-index", "as of " + fmtDate(latest.date))}
+        ${statTileHTML(latest.i10 ?? "—", "i10-index")}
+        ${statTileHTML(latest.citations ?? "—", "citations")}
+      </div>`;
+    if (metrics.length > 1) {
+      const maxH = Math.max(...metrics.map(m => Number(m.h) || 0));
+      html += `<div style="font-size:12px;color:var(--text2);font-weight:600;margin:8px 0 2px">h-index over time</div>`;
+      metrics.forEach(m => { html += barRowHTML(fmtDate(m.date), Number(m.h) || 0, maxH, "var(--indigo)"); });
+    }
+  } else {
+    html += `<div style="color:var(--text2);font-size:13.5px;line-height:1.5">Nothing recorded yet. Add your Google Scholar numbers and they'll chart over time as you add more.</div>`;
+  }
+  html += `<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <input id="sch-date" type="date" value="${esc(todayStr())}" style="border:none;background:var(--bg);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
+      <input id="sch-h" type="number" min="0" placeholder="h-index" style="width:90px;border:none;background:var(--bg);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
+      <input id="sch-i10" type="number" min="0" placeholder="i10" style="width:80px;border:none;background:var(--bg);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
+      <input id="sch-cites" type="number" min="0" placeholder="citations" style="width:110px;border:none;background:var(--bg);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
+      <button class="mini-btn" id="sch-add" style="margin-top:0">Record</button>
+    </div>
+    <div style="font-size:11.5px;color:var(--text2);margin-top:6px">From your Google Scholar profile page. Scholar blocks automated reading, so these are entered by hand — a few seconds, a couple of times a year.</div>
+  </div>`;
+
+  html += `<div class="section-title">Still in progress</div><div class="card">
+      <div style="font-size:13.5px;line-height:1.5">${pendingCount} ${pendingCount === 1 ? "study is" : "studies are"} not yet published. Open a co-author to see which of them that person is on.</div>
+    </div>`;
+
+  $main.innerHTML = html;
+  document.getElementById("pub-back").onclick = () => { showPublications = false; tab = "dashboard"; render(); };
+  $main.querySelectorAll("[data-coauthor]").forEach(el => el.onclick = () => {
+    coauthorName = el.dataset.coauthor; render();
+  });
+  const add = document.getElementById("sch-add");
+  if (add) add.onclick = () => {
+    const h = document.getElementById("sch-h").value.trim();
+    const i10 = document.getElementById("sch-i10").value.trim();
+    const cites = document.getElementById("sch-cites").value.trim();
+    const date = document.getElementById("sch-date").value || todayStr();
+    if (!h && !i10 && !cites) { toast("Enter at least one number"); return; }
+    state.scholar = state.scholar || { id: SCHOLAR_ID, points: [] };
+    state.scholar.points = (state.scholar.points || []).filter(x => x.date !== date);
+    state.scholar.points.push({ date, h: h ? Number(h) : null, i10: i10 ? Number(i10) : null, citations: cites ? Number(cites) : null });
+    saveLocal();
+    pushItem("scholar", state.scholar);
+    render();
+    toast("Recorded — it'll chart once there's more than one reading");
+  };
+}
+
+// One co-author: what they've published with Adam, and what they're on that hasn't published yet.
+// Deliberately only their work WITH him — this is not a CV of their whole career, and saying so
+// matters if it's ever handed to the person.
+function renderCoauthor() {
+  const key = coauthorName;
+  const stats = coauthorStats().find(c => c.key === key);
+  const mine = publishedPapers().filter(({ p }) => (p.authors || []).some(a => authorKey(a) === key));
+  if (!stats || !mine.length) { coauthorName = null; renderPublications(); return; }
+  $title.textContent = stats.name;
+
+  const years = mine.map(x => Number(x.p.year)).filter(Boolean);
+  let first = 0, senior = 0;
+  mine.forEach(({ p }) => {
+    const list = p.authors || [];
+    const i = list.findIndex(a => authorKey(a) === key);
+    if (i === 0) first++;
+    else if (i === list.length - 1 && list.length > 1) senior++;
+  });
+  const topics = Object.entries(stats.topics).sort((a, b) => b[1] - a[1]);
+  const pending = pendingStudiesFor(key);
+
+  // Group the papers by year, newest first — the shape a CV takes.
+  const byYear = {};
+  mine.forEach(({ p, study }) => { (byYear[p.year || "Undated"] = byYear[p.year || "Undated"] || []).push({ p, study }); });
+  const yearKeys = Object.keys(byYear).sort((a, b) => String(b).localeCompare(String(a)));
+
+  let html = `<button class="btn secondary" id="co-back" style="margin-bottom:10px">‹ All publications</button>`;
+  html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      ${statTileHTML(mine.length, "papers with you", years.length ? Math.min(...years) + "–" + Math.max(...years) : "")}
+      ${statTileHTML(first, "first author")}
+      ${statTileHTML(senior, "senior author")}
+      ${statTileHTML(pending.length, "in progress", "not yet published")}
+    </div>`;
+
+  if (topics.length) {
+    html += `<div class="section-title">What you've worked on together</div><div class="card">`;
+    const maxT = topics[0][1];
+    topics.forEach(([t, n]) => { html += barRowHTML(esc(t), n, maxT, "var(--teal)"); });
+    html += `</div>`;
+  }
+
+  html += `<div class="section-title">Published with you (${mine.length})</div><div class="card">`;
+  yearKeys.forEach(y => {
+    html += `<div style="font-size:12px;color:var(--text2);font-weight:700;margin:10px 0 4px">${esc(y)}</div>`;
+    byYear[y].forEach(({ p, study }) => {
+      const list = (p.authors || []).map(a => {
+        const nm = esc(authorDisplay(a));
+        return authorKey(a) === key ? `<b>${nm}</b>` : nm;
+      }).join(", ");
+      html += `<div style="padding:7px 0;border-bottom:0.5px solid var(--line)">
+          <div style="font-size:14px;font-weight:600;line-height:1.35;cursor:pointer;color:var(--blue)" data-open-study="${esc(study.id)}">${esc(p.title)}</div>
+          <div style="font-size:12.5px;color:var(--text2);margin-top:2px">${esc(p.journal || "")}${p.year ? " · " + esc(p.year) : ""}</div>
+          <div style="font-size:12px;color:var(--text2);margin-top:3px;line-height:1.5">${list}</div>
+        </div>`;
+    });
+  });
+  html += `</div>`;
+
+  html += `<div class="section-title">In progress with you (${pending.length})</div><div class="card">`;
+  if (pending.length) {
+    html += `<div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin-bottom:8px">
+        Studies they're on the team or author list for that haven't published yet — the work most
+        likely to become their next paper.
+      </div>`;
+    pending.forEach(st => {
+      html += `<div class="task-row" style="padding:7px 0">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:14px;font-weight:600;color:var(--blue);cursor:pointer" data-open-study="${esc(st.id)}">${esc(st.nickname || st.title)}</div>
+            <div style="font-size:12px;color:var(--text2)">${esc(st.phase || "")}</div>
+          </div>
+        </div>`;
+    });
+  } else {
+    html += `<div style="color:var(--text2);font-size:13.5px">Nothing in the pipeline with them at the moment.</div>`;
+  }
+  html += `</div>`;
+
+  html += `<div class="card" style="font-size:11.5px;color:var(--text2);line-height:1.5">
+      This covers their work <b>with you</b> only, drawn from your PubMed record and this tracker.
+      It is not their full publication list.
+    </div>`;
+
+  $main.innerHTML = html;
+  document.getElementById("co-back").onclick = () => { coauthorName = null; render(); };
+  $main.querySelectorAll("[data-open-study]").forEach(el => el.onclick = () => {
+    coauthorName = null; showPublications = false; detailStudyId = el.dataset.openStudy; render();
+  });
 }
 
 function renderStudyDetail() {
@@ -8788,6 +9133,8 @@ document.querySelectorAll("nav.tabbar button").forEach(b => {
     // Tapping a tab is a "take me to the top of this section" gesture: always leave the study
     // detail view (even when tapping Studies from inside a project) and reset Tasks to "Mine".
     detailStudyId = null;
+    showPublications = false;
+    coauthorName = null;
     if (tab === "tasks") taskFilter = "Mine";
     render();
   };
