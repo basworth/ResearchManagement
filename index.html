@@ -4536,12 +4536,63 @@ function authorKey(a) {
   return last + "|" + first;
 }
 function authorDisplay(a) { return [a.fore || a.initials, a.last].filter(Boolean).join(" "); }
-const isYanke = (a) => (a.last || "").toLowerCase() === "yanke";
+// Whether an author entry IS the person whose page this is. Was hardcoded to Yanke while he was
+// the only one with a publication record; a second PI would have seen his name bolded on theirs.
+const isSubjectAuthor = (a, key) => authorKey(a) === key;
 
-// Every imported paper, newest first.
-function publishedPapers() {
+// Turn a roster name into the same key the author lists are indexed by, so "Adam Yanke" and the
+// "Yanke AB" printed on a paper resolve to one person.
+function authorKeyForName(name) {
+  const parts = canonName(String(name || "")).trim().split(/\s+/).filter(Boolean);
+  if (parts.length < 2) return "";
+  const last = parts[parts.length - 1].toLowerCase().replace(/[^a-z]/g, "");
+  const first = (parts[0][0] || "").toLowerCase();
+  return last ? last + "|" + first : "";
+}
+function hasPapers(key) {
+  if (!key) return false;
+  return (state.studies || []).some(s => s.publication &&
+    (s.publication.authors || []).some(a => authorKey(a) === key));
+}
+// Whose publications this page shows. Your own if you have any; otherwise your PI's — follow the
+// org chart upwards until someone with a publication record turns up. A coordinator or fellow
+// opening this page wants their PI's picture, which is the one their own work sits inside, not an
+// empty page of their own.
+function publicationsSubject() {
+  const myProfile = currentUser ? primaryProfileFor(currentUser.id) : null;
+  const myName = myProfile ? myProfile.name : me();
+  const myKey = authorKeyForName(myName);
+  if (hasPapers(myKey)) return { name: myName, key: myKey, own: true, via: null };
+
+  // Walk up reportsTo. `seen` guards a chart someone has accidentally made circular.
+  const seen = {};
+  let p = myProfile;
+  while (p && p.reportsTo && !seen[p.id]) {
+    seen[p.id] = true;
+    const boss = (state.profiles || []).find(x => x.id === p.reportsTo);
+    if (!boss) break;
+    const key = authorKeyForName(boss.name);
+    if (hasPapers(key)) return { name: boss.name, key, own: false, via: "you report to " + boss.name };
+    p = boss;
+  }
+  // Nobody up the chain has papers — fall back to whoever has the most in this workspace, so the
+  // page shows something real rather than nothing.
+  const counts = {};
+  (state.studies || []).forEach(st => (st.publication ? (st.publication.authors || []) : []).forEach(a => {
+    const k = authorKey(a); if (k) counts[k] = (counts[k] || 0) + 1;
+  }));
+  const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  if (!top) return { name: myName, key: myKey, own: true, via: null };
+  const any = (state.studies || []).map(st => st.publication).filter(Boolean)
+    .flatMap(pub => pub.authors || []).find(a => authorKey(a) === top[0]);
+  return { name: any ? authorDisplay(any) : myName, key: top[0], own: false, via: "the lab's main author" };
+}
+// Every imported paper the subject is an author on, newest first.
+function publishedPapers(subjectKey) {
+  const key = subjectKey || (publicationsSubject().key);
   return (state.studies || [])
     .filter(s => s.publication && s.publication.pmid)
+    .filter(s => !key || (s.publication.authors || []).some(a => authorKey(a) === key))
     .map(s => ({ study: s, p: s.publication }))
     .sort((a, b) => String(b.p.year || "").localeCompare(String(a.p.year || "")));
 }
@@ -4565,10 +4616,11 @@ function pendingStudiesFor(nameOrKey) {
   });
 }
 // Co-authors, counted, with the years they span and what they worked on.
-function coauthorStats() {
+function coauthorStats(subjectKey) {
+  const key = subjectKey || publicationsSubject().key;
   const by = {};
-  publishedPapers().forEach(({ p }) => {
-    (p.authors || []).filter(a => !isYanke(a)).forEach(a => {
+  publishedPapers(key).forEach(({ p }) => {
+    (p.authors || []).filter(a => !isSubjectAuthor(a, key)).forEach(a => {
       const k = authorKey(a);
       if (!k.startsWith("|") && k.length > 1) {
         const e = by[k] || (by[k] = { key: k, name: authorDisplay(a), papers: 0, years: [], topics: {} });
@@ -4619,7 +4671,7 @@ function hIndexFrom(counts) {
   return h;
 }
 async function refreshCitations(btn) {
-  const papers = publishedPapers();
+  const papers = publishedPapers(publicationsSubject().key);
   const pmids = papers.map(x => x.p.pmid).filter(Boolean);
   if (!pmids.length) { toast("No papers with a PubMed ID yet"); return; }
   if (btn) { btn.disabled = true; btn.textContent = "Checking…"; }
@@ -4657,10 +4709,10 @@ async function refreshCitations(btn) {
   toast(`Citations updated — h-index ${h} across ${pmids.length} papers`);
 }
 // Papers with the most citations behind them, for the dashboard.
-function mostCitedPapers(n) {
+function mostCitedPapers(n, subjectKey) {
   const counts = (state.scholar && state.scholar.icite && state.scholar.icite.counts) || null;
   if (!counts) return [];
-  return publishedPapers()
+  return publishedPapers(subjectKey)
     .map(({ p, study }) => ({ p, study, cites: counts[p.pmid] ?? 0 }))
     .filter(x => x.cites > 0)
     .sort((a, b) => b.cites - a.cites)
@@ -4672,10 +4724,14 @@ function citationsFor(pmid) {
 }
 
 function renderPublications() {
-  $title.textContent = "Publications";
-  const papers = publishedPapers();
+  const subject = publicationsSubject();
+  $title.textContent = subject.own ? "Publications" : subject.name;
+  const papers = publishedPapers(subject.key);
   if (!papers.length) {
-    $main.innerHTML = `<div class="card" style="color:var(--text2)">No published papers recorded yet.</div>`;
+    $main.innerHTML = `<button class="btn secondary" id="pub-back" style="margin-bottom:10px">‹ Back</button>
+      <div class="card" style="color:var(--text2);line-height:1.5">No published papers recorded yet${subject.own ? "" : " for " + esc(subject.name)}.</div>`;
+    const b = document.getElementById("pub-back");
+    if (b) b.onclick = () => { showPublications = false; tab = "dashboard"; render(); };
     return;
   }
   const years = papers.map(x => Number(x.p.year)).filter(Boolean);
@@ -4693,7 +4749,7 @@ function renderPublications() {
   let firstA = 0, lastA = 0, midA = 0;
   papers.forEach(({ p }) => {
     const list = p.authors || [];
-    const i = list.findIndex(isYanke);
+    const i = list.findIndex(a => isSubjectAuthor(a, subject.key));
     if (i === 0) firstA++;
     else if (i === list.length - 1 && list.length > 1) lastA++;
     else if (i > 0) midA++;
@@ -4709,7 +4765,7 @@ function renderPublications() {
   const journalRows = Object.entries(journals).sort((a, b) => b[1] - a[1]).slice(0, 10);
   const maxJournal = Math.max(...journalRows.map(r => r[1]));
 
-  const coauthors = coauthorStats();
+  const coauthors = coauthorStats(subject.key);
   const coQ = coauthorQuery.trim().toLowerCase();
   const coMatches = coQ ? coauthors.filter(c => c.name.toLowerCase().includes(coQ)) : coauthors;
   // Searching means you know who you want, so show every match; otherwise the top handful.
@@ -4721,6 +4777,11 @@ function renderPublications() {
   const latest = metrics[metrics.length - 1];
 
   let html = `<button class="btn secondary" id="pub-back" style="margin-bottom:10px">‹ Back</button>`;
+  if (!subject.own) {
+    html += `<div class="card" style="padding:10px 14px;margin-bottom:10px;font-size:13.5px;line-height:1.5">
+        Showing <b>${esc(subject.name)}</b>'s publications — ${esc(subject.via || "")}.
+      </div>`;
+  }
 
   html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
       ${statTileHTML(papers.length, "papers", firstYear + "–" + lastYear)}
@@ -4771,7 +4832,7 @@ function renderPublications() {
   // Two sources, side by side and never mixed: iCite is computed from these 276 papers and
   // refreshes itself; Scholar is typed in. They disagree by design, so both are labelled.
   const ic = state.scholar && state.scholar.icite;
-  const topCited = mostCitedPapers(8);
+  const topCited = mostCitedPapers(8, subject.key);
   html += `<div class="section-title">Citations</div><div class="card">`;
   if (ic) {
     html += `<div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -4872,9 +4933,10 @@ function renderPublications() {
 // Deliberately only their work WITH him — this is not a CV of their whole career, and saying so
 // matters if it's ever handed to the person.
 function renderCoauthor() {
+  const subject = publicationsSubject();
   const key = coauthorName;
-  const stats = coauthorStats().find(c => c.key === key);
-  const mine = publishedPapers().filter(({ p }) => (p.authors || []).some(a => authorKey(a) === key));
+  const stats = coauthorStats(subject.key).find(c => c.key === key);
+  const mine = publishedPapers(subject.key).filter(({ p }) => (p.authors || []).some(a => authorKey(a) === key));
   if (!stats || !mine.length) { coauthorName = null; renderPublications(); return; }
   $title.textContent = stats.name;
 
