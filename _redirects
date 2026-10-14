@@ -1,0 +1,12 @@
+# One address for the tracker: studypipeline.com.
+#
+# Netlify serves the same build at rushsportsresearch.netlify.app, and until now both worked. That
+# looked harmless but split people in two: a sign-in is stored per address, so someone signed in on
+# the netlify address met a login screen on studypipeline.com and reasonably concluded the new link
+# was broken. Sign-in and password-reset links also point at whichever address generated them.
+#
+# 301, so browsers and bookmarks learn the new home permanently. The ! forces it ahead of serving
+# the file that exists at that path. :splat carries the rest of the path and the query string, so a
+# deep link to a study still lands on that study.
+https://rushsportsresearch.netlify.app/*  https://studypipeline.com/:splat  301!
+http://rushsportsresearch.netlify.app/*   https://studypipeline.com/:splat  301!
