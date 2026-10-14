@@ -1372,6 +1372,7 @@ function migrate() {
   // The matcher reads them from a module variable rather than from state, so it can be shared
   // verbatim with the edge function, which has no state at all.
   setMatchHints(state.matchHints);
+  setMeetings(state.meetings);
   if (!state.nameAliases || typeof state.nameAliases !== "object") state.nameAliases = {};
   // A customised stage list won't contain stages added to the defaults later, so splice them in
   // once. The "once" matters: the stage editor lets people deliberately remove stages, and
@@ -1942,6 +1943,7 @@ async function pullAll() {
     const sch = data.find(r => r.kind === "scholar");
     if (sch) state.scholar = sch.data;
     setMatchHints(state.matchHints);
+  setMeetings(state.meetings);
     const meta = data.find(r => r.kind === "meta");
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
     if (meta && meta.data.degrees && typeof meta.data.degrees === "object") state.rosterDegrees = meta.data.degrees;
@@ -6020,7 +6022,7 @@ function bindFilterSetsBar(tab, setActive) {
 // so improving the parser re-reads everything it looked at before and got nothing from — otherwise
 // a message read by an older, dumber version stays permanently misjudged, which is exactly what
 // happened to the first Arthroscopy confirmation.
-const PARSER_VERSION = 6;
+const PARSER_VERSION = 7;
 
 // ---------- Protected health information ----------
 // The tracker is deliberately study-level and holds no PHI. A forwarded email might, so it is
@@ -6058,6 +6060,10 @@ function stripPHI(text) {
 // they sync to the team — a correction Carla makes helps everyone.
 let MATCH_HINTS = [];
 function setMatchHints(list) { MATCH_HINTS = Array.isArray(list) ? list : []; }
+// The deadline reader needs the meeting catalogue to know which deadline an email is about. The
+// app passes state.meetings; the server loads them and passes the same.
+let MEETINGS = [];
+function setMeetings(list) { MEETINGS = Array.isArray(list) ? list : []; }
 // Phrases worth remembering out of a corrected email. Not every word — the ones that are rare
 // enough to identify something, which is the same test the distinctive-word matcher uses.
 function hintPhrasesFrom(text, limit) {
@@ -6426,6 +6432,64 @@ function emailSentDate(body) {
   const m = /^\s*(?:Date|Sent):\s*(.+)$/im.exec(String(body || ""));
   return m ? parseLooseDate(m[1]) : "";
 }
+// ---------- Deadline extensions ----------
+// Societies announce extensions BY EMAIL and routinely never update their website — Adam, 14 Oct
+// 2026, the day ICRS moved its abstract deadline to 22 Oct while cartilage.org still said the
+// 15th. So the email is the better source, and this reads it.
+//
+// An extension email is about a MEETING, not a study: it changes the shared deadline catalogue
+// every lab sees. That makes it the one thing here that can touch another lab's view, so the
+// direction of the change decides whether it applies itself (see below).
+const EXTENSION_WORDS = /\b(?:extend(?:ed|ing|s|ion)?|new deadline|deadline has been (?:moved|changed|pushed)|additional time|more time to submit|now due|reopened)\b/i;
+const DEADLINE_CONTEXT = /\b(?:abstract|submission|deadline|call for (?:abstracts|papers))\b/i;
+
+// Which meeting is this about? Society acronym or the meeting's own name, whichever the email
+// gives us. Deliberately strict: a wrong match moves the wrong deadline for everyone.
+function matchMeetingFromText(text) {
+  const hay = " " + String(text || "").toLowerCase().replace(/[^a-z0-9]+/g, " ") + " ";
+  const scored = [];
+  (MEETINGS || []).forEach(m => {
+    const soc = String(m.society || "").toLowerCase().trim();
+    const name = String(m.name || "").toLowerCase();
+    let score = 0;
+    // The society acronym, as a whole word.
+    if (soc && soc.length >= 3 && hay.indexOf(" " + soc.replace(/[^a-z0-9]+/g, " ") + " ") >= 0) score += 3;
+    // Distinctive words from the meeting's own name.
+    const words = name.split(/[^a-z0-9]+/).filter(w => w.length > 4 && !/annual|meeting|congress|submission|abstract/.test(w));
+    words.forEach(w => { if (hay.indexOf(" " + w + " ") >= 0) score += 1; });
+    if (score > 0) scored.push({ m, score });
+  });
+  scored.sort((a, b) => b.score - a.score);
+  // A clear winner only: ties mean we don't actually know which meeting it is.
+  if (!scored.length || scored[0].score < 3) return null;
+  if (scored[1] && scored[1].score >= scored[0].score) return null;
+  return scored[0].m;
+}
+// Returns { meetingId, meetingName, from, to, later } or null. Never decides whether to apply —
+// that's the caller's call, because the app and the server act on it differently.
+function readDeadlineExtension(text) {
+  const body = String(text || "");
+  if (!EXTENSION_WORDS.test(body) || !DEADLINE_CONTEXT.test(body)) return null;
+  const m = matchMeetingFromText(body);
+  if (!m) return null;
+
+  // Prefer a date that sits near the extension language; fall back to any date in the mail.
+  let newDate = "";
+  const near = new RegExp(EXTENSION_WORDS.source +
+    "[^.\\n]{0,80}?((?:[A-Za-z]{3,9}\\.?\\s+\\d{1,2},?\\s+\\d{4})|(?:\\d{1,2}\\s+[A-Za-z]{3,9}\\.?\\s+\\d{4})|(?:\\d{4}-\\d{2}-\\d{2})|(?:\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}))", "i");
+  const hit = near.exec(body);
+  if (hit) newDate = parseLooseDate(hit[1]) || "";
+  if (!newDate) {
+    const any = /((?:[A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4})|(?:\d{4}-\d{2}-\d{2})|(?:\d{1,2}\/\d{1,2}\/\d{2,4}))/.exec(body);
+    if (any) newDate = parseLooseDate(any[1]) || "";
+  }
+  if (!newDate) return null;
+
+  const from = m.deadline || "";
+  return { meetingId: m.id, meetingKey: m.key || "", meetingName: [m.society, m.name].filter(Boolean).join(" — "),
+           from, to: newDate, later: !from || newDate > from };
+}
+
 function readEmail(text, subject) {
   const body = String(subject || "") + "\n" + String(text || "");
   const hit = matchStudyFromText(body);
@@ -6492,7 +6556,10 @@ function readEmail(text, subject) {
     if (note) changes.push(proposal("addNote", "Note on the study", note, true,
       "nothing in it maps to a field, so it's kept as a note"));
   }
-  return { study: hit ? hit.study : null, basis: hit ? hit.basis : "", changes };
+  // A deadline extension is independent of any study — it can arrive in mail that matches no
+  // study at all, so it's read separately and returned alongside.
+  const extension = readDeadlineExtension(String(subject || "") + "\n" + String(text || ""));
+  return { study: hit ? hit.study : null, basis: hit ? hit.basis : "", changes, extension };
 }
 
 // ---------- Meeting transcripts ----------
@@ -6737,6 +6804,31 @@ function ingestEmail(raw, subject, source, from) {
       g.changes = read.changes.filter(c => !c.safe);
     }
   }
+  // A deadline extension. Applied only when it moves the date LATER — that direction can only
+  // ever give people more time, so acting on it unprompted is safe. A date moving EARLIER is the
+  // dangerous direction (people plan around a deadline), so it waits for a human, and so does
+  // anything from a sender we couldn't place.
+  if (read.extension) {
+    const x = read.extension;
+    g.extension = x;
+    const m = (state.meetings || []).find(mm => mm.id === x.meetingId);
+    if (m && !g.unverified && x.later) {
+      m.deadline = x.to;
+      m.dates = (m.dates ? m.dates + " " : "") + `Deadline extended to ${fmtDate(x.to)} (from a forwarded email, ${todayStr()}).`;
+      // A newer verifiedOn, or the biweekly website refresh would overwrite this with the stale
+      // date the society never updated.
+      m.verifiedOn = new Date().toISOString().slice(0, 16).replace("T", "T");
+      saveLocal();
+      pushMeeting(m, false);
+      g.applied.push({ field: "meetingDeadline", label: x.meetingName + " deadline",
+                       from: x.from || "(none)", to: x.to });
+      toast(`${x.meetingName} deadline moved to ${fmtDate(x.to)}`);
+    } else if (m) {
+      g.changes.push(proposal("meetingDeadline", x.meetingName + " deadline", x.to, false,
+        x.later ? "the sender couldn't be verified" :
+        `this moves the deadline EARLIER (${x.from || "none"} → ${x.to}) — societies extend by email and rarely bring a date forward, so check before applying`));
+    }
+  }
   // Nothing left to decide, and something was done: file it as handled rather than making someone
   // dismiss a queue item that has no question in it.
   if (!g.changes.length && g.applied.length) { g.status = "applied"; g.decidedAt = now; g.decidedBy = me(); }
@@ -6814,6 +6906,7 @@ function teachSuggestionStudy(id, studyId) {
   state.matchHints = state.matchHints || [];
   state.matchHints.push(hint);
   setMatchHints(state.matchHints);
+  setMeetings(state.meetings);
   saveLocal(); pushItem("matchHint", hint);
 
   // Re-read it now that it knows.
@@ -6842,6 +6935,7 @@ function forgetMatchHint(hintId) {
   if (!h) return;
   state.matchHints = state.matchHints.filter(x => x.id !== hintId);
   setMatchHints(state.matchHints);
+  setMeetings(state.meetings);
   saveLocal(); deleteRemote(hintId); render();
   toast("Forgotten — it won't use that to match any more");
 }
