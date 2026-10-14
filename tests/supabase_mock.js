@@ -9,7 +9,10 @@ function makeMockSupabase(opts) {
   opts = opts || {};
   const items = opts.items || []; // [{id, kind, data, updated_at}]
   let session = opts.session === undefined
-    ? { user: { id: opts.userId || "test-user-1", email: opts.email || "test@example.com" } }
+    // user_metadata carries the workspace an invited person was placed in — it is how the app
+    // knows which lab to stamp a first-ever profile with, before any profile row exists.
+    ? { user: { id: opts.userId || "test-user-1", email: opts.email || "test@example.com",
+                user_metadata: opts.userMetadata || {} } }
     : opts.session;
   let authCallback = null;
 

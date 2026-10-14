@@ -157,7 +157,14 @@ console.log("\n-- Replaying the original defect on the real file --");
   const hits = out.split("\n").filter(l => isUndefinedName(l) && /callerId/.test(l));
   check("Without the fix, the check fails on callerId", hits.length > 0,
     out.split("\n").filter(l => /error TS/.test(l))[0] || "(none)");
-  check("...at both places it was used", hits.length === 2, hits.length);
+  // Counted from the file rather than hardcoded: the function gains uses of callerId as it grows
+  // (a third arrived with the workspace lookup), and a fixed number turns this canary red for a
+  // reason unrelated to the defect it exists to catch. Count CODE lines only — the comments above
+  // the declaration mention callerId too, and the compiler rightly says nothing about those.
+  const uses = broken.split("\n")
+    .filter(l => /\bcallerId\b/.test(l) && !/^\s*(\/\/|\*)/.test(l)).length;
+  check("...at every place it was used", hits.length === uses,
+    "flagged " + hits.length + " of " + uses + " uses");
   fs.rmSync(f, { force: true });
 }
 

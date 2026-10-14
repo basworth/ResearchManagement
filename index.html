@@ -1737,7 +1737,11 @@ async function handleAuthChange(event, session) {
     return;
   }
   if (session && session.user) {
-    currentUser = { id: session.user.id, email: session.user.email };
+    // Kept deliberately narrow — but the lab an invited person was placed in has to come through,
+    // because on a first sign-in there is no profile row yet to read it from and the app would
+    // otherwise stamp them with the default lab. Set by invite-user at account creation.
+    currentUser = { id: session.user.id, email: session.user.email,
+                    invitedWorkspace: (session.user.user_metadata || {}).workspace || "" };
     hideLoginScreen();
     setSyncPill(false, "Connecting…");
     unsubscribeRealtime();
@@ -1958,6 +1962,11 @@ async function pullAll() {
     if (currentUser) {
       const mine = data.find(r => r.kind === "profile" && r.id === currentUser.id);
       if (mine && mine.workspace) myWorkspace = mine.workspace;
+      // No profile row yet — a first sign-in. The lab was decided when they were invited and
+      // travels on the account itself, because the row that would otherwise say which lab they
+      // belong to is the very row we are about to create. Without this, a newly invited PI is
+      // stamped with the default and files into somebody else's lab.
+      else if (currentUser.invitedWorkspace) myWorkspace = currentUser.invitedWorkspace;
     }
     migrate();
     saveLocal();
