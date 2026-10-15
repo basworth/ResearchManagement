@@ -77,17 +77,32 @@ function check(name, cond, detail) {
   check("a task for a deleted study adds nothing", !mtgIds().includes("deleted-study"), mtgIds());
   ev(`state.tasks = state.tasks.filter(t => t.id !== "t-ghost")`);
 
+  console.log("\n-- The tags no longer live in the shared meeting record --");
+  // Since 15 Oct 2026 a lab's tags live in their own `mtgTag` record, stamped with the lab and
+  // sealed by the same rules as studies. The shared meeting row keeps its old studyIds field —
+  // nothing is deleted — but nothing reads it once a tag record exists.
+  const tagIds = () => ev(`JSON.stringify((state.mtgTags.find(t => t.meetingId === ${JSON.stringify(MTG)}) || {}).studyIds || [])`);
+  check("a tag record holds the links", JSON.parse(tagIds()).length === 3, tagIds());
+  check("...and it's what the screens read", tagIds() === mtgIds(), [tagIds(), mtgIds()]);
+
   console.log("\n-- A stale client can no longer wipe the links --");
   // Exactly the losing write: a copy of the meeting that predates the tagging, pushed by a
-  // deadline refresh. Its studyIds are empty; the server's are not.
+  // deadline refresh. Its studyIds are empty; the server's are not. pushMeeting now works on a
+  // copy — the caller's object is left alone — so the check is on what actually reached the row.
   ev(`window.__stale = JSON.parse(JSON.stringify(state.meetings.find(x => x.id === ${JSON.stringify(MTG)})));
       window.__stale.studyIds = [];
       window.__stale.dates = "May 1-3, 2027, Rotterdam (refreshed)";
-      window.__done = pushMeeting(window.__stale, false);`);
+      window.__done = pushMeeting(window.__stale);`);
   await window.__done;
   await wait(100);
-  check("the refresh kept all three links", (window.__stale.studyIds || []).length === 3, window.__stale.studyIds);
-  check("...and still applied its own update", window.__stale.dates.includes("refreshed"));
+  const row = () => JSON.parse(ev(`JSON.stringify(remoteBaseline[${JSON.stringify(MTG)}])`));
+  check("the refresh applied its own update", row().dates.includes("refreshed"));
+  // The three links were never in this row to begin with — this is the post-regression state the
+  // test starts from, where the server's studyIds are empty and the tasks are the only record.
+  // What matters is that the refresh didn't take anything out of it either.
+  check("...without shrinking the shared field", (row().studyIds || []).length === 0, row().studyIds);
+  check("...and the tags, which live elsewhere now, are untouched", JSON.parse(tagIds()).length === 3, tagIds());
+  check("...so the screens still show all three", mtgIds() === tagIds(), mtgIds());
 
   console.log("\n-- Unlinking on purpose still works --");
   ev(`toggleStudyLink(${JSON.stringify(MTG)}, ${JSON.stringify(S1)})`);

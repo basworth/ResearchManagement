@@ -50,9 +50,14 @@ function makeMockSupabase(opts) {
     return {
       select(cols) {
         return {
+          // Deep-copied, like a real response. Handing out the stored objects themselves made the
+          // app's in-memory state and the "database" the same objects, so a purely local change
+          // appeared to have been saved and a stale-vs-server comparison could never fail. That
+          // quietly hid a real difference while the deadline tags were being moved out of the
+          // shared meeting record (15 Oct 2026).
           neq(col, val) {
             if (!session) return Promise.resolve({ data: null, error: authError });
-            return Promise.resolve({ data: items.filter(r => r[col] !== val), error: null });
+            return Promise.resolve({ data: JSON.parse(JSON.stringify(items.filter(r => r[col] !== val))), error: null });
           },
           // Single-row read, used by pushMeeting to merge a meeting's study links with whatever
           // the server already holds before writing over it.

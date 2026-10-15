@@ -1004,7 +1004,7 @@ function setSub(soc, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [] };
+let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [] };
 let tab = "dashboard";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
@@ -1236,7 +1236,7 @@ const dateStrOffset = (days) => {
 function loadLocal() {
   try {
     const raw = localStorage.getItem("rt-data");
-    if (raw) state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [], profiles: [] }, JSON.parse(raw));
+    if (raw) state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [] }, JSON.parse(raw));
     migrate();
   } catch (e) { console.warn("load failed", e); }
 }
@@ -1266,6 +1266,11 @@ function dedupeMeetingsByKey() {
     const unionIds = new Set(keeper.studyIds || []);
     dups.forEach(d => (d.studyIds || []).forEach(id => unionIds.add(id)));
     keeper.studyIds = [...unionIds];
+    // The shared row's legacy list may name studies belonging to labs this device can't see.
+    // Carry it onto the keeper so collapsing two copies never costs another lab its old links.
+    const legacy = new Set(keeper._legacyStudyIds || keeper.studyIds || []);
+    dups.forEach(d => (d._legacyStudyIds || d.studyIds || []).forEach(id => legacy.add(id)));
+    keeper._legacyStudyIds = [...legacy];
     dups.forEach(d => {
       state.tasks.forEach(t => { if (t.linkedMeetingId === d.id) { t.linkedMeetingId = keeper.id; touchedTasks.push(t); } });
       removedIds.push(d.id);
@@ -1274,9 +1279,9 @@ function dedupeMeetingsByKey() {
   });
   if (removedIds.length) {
     state.meetings = state.meetings.filter(m => !removedIds.includes(m.id));
-    keepers.forEach(m => pushMeeting(m, false));
+    keepers.forEach(m => { setDeadlineLinks(m, m.studyIds); pushMeeting(m); });
     touchedTasks.forEach(t => pushItem("task", t));
-    removedIds.forEach(deleteRemote);
+    removedIds.forEach(id => { removeDeadlineTag(id); deleteRemote(id); });
   }
 }
 // Migrate older records (v1 used a "type" field and a single phase list)
@@ -1423,6 +1428,10 @@ function migrate() {
     if (m.criteria == null) m.criteria = "";
     if (m.loiDeadline == null) m.loiDeadline = "";
   });
+  if (!Array.isArray(state.mtgTags)) state.mtgTags = [];
+  // Before dedupe, so dedupe is already working with this lab's view of the links rather than the
+  // shared record's.
+  applyDeadlineTags();
   dedupeMeetingsByKey();
   healMeetingLinksFromTasks();
   // Migrate single-assignee tasks (older "assignee" string) to the new multi-person "assignees" array.
@@ -1938,6 +1947,11 @@ async function pullAll() {
     state.studies = data.filter(r => r.kind === "study").map(r => r.data);
     state.tasks = data.filter(r => r.kind === "task").map(r => r.data);
     state.meetings = data.filter(r => r.kind === "meeting").map(r => r.data);
+    // This lab's deadline tags. The database only hands over our own, which is the whole point —
+    // see applyDeadlineTags. Flag set before migrate() runs, because migrate() has to be able to
+    // tell "no tags" from "tags haven't arrived yet".
+    state.mtgTags = data.filter(r => r.kind === "mtgTag").map(r => r.data);
+    deadlineTagsLoaded = true;
     state.teamNotes = data.filter(r => r.kind === "teamNote").map(r => r.data);
     state.userPrefs = data.filter(r => r.kind === "userPref").map(r => r.data);
     state.profiles = data.filter(r => r.kind === "profile").map(r => r.data);
@@ -2128,7 +2142,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
     return;
   }
   if (kind === "scholar") { state.scholar = data; saveLocal(); render(); return; }
-  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : kind === "filterSet" ? state.filterSets : kind === "suggestion" ? state.suggestions : kind === "matchHint" ? state.matchHints : null;
+  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "mtgTag" ? state.mtgTags : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : kind === "filterSet" ? state.filterSets : kind === "suggestion" ? state.suggestions : kind === "matchHint" ? state.matchHints : null;
   if (!arr) return;
   // Match on the payload's own id, not the row id: for userPref the two differ (see
   // prefRowId), and matching on the row id would never find the existing entry — so every
@@ -2136,6 +2150,9 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
   const localKey = (data && data.id) || id;
   const i = arr.findIndex(x => x.id === localKey);
   if (i >= 0) arr[i] = data; else arr.push(data);
+  // A teammate tagged or untagged a deadline. The tag record is the truth, so fold it back into
+  // what the deadline screens read before rendering.
+  if (kind === "mtgTag") applyDeadlineTags();
   saveLocal();
   if (editingRef && editingRef.kind === kind && editingRef.id === id) {
     toast("Heads up — this was just updated elsewhere");
@@ -2145,7 +2162,7 @@ function applyRealtimeRow(kind, id, data, updatedAt) {
 function applyRealtimeDelete(id) {
   if (!id) return;
   let hitOpenRecord = false;
-  ["studies", "tasks", "meetings", "teamNotes", "userPrefs", "profiles", "filterSets", "suggestions", "matchHints"].forEach(key => {
+  ["studies", "tasks", "meetings", "mtgTags", "teamNotes", "userPrefs", "profiles", "filterSets", "suggestions", "matchHints"].forEach(key => {
     const before = state[key].length;
     // userPref rows live under a derived row id, so also check that mapping — otherwise a
     // deleted preferences row would linger in local state forever.
@@ -2183,7 +2200,8 @@ async function pushAllLocal() {
   const rows = [
     ...state.studies.map(s => ({ id: s.id, kind: "study", data: s, updated_at: now() })),
     ...state.tasks.map(t => ({ id: t.id, kind: "task", data: t, updated_at: now() })),
-    ...state.meetings.map(m => ({ id: m.id, kind: "meeting", data: m, updated_at: now() })),
+    ...state.meetings.map(m => ({ id: m.id, kind: "meeting", data: Object.assign({}, m, { studyIds: m._legacyStudyIds || m.studyIds || [], _legacyStudyIds: undefined }), updated_at: now() })),
+    ...(state.mtgTags || []).map(t => ({ id: t.id, kind: "mtgTag", data: t, updated_at: now() })),
     ...state.teamNotes.map(n => ({ id: n.id, kind: "teamNote", data: n, updated_at: now() })),
     // prefRowId, not p.id — p.id is the auth user id, which the profile row below already
     // owns. Two rows sharing an id in one upsert is a hard Postgres error, so this whole
@@ -2250,11 +2268,12 @@ function upsertMeeting(m) {
   if (blockOfflineEdit("Saving this deadline")) return;
   const i = state.meetings.findIndex(x => x.id === m.id);
   if (i >= 0) state.meetings[i] = m; else state.meetings.push(m);
-  saveLocal(); pushMeeting(m, false); render();
+  saveLocal(); pushMeeting(m); render();
 }
 function removeMeeting(id) {
   if (blockOfflineEdit("Deleting a deadline")) return;
   state.meetings = state.meetings.filter(m => m.id !== id);
+  removeDeadlineTag(id);
   // Clean up any submission tasks that were auto-created for this deadline.
   const orphaned = state.tasks.filter(t => t.linkedMeetingId === id).map(t => t.id);
   state.tasks = state.tasks.filter(t => t.linkedMeetingId !== id);
@@ -2294,29 +2313,106 @@ function syncSubmissionTask(m, studyId, linked) {
     deleteRemote(existing.id);
   }
 }
-// Pushing a meeting used to write the whole record, studyIds and all. That is a last-write-wins
-// overwrite: any client holding a stale copy of the meeting — an open tab that never saw the link,
-// a device that applied a deadline refresh — would push its own empty studyIds straight over
-// somebody's tagging. That is exactly how three studies tagged for the ICRS congress on 7 Oct
-// vanished 34 minutes later.
+/* ---------- Deadline tags: which of MY lab's studies are tagged to a shared deadline ----------
+ *
+ * These used to live inside the meeting record itself, as `m.studyIds`. The meeting record is the
+ * one thing every lab deliberately shares — a single deadline calendar, refreshed centrally — so
+ * every lab's tags sat in a row every other lab could read and overwrite. That was survivable with
+ * one lab, and it still cost three ICRS tags on 7 Oct when a stale tab pushed its own empty list
+ * over them. With a second lab in the building it stops being a race and becomes a leak: Kern's
+ * team would see our project titles in their own calendar.
+ *
+ * So the tags moved out into their own records — one per lab per deadline, stamped with the lab,
+ * sealed by exactly the same database rules as studies and tasks. The shared meeting row KEEPS its
+ * old `studyIds` field: nothing is deleted, and pushMeeting below still only ever unions into it.
+ * But once a lab has a tag record for a deadline, that record is the truth and the legacy field is
+ * ignored.
+ *
+ * In memory, `m.studyIds` still means exactly what it always meant — "the studies my lab has
+ * tagged here" — so every screen that reads it is untouched. Only the paths that WRITE a link
+ * moved, and they all go through setDeadlineLinks().
+ */
+let deadlineTagsLoaded = false;
+function tagForMeeting(meetingId) {
+  return (state.mtgTags || []).find(t => t.meetingId === meetingId);
+}
+// Runs inside migrate(), so on every load and every pull. For a deadline that already has a tag
+// record, that record replaces m.studyIds. For one that doesn't, a tag record is seeded from the
+// legacy field — keeping only studies this lab can actually see, which is the whole split: another
+// lab's ids simply aren't readable here, so they can't come across.
 //
-// So only the two paths that are *about* linking may shrink the list. Every other write (deadline
-// refresh, dedupe, editing a meeting's dates) re-reads the row first and unions the links it finds
-// there, so a stale client can add but never subtract.
-async function pushMeeting(m, authoritativeLinks) {
-  if (sb && !authoritativeLinks) {
+// The seeding happens once per deadline and never again. Re-seeding on every load would be a
+// resurrection machine: unlinking writes the tag record, the shared legacy field still names the
+// study, and the next pull would put the link straight back.
+function applyDeadlineTags() {
+  if (!Array.isArray(state.mtgTags)) state.mtgTags = [];
+  // Before the first pull the tag records are simply absent, and treating absent as empty would
+  // blank every link on screen and then helpfully save that.
+  if (sb && !deadlineTagsLoaded) return;
+  const mine = new Set(state.studies.map(s => s.id));
+  const created = [];
+  state.meetings.forEach(m => {
+    // Keep the untouched legacy list to one side. Nothing reads it, but dedupe carries it onto the
+    // keeper so collapsing two copies of a deadline can't drop another lab's old links.
+    if (!Array.isArray(m._legacyStudyIds)) m._legacyStudyIds = (m.studyIds || []).slice();
+    const tag = tagForMeeting(m.id);
+    if (tag) {
+      if (!Array.isArray(tag.studyIds)) tag.studyIds = [];
+      m.studyIds = tag.studyIds.slice();
+      return;
+    }
+    const seed = (m.studyIds || []).filter(id => mine.has(id));
+    m.studyIds = seed.slice();
+    // A deadline nobody here has tagged needs no record at all — there is nothing to resurrect,
+    // and 40 empty rows per lab would be noise. The record appears the moment a link is made.
+    if (!seed.length) return;
+    const fresh = { id: uid(), meetingId: m.id, studyIds: seed };
+    state.mtgTags.push(fresh);
+    created.push(fresh);
+  });
+  if (created.length && sb) created.forEach(t => pushItem("mtgTag", t, null, { merge: false }));
+}
+// The single write path for this lab's tags on one deadline. Writes the tag record — never the
+// shared meeting row.
+function setDeadlineLinks(m, ids) {
+  if (!Array.isArray(state.mtgTags)) state.mtgTags = [];
+  let tag = tagForMeeting(m.id);
+  if (!tag) { tag = { id: uid(), meetingId: m.id, studyIds: [] }; state.mtgTags.push(tag); }
+  tag.studyIds = [...new Set(ids || [])];
+  m.studyIds = tag.studyIds.slice();
+  saveLocal();
+  pushItem("mtgTag", tag);
+  return tag;
+}
+// Only for when the deadline itself goes away. Dropping the tag record with it keeps a lab's
+// sealed data from outliving the thing it pointed at.
+function removeDeadlineTag(meetingId) {
+  const tag = tagForMeeting(meetingId);
+  if (!tag) return;
+  state.mtgTags = state.mtgTags.filter(t => t.id !== tag.id);
+  deleteRemote(tag.id);
+}
+// Writing the shared meeting row — dates, name, a dedupe, a feed refresh. It never carries this
+// lab's tags any more, and it re-reads the server's legacy list first so a stale client can still
+// only ever add to that field, never subtract. Works on a copy, so another lab's ids coming back
+// from the server never land in what this app is rendering.
+async function pushMeeting(m) {
+  const toWrite = Object.assign({}, m);
+  const union = new Set(toWrite._legacyStudyIds || toWrite.studyIds || []);
+  delete toWrite._legacyStudyIds;
+  if (sb) {
     try {
       const { data, error } = await sb.from("items").select("data").eq("id", m.id).maybeSingle();
       if (!error && data && data.data && Array.isArray(data.data.studyIds)) {
-        const union = new Set(m.studyIds || []);
         data.data.studyIds.forEach(id => union.add(id));
-        m.studyIds = [...union];
       }
-    } catch (e) { /* offline: push what we have, the self-heal below catches it next load */ }
+    } catch (e) { /* offline: push what we have */ }
   }
-  return pushItem("meeting", m);
+  toWrite.studyIds = [...union];
+  return pushItem("meeting", toWrite, m.id);
 }
-// Links live in two places: meeting.studyIds, and the "Submit abstract:" task that linking creates
+// Links live in two places: this lab's deadline tag record, and the "Submit abstract:" task that
+// linking creates
 // (unlinking deletes that task, so the tasks are a faithful record of what is meant to be linked).
 // Rebuilding one from the other is therefore safe, additive, and idempotent — and it recovers any
 // link an older build already lost. Never removes a link: a missing task is not evidence of intent.
@@ -2335,8 +2431,7 @@ function healMeetingLinksFromTasks() {
     }
   });
   if (fixed.length) {
-    saveLocal();
-    fixed.forEach(m => pushItem("meeting", m));
+    fixed.forEach(m => setDeadlineLinks(m, m.studyIds));
     toast(`Restored ${fixed.length === 1 ? "a deadline link" : fixed.length + " deadline links"} from their submission tasks`);
   }
   return fixed.length;
@@ -2345,12 +2440,13 @@ function toggleStudyLink(meetingId, studyId) {
   if (blockOfflineEdit("Linking a deadline")) return;
   const m = state.meetings.find(x => x.id === meetingId);
   if (!m) return;
-  m.studyIds = m.studyIds || [];
-  const i = m.studyIds.indexOf(studyId);
+  const next = (m.studyIds || []).slice();
+  const i = next.indexOf(studyId);
   const linking = i < 0;
-  if (linking) m.studyIds.push(studyId); else m.studyIds.splice(i, 1);
+  if (linking) next.push(studyId); else next.splice(i, 1);
   syncSubmissionTask(m, studyId, linking);
-  saveLocal(); pushMeeting(m, true); render();
+  setDeadlineLinks(m, next);
+  render();
 }
 function meetingsForStudy(studyId) {
   return state.meetings.filter(m => (m.studyIds || []).includes(studyId));
@@ -3267,8 +3363,7 @@ function openLinkSheet(meetingId, preselectIds) {
       const wasLinked = before.has(s.id), nowLinked = after.has(s.id);
       if (wasLinked !== nowLinked) syncSubmissionTask(m, s.id, nowLinked);
     });
-    m.studyIds = checked;
-    saveLocal(); pushMeeting(m, true); render();
+    setDeadlineLinks(m, checked); render();
     toast("Projects linked");
   });
   bindSheetSearch("link-study-search", "#link-study-list .link-row", "link-study-empty");
@@ -3303,7 +3398,7 @@ function openStudyLinkSheet(studyId) {
       if (checkedIds.has(m.id) && !has) { m.studyIds.push(studyId); syncSubmissionTask(m, studyId, true); changed.push(m); }
       else if (!checkedIds.has(m.id) && has) { m.studyIds = m.studyIds.filter(x => x !== studyId); syncSubmissionTask(m, studyId, false); changed.push(m); }
     });
-    saveLocal(); changed.forEach(m => pushMeeting(m, true)); render();
+    changed.forEach(m => setDeadlineLinks(m, m.studyIds)); render();
     toast("Deadlines linked");
   });
   bindSheetSearch("link-mtg-search", "#link-mtg-list .link-row", "link-mtg-empty");
@@ -5387,7 +5482,7 @@ function renderStudyDetail() {
       deadline: document.getElementById("custom-dl-date-abs").value, dates: "", location: "", link: "",
       aim: "", criteria: "", funded: [], studyIds: [s.id], unconfirmed: false, verifiedOn: "" };
     syncSubmissionTask(m, s.id, true);
-    upsertMeeting(m); toast("Custom abstract deadline added");
+    upsertMeeting(m); setDeadlineLinks(m, [s.id]); toast("Custom abstract deadline added");
   };
   // Grant deadlines: link existing via dropdown, or add a custom one (type fixed to "grant")
   document.getElementById("link-existing-dl-grant").onchange = (e) => {
@@ -5400,7 +5495,7 @@ function renderStudyDetail() {
       deadline: document.getElementById("custom-dl-date-grant").value, dates: "", location: "", link: "",
       aim: "", criteria: "", funded: [], studyIds: [s.id], unconfirmed: false, verifiedOn: "" };
     syncSubmissionTask(m, s.id, true);
-    upsertMeeting(m); toast("Custom grant deadline added");
+    upsertMeeting(m); setDeadlineLinks(m, [s.id]); toast("Custom grant deadline added");
   };
   $main.querySelectorAll("[data-open-meeting]").forEach(el => el.onclick = (e) => {
     if (e.target.closest("[data-unlink-meeting], [data-abs-format], [data-abs-link-status], [data-abs-accepted-format]")) return;
@@ -6828,7 +6923,7 @@ function ingestEmail(raw, subject, source, from) {
       // date the society never updated.
       m.verifiedOn = new Date().toISOString().slice(0, 16).replace("T", "T");
       saveLocal();
-      pushMeeting(m, false);
+      pushMeeting(m);
       g.applied.push({ field: "meetingDeadline", label: x.meetingName + " deadline",
                        from: x.from || "(none)", to: x.to });
       toast(`${x.meetingName} deadline moved to ${fmtDate(x.to)}`);
@@ -8475,6 +8570,7 @@ function renderSettings() {
         const data = JSON.parse(r.result);
         if (!Array.isArray(data.studies) || !Array.isArray(data.tasks)) throw new Error("bad format");
         const files = data.files || {}; delete data.files;
+        const importedLinks = [];
         if (data.mergeMode === "add") {
           // Additive import: upsert by id, keep everything else (incl. deadline board) intact
           const upsert = (arr, item) => { const i = arr.findIndex(x => x.id === item.id); if (i >= 0) arr[i] = item; else arr.push(item); };
@@ -8483,24 +8579,34 @@ function renderSettings() {
           (data.meetings || []).forEach(m => upsert(state.meetings, m));
           (data.roster || []).forEach(n => { if (!state.roster.some(x => x.toLowerCase() === n.toLowerCase())) state.roster.push(n); });
           state.roster.sort();
-          // Resolve study→deadline links by stable meeting key (ids differ per device)
+          // Resolve study→deadline links by stable meeting key (ids differ per device). Applied
+          // AFTER migrate() below, because migrate() is what replaces each meeting's links with
+          // this lab's tag record — do it before and the imported links are simply overwritten.
           (data.studies || []).forEach(s => {
             if (Array.isArray(s.linkKeys)) {
               s.linkKeys.forEach(k => {
                 const m = state.meetings.find(x => x.key === k);
-                if (m) { m.studyIds = m.studyIds || []; if (!m.studyIds.includes(s.id)) m.studyIds.push(s.id); }
+                if (m) importedLinks.push({ meetingId: m.id, studyId: s.id });
               });
               delete s.linkKeys;
             }
           });
         } else {
-          state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], teamNotes: [], userPrefs: [], profiles: [] }, data);
+          state = Object.assign({ studies: [], tasks: [], roster: [], meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [] }, data);
         }
-        migrate(); saveLocal();
+        migrate();
+        // Now that the tag records are in place, fold the imported links into them.
+        const byMeeting = {};
+        importedLinks.forEach(l => { (byMeeting[l.meetingId] = byMeeting[l.meetingId] || []).push(l.studyId); });
+        Object.keys(byMeeting).forEach(mid => {
+          const m = state.meetings.find(x => x.id === mid);
+          if (m) setDeadlineLinks(m, (m.studyIds || []).concat(byMeeting[mid]));
+        });
+        saveLocal();
         Object.entries(files).forEach(([id, c]) => { try { localStorage.setItem("rt-file-" + id, c); } catch (e2) {} });
         state.studies.forEach(s => pushItem("study", s, null, { merge: false }));
         state.tasks.forEach(t => pushItem("task", t, null, { merge: false }));
-        state.meetings.forEach(m => pushItem("meeting", m, null, { merge: false }));
+        state.meetings.forEach(m => pushMeeting(m));
         pushRoster();
         render(); toast(data.mergeMode === "add" ? "Studies imported" : "Data imported");
       } catch (err) { toast("Invalid import file"); }
@@ -9234,7 +9340,7 @@ function loadSample() {
   saveLocal();
   state.studies.forEach(s => pushItem("study", s, null, { merge: false }));
   state.tasks.forEach(t => pushItem("task", t, null, { merge: false }));
-  state.meetings.forEach(m => pushItem("meeting", m, null, { merge: false }));
+  state.meetings.forEach(m => pushMeeting(m));
   render();
 }
 
@@ -9308,6 +9414,7 @@ function removeMeetingsByKey(keys) {
   if (!toRemove.length) return 0;
   const ids = toRemove.map(m => m.id);
   state.meetings = state.meetings.filter(m => !ids.includes(m.id));
+  ids.forEach(removeDeadlineTag);
   const orphaned = state.tasks.filter(t => ids.includes(t.linkedMeetingId)).map(t => t.id);
   state.tasks = state.tasks.filter(t => !ids.includes(t.linkedMeetingId));
   saveLocal();
@@ -9341,7 +9448,7 @@ function applyFeedEntries(entries, fromNetwork) {
       changed.push(m);
     }
   });
-  if (changed.length) { saveLocal(); changed.forEach(m => pushMeeting(m, false)); render(); }
+  if (changed.length) { saveLocal(); changed.forEach(m => pushMeeting(m)); render(); }
   return changed.length;
 }
 
