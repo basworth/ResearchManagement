@@ -128,6 +128,19 @@
     table.wl .wl-steps { max-width: 440px; }
   }
 
+  /* Conference-field grouping on the deadline board */
+  .field-head {
+    display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
+    padding: 10px 4px 6px 4px; font-size: 12px; font-weight: 700;
+    letter-spacing: .5px; text-transform: uppercase; color: var(--text2);
+  }
+  .field-chev { font-size: 9px; display: inline-block; transition: transform .2s; }
+  .field-count {
+    background: var(--line); color: var(--text2); border-radius: 9px;
+    padding: 1px 7px; font-size: 10.5px; letter-spacing: 0;
+  }
+  .field-next { color: var(--text2); font-size: 10.5px; letter-spacing: 0; font-weight: 600; }
+
   /* Support-access banners */
   #ws-banner:empty { display: none; }
   .ws-banner {
@@ -987,6 +1000,55 @@ const SOCIETIES = {
 // no entry here used to get no subscription toggle at all — visible on the board but
 // impossible to switch off. So the Settings list is built from the union of the map above and
 // whatever is actually in the data, with the code itself as the fallback label.
+/* ---- Conference fields ----
+ *
+ * One shared deadline calendar across every lab was always the plan, and it stops being usable
+ * the moment there are two labs in it: a spine PI should not have to read past forty sports
+ * deadlines to find NASS. So each meeting carries a field, and each person subscribes to the
+ * fields they actually submit to.
+ *
+ * The field is derived from the society rather than stored on every entry, because the society
+ * is what the biweekly refresh already writes and a map is one place to correct a mistake. An
+ * entry may still override it with its own `field` — some societies genuinely span two.
+ */
+const FIELDS = ["Sports medicine", "Spine", "Shoulder & elbow", "Arthroplasty", "Hand & upper extremity",
+                "Foot & ankle", "Trauma", "Pediatrics", "Oncology", "Basic science", "General orthopaedics"];
+const SOCIETY_FIELD = {
+  AAOS: "General orthopaedics", ORS: "Basic science", OREF: "General orthopaedics",
+  AANA: "Sports medicine", AOSSM: "Sports medicine", ISAKOS: "Sports medicine",
+  ICRS: "Sports medicine", ISHA: "Sports medicine", ESSKA: "Sports medicine",
+  AANA_AOSSM: "Sports medicine", PRiSM: "Sports medicine", AJSM: "Sports medicine",
+  ASES: "Shoulder & elbow", ICSES: "Shoulder & elbow", "SECEC/ESSSE": "Shoulder & elbow",
+  AAHKS: "Arthroplasty", "The Hip Society": "Arthroplasty", "The Knee Society": "Arthroplasty",
+  ASSH: "Hand & upper extremity", AOFAS: "Foot & ankle", OTA: "Trauma", POSNA: "Pediatrics",
+  MSTS: "Oncology",
+  // Spine. The ones a Rush spine lab would actually submit to.
+  NASS: "Spine", SRS: "Spine", CSRS: "Spine", LSRS: "Spine", ISSLS: "Spine", ISASS: "Spine",
+  SMISS: "Spine", "AO Spine": "Spine", "AANS/CNS": "Spine", IMAST: "Spine", CNS: "Spine", AANS: "Spine",
+};
+function fieldOf(m) {
+  const explicit = (m && m.field || "").trim();
+  if (explicit) return explicit;
+  return SOCIETY_FIELD[(m && m.society || "").trim()] || "General orthopaedics";
+}
+// Every field present in the data, plus the canonical list, so a field that only exists in a feed
+// entry still gets a toggle — the same failure allSocieties() below was written to fix.
+function allFields() {
+  const set = new Set(FIELDS);
+  const known = (typeof state !== "undefined" && state && state.meetings) ? state.meetings : [];
+  known.forEach(m => set.add(fieldOf(m)));
+  return [...set];
+}
+// Default ON, like society subscriptions: a field nobody has touched behaves the same as one
+// explicitly enabled, so nothing changes for anyone who never opens the setting.
+function fieldSubs() {
+  const allOn = Object.fromEntries(allFields().map(f => [f, true]));
+  if (currentUser) {
+    const pref = (state.userPrefs || []).find(p => p.id === currentUser.id);
+    if (pref && pref.fieldSubs) return Object.assign(allOn, pref.fieldSubs);
+  }
+  return allOn;
+}
 function allSocieties() {
   const out = Object.assign({}, SOCIETIES);
   // Defensive: `state` is declared below this function, so a very early caller would hit the
@@ -1039,6 +1101,15 @@ function setSub(soc, on) {
   if (!pref) { pref = { id: currentUser.id, name: me(), subs: {} }; state.userPrefs.push(pref); }
   pref.name = me();
   pref.subs = Object.assign({}, pref.subs, { [soc]: on });
+  saveLocal(); pushItem("userPref", pref, prefRowId(currentUser.id));
+}
+function setFieldSub(field, on) {
+  if (!currentUser) return;
+  state.userPrefs = state.userPrefs || [];
+  let pref = state.userPrefs.find(p => p.id === currentUser.id);
+  if (!pref) { pref = { id: currentUser.id, name: me(), subs: {}, fieldSubs: {} }; state.userPrefs.push(pref); }
+  pref.name = me();
+  pref.fieldSubs = Object.assign({}, pref.fieldSubs, { [field]: on });
   saveLocal(); pushItem("userPref", pref, prefRowId(currentUser.id));
 }
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
@@ -3240,6 +3311,11 @@ function bindDeadlineRows(root) {
       if (chev) chev.style.transform = `rotate(${isOpen ? 90 : 0}deg)`;
     };
   });
+  root.querySelectorAll("[data-field]").forEach(el => el.onclick = () => {
+    const f = el.dataset.field;
+    fieldOpen[f] = fieldOpen[f] === false;
+    render();
+  });
   root.querySelectorAll("[data-past-meeting]").forEach(el => el.onclick = () => {
     const id = el.dataset.pastMeeting;
     pastMeetingOpen[id] = !pastMeetingOpen[id];
@@ -3282,12 +3358,14 @@ function dashboardHTML() {
 
   // Deadline boards (abstracts + grants), filtered by personal society subscriptions
   const sub = subs();
+  const fsub = fieldSubs();
   const boardRows = (type, dueWord, metaWord) => {
     // Each meeting can contribute up to two separate rows: an LOI deadline and the
     // main application/abstract deadline. They're listed individually but visibly linked.
     const entries = [];
     state.meetings
-      .filter(m => (m.type || "abstract") === type && sub[m.society] !== false && !m.hidden)
+      .filter(m => (m.type || "abstract") === type && sub[m.society] !== false
+                && fsub[fieldOf(m)] !== false && !m.hidden)
       .forEach(m => {
         if (m.loiDeadline && daysUntil(m.loiDeadline) >= 0) entries.push({ m, stage: "loi", date: m.loiDeadline });
         if (m.deadline && daysUntil(m.deadline) >= 0) entries.push({ m, stage: "main", date: m.deadline });
@@ -3297,7 +3375,30 @@ function dashboardHTML() {
     // fully present in Settings › Tracked Meetings, and reappear the moment a date is set.
     entries.sort((a, b) => a.date.localeCompare(b.date));
     if (!entries.length) return "";
-    return `<div class="card" style="padding:6px 0">` + entries.map(e => deadlineItemHTML(e.m, dueWord, metaWord, e.stage)).join("") + `</div>`;
+
+    // Grouped by field, but the GROUPS are ordered by their soonest deadline, not alphabetically.
+    // That keeps the board answering "what's next" — which is its whole job — while a spine lab
+    // no longer has to read past forty sports deadlines to find NASS. A lab that tracks one field
+    // sees exactly one group and no extra headings at all.
+    const byField = new Map();
+    entries.forEach(e => {
+      const f = fieldOf(e.m);
+      if (!byField.has(f)) byField.set(f, []);
+      byField.get(f).push(e);
+    });
+    const groups = [...byField.entries()].sort((a, b) => a[1][0].date.localeCompare(b[1][0].date));
+    const card = (list) => `<div class="card" style="padding:6px 0">`
+      + list.map(e => deadlineItemHTML(e.m, dueWord, metaWord, e.stage)).join("") + `</div>`;
+    if (groups.length === 1) return card(groups[0][1]);
+    return groups.map(([f, list]) => {
+      const open = fieldOpen[f] !== false;   // open unless deliberately collapsed
+      return `<div class="field-head" data-field="${esc(f)}">
+          <span class="field-chev" style="transform:rotate(${open ? 90 : 0}deg)">▸</span>
+          <span style="flex:1">${esc(f)}</span>
+          <span class="field-count">${list.length}</span>
+          <span class="field-next">${daysUntil(list[0].date)}d</span>
+        </div>${open ? card(list) : ""}`;
+    }).join("");
   };
   const absBoard = boardRows("abstract", "Abstracts due", "Meeting");
   const grantBoard = boardRows("grant", "Application due", "");
@@ -4105,6 +4206,10 @@ let pastAbstractsOpen = false;
 let pastGrantsOpen = false;
 // Per-meeting open state inside the archive, keyed by meeting id. All closed by default.
 let pastMeetingOpen = {};
+// Which conference-field groups are collapsed on the deadline board. Per tab, not saved: it's a
+// "get this out of my way for a minute" control, and a collapsed section that survived a reload
+// would hide a deadline from someone who had forgotten they closed it.
+let fieldOpen = {};
 // Which deadline rows on the board are expanded, keyed by meeting id. <details> keeps its own
 // open state in the DOM only, so every render() collapsed everything — including the render that
 // happens when you tap a linked project and come back. Opening a meeting is a statement about
@@ -8148,6 +8253,7 @@ async function loadPendingInvites() {
 function renderSettings() {
   $title.textContent = "Settings";
   const currentSubs = subs();
+  const currentFieldSubs = fieldSubs();
   const allMeetings = state.meetings.slice().sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
   $main.innerHTML = `
   <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px">
@@ -8349,6 +8455,22 @@ function renderSettings() {
     </div>
   </div>` : ""}
 
+  <div class="section-title" id="fields-anchor">Conference Fields</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
+    One deadline calendar covers the whole department, so switch off the fields you don't submit to
+    and the board only shows yours. Societies you keep below are still hidden if their field is off
+    here — this is the coarse control, the list underneath is the fine one.
+  </div>
+  <div class="fgroup">
+    ${allFields().map(f => {
+      const n = state.meetings.filter(m => fieldOf(m) === f && !m.hidden).length;
+      return `<div class="frow">
+        <div style="flex:1"><div style="font-size:15px;font-weight:600">${esc(f)}</div><div style="font-size:11.5px;color:var(--text2);line-height:1.3">${n} ${n === 1 ? "deadline" : "deadlines"} tracked</div></div>
+        <input type="checkbox" class="field-toggle" data-field-sub="${esc(f)}" ${currentFieldSubs[f] !== false ? "checked" : ""} style="flex:0;width:24px;height:24px">
+      </div>`;
+    }).join("")}
+  </div>
+
   <div class="section-title" id="societies-anchor">Society Subscriptions</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">Toggle which societies appear on your dashboard deadline board. This is a personal view setting — it won't change what your teammates see.${me() ? " Saved under your name, so it follows you to any device." : " No name entered above, so this is saved on this device only."}</div>
   <div class="fgroup">
@@ -8434,6 +8556,12 @@ function renderSettings() {
     if (!confirm("Sign out of Team Sync on this device?")) return;
     try { await sb.auth.signOut(); } catch (e) { console.warn(e); }
   };
+  $main.querySelectorAll(".field-toggle").forEach(c => c.onchange = () => {
+    const f = c.dataset.fieldSub;
+    setFieldSub(f, c.checked);
+    toast(c.checked ? `${f} deadlines shown on your dashboard` : `${f} hidden — turn it back on here any time`);
+    renderSidebar();
+  });
   $main.querySelectorAll(".sub-toggle").forEach(c => c.onchange = () => {
     setSub(c.dataset.soc, c.checked);
     toast(c.checked ? `${c.dataset.soc} deadlines shown on your dashboard` : `${c.dataset.soc} hidden from your dashboard`);
@@ -9490,6 +9618,22 @@ function seedMeetings() {
 // Built-in seed feed (mirrors deadlines.json; used when the hosted file isn't reachable, e.g. opened locally).
 // "key" is a stable identifier so the biweekly auto-update can match and refresh the right meeting.
 const SEED_FEED = [
+  // ---- Spine. Seeded 15 Oct 2026 for Kern Singh's lab, from each society's own pages.
+  // Entries with an empty `deadline` are real meetings whose abstract window has closed or
+  // has not been published yet; they stay out of the dashboard board (which only lists dates
+  // you can act on) and sit in Settings > Tracked Meetings until a date lands. `unconfirmed`
+  // marks the ones where the date above is an expectation from last year's pattern, not a
+  // published date — nobody should plan around those without checking.
+  {"key": "ISSLS|2027 Annual Meeting", "society": "ISSLS", "type": "abstract", "field": "Spine", "name": "ISSLS 2027 Annual Meeting", "deadline": "2026-11-15", "dates": "Montréal, Canada, 2027. Abstract deadline Sunday 15 Nov 2026. International Society for the Study of the Lumbar Spine — the oldest and most selective lumbar spine research society; also awards the ISSLS Prize for Lumbar Spine Research.", "location": "Montréal, Canada", "link": "https://www.issls.org/2027-annual-meeting", "unconfirmed": false, "verifiedOn": "2026-10-15T16:30"},
+  {"key": "LSRS|20th Annual Meeting", "society": "LSRS", "type": "abstract", "field": "Spine", "name": "LSRS 20th Annual Meeting", "deadline": "2027-01-04", "dates": "Chicago (Sofitel), instructional course + annual meeting 5–7 May 2027. Call for abstracts opens 4 Nov 2026, closes 4 Jan 2027; disclosures due the same day. 350-word limit with Background/Methods/Results/Conclusion sections. Lumbar Spine Research Society — held in Chicago.", "location": "Chicago, IL", "link": "https://www.lsrs.org/abstract-submission", "unconfirmed": false, "verifiedOn": "2026-10-15T16:30"},
+  {"key": "NASS|42nd Annual Meeting", "society": "NASS", "type": "abstract", "field": "Spine", "name": "NASS 42nd Annual Meeting", "deadline": "2027-02-03", "dates": "Boston, 22–25 Sept 2027. Submissions open 2 Dec 2026, abstract deadline 3 Feb 2027. NASS membership not required to submit, but every author needs a NASS database record and disclosures on file within one year of the deadline — an author who can't disclose in time has to be removed before submitting.", "location": "Boston, MA", "link": "https://www.spine.org/Education/Submit-Proposals", "unconfirmed": false, "verifiedOn": "2026-10-15T16:30"},
+  {"key": "AANS/CNS|2027 Spine Summit", "society": "AANS/CNS", "type": "abstract", "field": "Spine", "name": "Spine Summit 2027 (AANS/CNS Section on Disorders of the Spine & Peripheral Nerves)", "deadline": "", "dates": "Disney's Yacht & Beach Club, Orlando, 18–21 Feb 2027. The 2027 abstract window has CLOSED (opened 22 Jun 2026, extended to 8 Sept 2026; co-authors could not be added after 3 Sept). Notifications went out in November. Advance registration and the housing discount end 14 Jan 2027. Watch for the 2028 call around June 2027.", "location": "Orlando, FL", "link": "https://dspnspinesummit.org/abstract-center/", "unconfirmed": false, "verifiedOn": "2026-10-15T16:30"},
+  {"key": "AO Spine|Global Spine Congress 2027", "society": "AO Spine", "type": "abstract", "field": "Spine", "name": "Global Spine Congress 2027", "deadline": "", "dates": "Yokohama, Japan, 9–12 June 2027. Abstract submission CLOSED 21 Sept 2026 (one AO Spine page advertised an extension to 8 Oct 2026; the submission page itself says closed). Accepted abstracts are published in a special online issue of the Global Spine Journal. Contact gsc@aofoundation.org.", "location": "Yokohama, Japan", "link": "https://globalspinecongress.org/abstract-submission/", "unconfirmed": false, "verifiedOn": "2026-10-15T16:30"},
+  {"key": "SRS|34th IMAST", "society": "SRS", "type": "abstract", "field": "Spine", "name": "34th IMAST (International Meeting on Advanced Spine Techniques)", "deadline": "", "dates": "Copenhagen, 7–9 April 2027. Abstract submission ran 1 July – 1 Oct 2026, 11:59pm EDT, now closed. SRS's techniques-focused meeting, separate from its Annual Meeting.", "location": "Copenhagen, Denmark", "link": "https://www.srs.org/Meetings-Conferences/IMAST/IMAST2027", "unconfirmed": false, "verifiedOn": "2026-10-15T16:30"},
+  {"key": "SRS|62nd Annual Meeting", "society": "SRS", "type": "abstract", "field": "Spine", "name": "SRS 62nd Annual Meeting", "deadline": "", "dates": "New Orleans, 14–18 Sept 2027. Abstract deadline NOT YET PUBLISHED — the 61st Annual Meeting closed 2 Feb 2026, so expect early Feb 2027. Scoliosis Research Society. Check srs.org once the call is posted.", "location": "New Orleans, LA", "link": "https://www.srs.org/Meetings-Conferences/Annual-Meeting", "unconfirmed": true, "verifiedOn": "2026-10-15T16:30"},
+  {"key": "CSRS|55th Annual Meeting", "society": "CSRS", "type": "abstract", "field": "Spine", "name": "CSRS 55th Annual Meeting", "deadline": "", "dates": "2027 meeting and abstract window NOT YET ANNOUNCED. The 54th (Austin, 2–5 Dec 2026) ran its call 4 Mar – 15 Apr 2026, so expect a spring 2027 window. Cervical Spine Research Society — note CSRS-Europe and CSRS-AP are separate meetings with their own calls. Check csrs.org/meetings/future-meetings for the 2027 call.", "location": "TBA", "link": "https://www.csrs.org/meetings/future-meetings", "unconfirmed": true, "verifiedOn": "2026-10-15T16:30"},
+  {"key": "ISASS|ISASS27", "society": "ISASS", "type": "abstract", "field": "Spine", "name": "ISASS27 Annual Conference", "deadline": "", "dates": "23 April 2027. Abstract submission is OPEN (announced late Sept 2026) but no closing date is published on the ISASS site. International Society for the Advancement of Spine Surgery. Check isass.org for the deadline before relying on this entry.", "location": "TBA", "link": "https://isass.org/", "unconfirmed": true, "verifiedOn": "2026-10-15T16:30"},
+  {"key": "SMISS|2027 Annual Forum", "society": "SMISS", "type": "abstract", "field": "Spine", "name": "SMISS 2027 Annual Forum", "deadline": "", "dates": "The Bellagio, Las Vegas, 30 Sept – 1 Oct 2027. Abstract deadline NOT YET PUBLISHED; the 2026 call closed 25 May 2026 and the 2025 call 13 June 2025, so expect late spring 2027. Society for Minimally Invasive Spine Surgery; 400-word limit, medical-device employees may not be primary or submitting author. Check smiss.org for the 2027 call.", "location": "Las Vegas, NV", "link": "https://smiss.org/upcoming-meetings/", "unconfirmed": true, "verifiedOn": "2026-10-15T16:30"},
   { key: "AAOS|2027 Annual Meeting", society: "AAOS", name: "2027 Annual Meeting", deadline: "2026-06-08", dates: "Mar 3–6, 2027 (paper/poster/ePoster abstracts due 6/8, extended; OVT 7/15; OrthoDome 8/31)", location: "Las Vegas, NV", link: "https://www.aaos.org/annual/explore-the-program/abstracts-applications/", unconfirmed: false, verifiedOn: "2026-09-15T14:30" },
   { key: "AAOS|Orthopaedic Video Theater (OVT)", society: "AAOS", type: "abstract", name: "Orthopaedic Video Theater (OVT) Submission", deadline: "2026-07-15", dates: "Video submissions due July 15, 2026 (peer-reviewed; presented at 2027 Annual Meeting; eligible for award designation and JAAOS video abstract inclusion)", location: "Las Vegas, NV", link: "https://www.aaos.org/annual/explore-the-program/abstracts-applications/", unconfirmed: false, verifiedOn: "2026-09-15T14:30" },
   { key: "AAOS|OrthoDome Video Submission", society: "AAOS", type: "abstract", name: "OrthoDome® Video Submission", deadline: "2026-08-31", dates: "OrthoDome video applications due August 31, 2026; non-CME, 7–12 min surgical technique videos narrated live at the 2027 Annual Meeting", location: "Las Vegas, NV", link: "https://www.aaos.org/annual/explore-the-program/abstracts-applications/", unconfirmed: false, verifiedOn: "2026-09-15T14:30" },
