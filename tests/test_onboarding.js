@@ -158,6 +158,17 @@ const sheetText = (w) => { const b = w.document.querySelector(".sheet-body"); re
   check("the tour stands down while a sheet is open",
     w3.eval("(function(){ maybeShowTour(); return document.querySelector('#sheet h2').textContent; })()") === t3);
 
+  console.log("\n-- Closing counts as seen too --");
+  const w5 = boot([profile()]);
+  await wait(600);
+  check("the tour is up", sheetTitle(w5) === "Welcome", sheetTitle(w5));
+  // Close and a stray tap on the backdrop are dismissals, not "ask me again next time". A
+  // welcome that comes back every sign-in is a nag.
+  w5.document.getElementById("sheet-cancel").click();
+  await wait(450);
+  check("Close closes it", !w5.document.getElementById("sheet"));
+  check("...and records it", w5.eval(`(profileFor(${JSON.stringify(USER)}) || {}).tourSeen`) === 1);
+
   console.log("\n-- Skipping counts as seen --");
   const w4 = boot([profile()]);
   await wait(600);

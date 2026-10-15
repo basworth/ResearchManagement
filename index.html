@@ -128,6 +128,22 @@
     table.wl .wl-steps { max-width: 440px; }
   }
 
+  /* Support-access banners */
+  #ws-banner:empty { display: none; }
+  .ws-banner {
+    padding: 10px 16px; font-size: 13px; line-height: 1.45;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    border-bottom: 0.5px solid var(--line);
+  }
+  .ws-banner.watching { background: #5b1a1a; color: #ffdede; }
+  .ws-banner.inside   { background: #5a4200; color: #ffeec2; }
+  .ws-banner b { font-weight: 700; }
+  .ws-banner button {
+    border: none; border-radius: 7px; padding: 6px 11px; font-family: inherit;
+    font-size: 12.5px; font-weight: 700; cursor: pointer;
+    background: rgba(255,255,255,.18); color: inherit;
+  }
+
   /* Walkthrough & Help */
   .tour-body { font-size: 14.5px; line-height: 1.6; color: var(--text); }
   .tour-body p { margin: 0 0 11px 0; }
@@ -490,6 +506,7 @@
       <button class="topbar-btn" id="add-btn" aria-label="Add">+</button>
     </div>
   </header>
+  <div id="ws-banner"></div>
   <div class="layout">
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-head">
@@ -1514,6 +1531,27 @@ let remoteMeta = {};
 // server checks. Read from the signed-in user's own profile row on each pull; the default is the
 // original lab, which is also what the database assumes when it can't tell.
 let myWorkspace = "sports-yanke";
+// Which lab's records are on screen. Empty means "my own", which is true for everybody almost
+// always. It is only ever something else while Adam holds a live support grant and has chosen to
+// look — see openSupportSheet. Keeping it separate from myWorkspace matters: myWorkspace is who
+// you ARE, and must not drift just because of what you're looking at.
+let viewWorkspace = "";
+function activeWorkspace() { return viewWorkspace || myWorkspace; }
+// Live support grants this account can see. The database shows you grants you hold and grants
+// over your own lab, and nothing else — so the same list drives both banners.
+let supportGrants = [];
+function liveGrants() {
+  const now = new Date().toISOString();
+  return (supportGrants || []).filter(g => !g.ended_at && g.expires_at > now);
+}
+// Somebody from outside is in MY lab right now.
+function grantsOverMyLab() {
+  return liveGrants().filter(g => g.workspace === myWorkspace && g.grantee !== (currentUser && currentUser.id));
+}
+// Grants I hold over somebody else's lab.
+function grantsIHold() {
+  return liveGrants().filter(g => g.grantee === (currentUser && currentUser.id) && g.workspace !== myWorkspace);
+}
 // What the server's copy of each row looked like the last time we saw it, keyed by row id.
 //
 // This is the whole basis of the field-level merge in pushItem(). Without it, every save writes
@@ -1971,25 +2009,50 @@ async function pullAll() {
   const { data, error } = await sb.from("items").select("id, kind, data, updated_at, workspace").neq("kind", "file");
   if (error) throw error;
   if (data) {
-    state.studies = data.filter(r => r.kind === "study").map(r => r.data);
-    state.tasks = data.filter(r => r.kind === "task").map(r => r.data);
-    state.meetings = data.filter(r => r.kind === "meeting").map(r => r.data);
+    // Which lab I'm in has to be settled BEFORE the rows are split, because it decides which rows
+    // count. Taken from the row's `workspace` column rather than from `data`, because the column
+    // is what the database's own rules read.
+    if (currentUser) {
+      const mineRow = data.find(r => r.kind === "profile" && r.id === currentUser.id);
+      if (mineRow && mineRow.workspace) myWorkspace = mineRow.workspace;
+      // No profile row yet — a first sign-in. The lab was decided when they were invited and
+      // travels on the account itself, because the row that would otherwise say which lab they
+      // belong to is the very row we are about to create. Without this, a newly invited PI is
+      // stamped with the default and files into somebody else's lab.
+      else if (currentUser.invitedWorkspace) myWorkspace = currentUser.invitedWorkspace;
+    }
+    // Normally this is a no-op: the database has already refused everything outside my lab, so
+    // `data` holds nothing else. It only does work while a support grant is live, when the server
+    // starts handing over a second lab's rows as well — and merging two labs into one list would
+    // put spine studies in a sports PI's Studies tab, which is the opposite of the point.
+    //
+    // My own profile row is always kept, whichever lab is on screen: it's how the app knows who I
+    // am, what I'm called, and which lab I actually belong to.
+    const ws = activeWorkspace();
+    const rows = data.filter(r =>
+      (r.workspace || myWorkspace) === ws
+      || r.kind === "meeting" || r.kind === "meta"
+      || (r.kind === "profile" && currentUser && r.id === currentUser.id));
+
+    state.studies = rows.filter(r => r.kind === "study").map(r => r.data);
+    state.tasks = rows.filter(r => r.kind === "task").map(r => r.data);
+    state.meetings = rows.filter(r => r.kind === "meeting").map(r => r.data);
     // This lab's deadline tags. The database only hands over our own, which is the whole point —
     // see applyDeadlineTags. Flag set before migrate() runs, because migrate() has to be able to
     // tell "no tags" from "tags haven't arrived yet".
-    state.mtgTags = data.filter(r => r.kind === "mtgTag").map(r => r.data);
+    state.mtgTags = rows.filter(r => r.kind === "mtgTag").map(r => r.data);
     deadlineTagsLoaded = true;
-    state.teamNotes = data.filter(r => r.kind === "teamNote").map(r => r.data);
-    state.userPrefs = data.filter(r => r.kind === "userPref").map(r => r.data);
-    state.profiles = data.filter(r => r.kind === "profile").map(r => r.data);
-    state.filterSets = data.filter(r => r.kind === "filterSet").map(r => r.data);
-    state.suggestions = data.filter(r => r.kind === "suggestion").map(r => r.data);
-    state.matchHints = data.filter(r => r.kind === "matchHint").map(r => r.data);
-    const sch = data.find(r => r.kind === "scholar");
+    state.teamNotes = rows.filter(r => r.kind === "teamNote").map(r => r.data);
+    state.userPrefs = rows.filter(r => r.kind === "userPref").map(r => r.data);
+    state.profiles = rows.filter(r => r.kind === "profile").map(r => r.data);
+    state.filterSets = rows.filter(r => r.kind === "filterSet").map(r => r.data);
+    state.suggestions = rows.filter(r => r.kind === "suggestion").map(r => r.data);
+    state.matchHints = rows.filter(r => r.kind === "matchHint").map(r => r.data);
+    const sch = rows.find(r => r.kind === "scholar");
     if (sch) state.scholar = sch.data;
     setMatchHints(state.matchHints);
   setMeetings(state.meetings);
-    const meta = data.find(r => r.kind === "meta");
+    const meta = rows.find(r => r.kind === "meta");
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
     if (meta && meta.data.degrees && typeof meta.data.degrees === "object") state.rosterDegrees = meta.data.degrees;
     if (meta) state.orgPermissions = !!meta.data.orgPermissions;
@@ -1997,21 +2060,32 @@ async function pullAll() {
     if (meta && meta.data.nameAliases && typeof meta.data.nameAliases === "object") state.nameAliases = meta.data.nameAliases;
     // Team-wide, so a stage one person removed doesn't come back for everyone else.
     if (meta && Array.isArray(meta.data.stageAdds)) state.stageAdds = meta.data.stageAdds;
-    data.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; setBaseline(r.id, r.data); });
-    // My own profile row says which lab I'm in. Taken from the row's column, not from `data`,
-    // because the stamp is what the database's own rules read.
-    if (currentUser) {
-      const mine = data.find(r => r.kind === "profile" && r.id === currentUser.id);
-      if (mine && mine.workspace) myWorkspace = mine.workspace;
-      // No profile row yet — a first sign-in. The lab was decided when they were invited and
-      // travels on the account itself, because the row that would otherwise say which lab they
-      // belong to is the very row we are about to create. Without this, a newly invited PI is
-      // stamped with the default and files into somebody else's lab.
-      else if (currentUser.invitedWorkspace) myWorkspace = currentUser.invitedWorkspace;
-    }
+    rows.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; setBaseline(r.id, r.data); });
+    await loadSupportGrants();
     migrate();
     saveLocal();
     render();
+  }
+}
+// The grants table is small and its own rules already decide what you may see: grants you hold,
+// and grants over your own lab. A failure here must never break a pull — an older database that
+// hasn't had 002 applied simply has no banner, rather than no app.
+async function loadSupportGrants() {
+  if (!sb) { supportGrants = []; return; }
+  try {
+    const { data, error } = await sb.from("support_grants").select("*").is("ended_at", null);
+    if (error) throw error;
+    supportGrants = data || [];
+  } catch (e) {
+    console.warn("support grants unavailable", e);
+    supportGrants = [];
+  }
+  // If the grant that let me look at another lab has lapsed or been handed back, stop looking.
+  // Left alone, the app would keep rendering a stale copy of a lab it can no longer read, and
+  // the next save would be refused with no explanation.
+  if (viewWorkspace && !grantsIHold().some(g => g.workspace === viewWorkspace)) {
+    viewWorkspace = "";
+    toast("Support access has ended — you're back in your own lab");
   }
 }
 function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null, nameAliases: state.nameAliases || {}, stageAdds: state.stageAdds || [] }); }
@@ -2054,6 +2128,19 @@ async function mergeWithServer(kind, rowId, obj) {
 // `opts.merge === false` skips the merge for bulk pushes (import, seeding, pushing everything
 // after a name merge), where the local copy IS the intended answer and one read per row would
 // turn a single action into hundreds of round trips.
+// Which lab a save belongs to. Almost always your own; the lab on screen while Adam is in
+// somebody else's under support access.
+//
+// The exception is the one that matters. Your OWN profile row is always stamped with your own
+// lab, whatever you happen to be looking at. Without this, Adam opening a supported lab and
+// changing his display name would re-stamp his own profile into THEIR workspace — and since that
+// row is what my_workspace() reads, he would wake up a member of Kern's lab with no access to his
+// own 119 studies. The database would have allowed it: he has support access, so the policy says
+// yes. Nothing would look wrong until everything did.
+function stampFor(kind, rowId) {
+  if (kind === "profile" && currentUser && rowId === currentUser.id) return myWorkspace;
+  return activeWorkspace();
+}
 async function pushItem(kind, obj, rowIdOverride, opts) {
   if (!sb) return;
   try {
@@ -2074,7 +2161,7 @@ async function pushItem(kind, obj, rowIdOverride, opts) {
     }
     // The stamp goes on every write. Without it the database rejects the row outright — which is
     // the point: a save can only ever land in the saver's own lab.
-    const { error } = await sb.from("items").upsert({ id: rowId, kind, data: toWrite, updated_at: updatedAt, workspace: myWorkspace });
+    const { error } = await sb.from("items").upsert({ id: rowId, kind, data: toWrite, updated_at: updatedAt, workspace: stampFor(kind, rowId) });
     if (error) throw error;
     setBaseline(rowId, toWrite);
     // Advance our own baseline immediately so the save we just made isn't flagged as stale.
@@ -2223,6 +2310,9 @@ function confirmOverwriteOrReload(kind, id) {
 // Seed remote with all local data (used right after connecting)
 async function pushAllLocal() {
   if (!sb) return;
+  // Seeds the server from THIS device's local copy, stamped as mine. Running it while looking at
+  // somebody else's lab under support access would copy their entire dataset into my workspace.
+  if (viewWorkspace) { toast("Not while you're in another lab under support access"); return; }
   const now = () => new Date().toISOString();
   const rows = [
     ...state.studies.map(s => ({ id: s.id, kind: "study", data: s, updated_at: now() })),
@@ -3041,6 +3131,7 @@ function render() {
   else if (tab === "worklist") renderWorkingList();
   else if (tab === "notes") renderTeamNotes();
   else renderSettings();
+  renderSupportBanner();
   renderSidebar(); // desktop-only collapsible dashboard panel, kept in sync with every render
   restoreDrafts(document);
 }
@@ -5603,7 +5694,7 @@ function renderStudyDetail() {
       // put on by hand. Without it the database refuses the row outright — which is exactly what
       // happened from 9 Oct, when the stamp became compulsory: every upload was rejected and the
       // only sign was a toast blaming the connection.
-      const { error } = await sb.from("items").upsert({ id, kind: "file", data: { name: f.name, content: dataUrl }, updated_at: new Date().toISOString(), workspace: myWorkspace });
+      const { error } = await sb.from("items").upsert({ id, kind: "file", data: { name: f.name, content: dataUrl }, updated_at: new Date().toISOString(), workspace: activeWorkspace() });
       if (error) {
         // A refusal and a dropped connection are different problems and must not read the same.
         if (isServerRefusal(error)) toast("That upload was refused — " + refusalReason(error));
@@ -8066,6 +8157,14 @@ function renderSettings() {
     </div>
     <button class="btn secondary" id="settings-help" style="width:auto;padding:8px 14px;flex:none">Open</button>
   </div>
+  ${isAdmin() ? `
+  <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px">
+    <div style="flex:1;min-width:0">
+      <div style="font-size:15px;font-weight:600">Support access</div>
+      <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-top:2px">Get into another lab to fix something. Time-limited, and they see a banner naming you and why.</div>
+    </div>
+    <button class="btn secondary" id="settings-support" style="width:auto;padding:8px 14px;flex:none">Open</button>
+  </div>` : ""}
   <div class="section-title">Account</div>
   <div class="card" style="font-size:14px;line-height:1.55">
     Signed in as <b>${esc(currentUser ? currentUser.email : "")}</b>${isAdmin() ? `<div style="font-size:12.5px;color:var(--text2);margin-top:4px">Admin — you can see and edit every project, whether or not you're named on it.</div>` : ""}
@@ -8329,6 +8428,8 @@ function renderSettings() {
     });
   };
   document.getElementById("settings-help").onclick = () => openHelpSheet();
+  const supportBtn = document.getElementById("settings-support");
+  if (supportBtn) supportBtn.onclick = () => openSupportSheet();
   document.getElementById("sign-out-btn").onclick = async () => {
     if (!confirm("Sign out of Team Sync on this device?")) return;
     try { await sb.auth.signOut(); } catch (e) { console.warn(e); }
@@ -9507,6 +9608,189 @@ async function fetchDeadlineFeed() {
 // Adam must be able to read every lab's feedback and `items` is sealed per workspace — see
 // supabase/migrations/002-feedback.sql. Nothing here is a study record, so nothing crosses the
 // boundary that matters.
+/* ============ Support access ============
+ *
+ * Adam chose break-glass over sealed-forever so he can still fix things in another lab. The whole
+ * bargain is that it is never silent, which is what this renders:
+ *
+ *   * the supported lab gets a red banner on every screen naming who is in, why, and until when
+ *   * Adam, while he's in there, gets an amber one so he can't forget where he is — the app
+ *     otherwise looks identical, which is exactly how you edit the wrong lab's study
+ *
+ * Neither can be dismissed. A banner you can close is a banner nobody sees.
+ */
+function fmtUntil(iso) {
+  const d = new Date(iso);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return sameDay ? time + " today" : time + " on " + d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+function renderSupportBanner() {
+  const el = document.getElementById("ws-banner");
+  if (!el) return;
+  const parts = [];
+  grantsOverMyLab().forEach(g => {
+    const who = esc(g.grantee_name || g.grantee_email || "A tracker administrator");
+    parts.push(`<div class="ws-banner watching">
+      <div style="flex:1;min-width:220px">
+        <b>${who} can currently see your lab's projects.</b>
+        ${g.reason ? ` Reason given: “${esc(g.reason)}”.` : ""}
+        Access ends at <b>${esc(fmtUntil(g.expires_at))}</b>.
+      </div>
+    </div>`);
+  });
+  if (viewWorkspace) {
+    const g = grantsIHold().find(x => x.workspace === viewWorkspace);
+    parts.push(`<div class="ws-banner inside">
+      <div style="flex:1;min-width:220px">
+        <b>You're in ${esc(viewWorkspace)}, not your own lab.</b>
+        Everything you change here belongs to them${g ? `, until ${esc(fmtUntil(g.expires_at))}` : ""}.
+        They can see that you're here.
+      </div>
+      <button id="ws-leave">Back to my lab</button>
+      ${g ? `<button id="ws-end">End access now</button>` : ""}
+    </div>`);
+  }
+  el.innerHTML = parts.join("");
+  const leave = document.getElementById("ws-leave");
+  if (leave) leave.onclick = () => leaveSupportedWorkspace();
+  const end = document.getElementById("ws-end");
+  if (end) end.onclick = () => endSupportGrant(grantsIHold().find(x => x.workspace === viewWorkspace));
+}
+async function leaveSupportedWorkspace() {
+  viewWorkspace = "";
+  toast("Back in your own lab");
+  // A full re-pull, not a filter of what's in memory: the other lab's records are still loaded,
+  // and leaving them there would mean a stale copy of somebody else's data sitting in this tab.
+  if (sb) await pullAll().catch(() => {});
+  render();
+}
+async function endSupportGrant(g) {
+  if (!g || !sb) return;
+  const { error } = await sb.from("support_grants")
+    .update({ ended_at: new Date().toISOString() }).eq("id", g.id);
+  if (error) { toast("Couldn't end it — " + (refusalReason(error) || "try again")); return; }
+  viewWorkspace = "";
+  await pullAll().catch(() => {});
+  render();
+  toast("Support access ended — " + g.workspace + " can see that it's over");
+}
+// Admin-only. Lists the labs with counts and nothing else (see list_workspaces in migration 002),
+// and asks for a reason and a duration before anything is granted.
+async function openSupportSheet() {
+  if (!sb) { toast("Connect Team Sync first"); return; }
+  let labs = [];
+  try {
+    const { data, error } = await sb.rpc("list_workspaces");
+    if (error) throw error;
+    labs = (data || []).filter(l => l.workspace !== myWorkspace);
+  } catch (e) {
+    toast("Couldn't list the labs — " + (refusalReason(e) || "try again"));
+    return;
+  }
+  if (!labs.length) {
+    openSheet("Support access", `<div style="color:var(--text2);font-size:14px;padding:8px 2px">
+      There's only one lab on the tracker at the moment, so there's nothing to get access to.</div>`,
+      () => true);
+    document.getElementById("sheet-save").style.visibility = "hidden";
+    return;
+  }
+  const held = grantsIHold();
+  openSheet("Support access", `
+    <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin:2px 2px 12px 2px">
+      You can't see another lab's projects by default, and that's deliberate. Getting in is
+      possible, time-limited, and <b>visible to them the whole time</b> — they see a banner naming
+      you and the reason you gave.
+    </div>
+    ${held.length ? `<div class="section-title">Access you hold now</div>
+      ${held.map(g => `<div class="card" style="font-size:13.5px;line-height:1.5">
+        <b>${esc(g.workspace)}</b> until ${esc(fmtUntil(g.expires_at))}<br>
+        <span style="color:var(--text2)">${esc(g.reason || "no reason recorded")}</span>
+        <div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn secondary sa-view" data-ws="${esc(g.workspace)}" style="flex:1">Open that lab</button>
+          <button class="btn danger sa-end" data-id="${esc(g.id)}" style="flex:1">End now</button>
+        </div></div>`).join("")}` : ""}
+    <div class="section-title">Labs on the tracker</div>
+    ${labs.map(l => `<div class="card" style="display:flex;align-items:center;gap:12px">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:15px;font-weight:600">${esc(l.workspace)}</div>
+        <div style="font-size:12.5px;color:var(--text2)">${l.people} ${l.people === 1 ? "person" : "people"} · ${l.studies} ${l.studies === 1 ? "project" : "projects"}</div>
+      </div>
+      <button class="btn secondary sa-ask" data-ws="${esc(l.workspace)}" style="width:auto;padding:8px 14px;flex:none">Request access</button>
+    </div>`).join("")}
+    <div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:10px">
+      Counts only — no project titles, no names. Every grant is kept as a permanent record, including
+      ones that have ended.
+    </div>`,
+    () => true,
+    (sh) => {
+      sh.querySelectorAll(".sa-ask").forEach(b => b.onclick = () => askForSupportAccess(b.dataset.ws));
+      sh.querySelectorAll(".sa-view").forEach(b => b.onclick = () => enterSupportedWorkspace(b.dataset.ws));
+      sh.querySelectorAll(".sa-end").forEach(b => b.onclick = () => {
+        endSupportGrant(held.find(g => String(g.id) === b.dataset.id));
+        closeSheet();
+      });
+    },
+    { cancelLabel: "Close" });
+  document.getElementById("sheet-save").style.visibility = "hidden";
+}
+const SUPPORT_HOURS = [1, 4, 8, 24];
+function askForSupportAccess(ws) {
+  closeSheet();
+  setTimeout(() => {
+    openSheet("Get into " + ws, `
+      <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin:2px 2px 12px 2px">
+        They'll see a banner naming you and this reason, on every screen, until it expires. Write
+        it for them to read, not for a log file.
+      </div>
+      <div style="margin-bottom:12px">
+        <textarea id="sa-reason" rows="3" placeholder="e.g. Looking into why Priya's task reminders aren't arriving"
+          style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;resize:vertical"></textarea>
+      </div>
+      <div class="frow"><label>For</label>
+        ${selectHTML("sa-hours", SUPPORT_HOURS.map(h => h === 1 ? "1 hour" : h + " hours"), "4 hours")}
+      </div>
+      <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+        It ends by itself. You can hand it back earlier, but you can't extend it — ask again instead,
+        so a long look is recorded as a long look.
+      </div>`,
+      () => {
+        const reason = (document.getElementById("sa-reason").value || "").trim();
+        // Refused rather than defaulted. "No reason given" on somebody's banner is worse than
+        // being made to type one, and a default would be a lie written in Adam's name.
+        if (reason.length < 10) { toast("Write a line they'd accept as an explanation"); return false; }
+        const hours = parseInt(document.getElementById("sa-hours").value, 10) || 4;
+        grantSupportAccess(ws, reason, hours);
+      },
+      (sh) => { const t = sh.querySelector("#sa-reason"); if (t) t.focus(); },
+      { saveLabel: "Get access" });
+  }, 320);
+}
+async function grantSupportAccess(ws, reason, hours) {
+  if (!sb || !currentUser) return;
+  const me = profileFor(currentUser.id) || {};
+  const expires = new Date(Date.now() + hours * 3600 * 1000).toISOString();
+  // Name and address are copied onto the grant: the supported lab cannot read my profile row —
+  // it's in another workspace — so without this their banner could only say "somebody".
+  const { error } = await sb.from("support_grants").insert({
+    grantee: currentUser.id, workspace: ws, reason, expires_at: expires,
+    grantee_name: me.name || "", grantee_email: me.alertEmail || me.email || currentUser.email || "",
+  });
+  if (error) { toast("Couldn't get access — " + (refusalReason(error) || "the database refused it")); return; }
+  await loadSupportGrants();
+  render();
+  toast("Access to " + ws + " until " + fmtUntil(expires) + " — they can see you're in");
+}
+async function enterSupportedWorkspace(ws) {
+  if (!grantsIHold().some(g => g.workspace === ws)) { toast("That access has ended"); return; }
+  closeSheet();
+  viewWorkspace = ws;
+  detailStudyId = null;
+  if (sb) await pullAll().catch(() => {});
+  render();
+  toast("You're now looking at " + ws + " — everything you change belongs to them");
+}
+
 /* ============ Finding your way around ============
  *
  * Until now the only way to learn this app was to have Adam sitting next to you. That was fine
@@ -9625,6 +9909,13 @@ function openTour(i) {
       if (back) back.onclick = () => openTour(i - 1);
       const skip = sh.querySelector("#tour-skip");
       if (skip && !last) skip.onclick = done;
+      // Closing it IS dismissing it. Without this, Close and a stray tap on the backdrop leave
+      // the tour un-seen and it reappears on the next sign-in — which is how a welcome turns into
+      // a nag. It's always one tap away again under the ? in the header, and the last step says so.
+      const cancel = document.getElementById("sheet-cancel");
+      if (cancel) cancel.onclick = done;
+      const bd = document.getElementById("sheet-bd");
+      if (bd) bd.onclick = done;
     },
     { saveLabel: "", cancelLabel: "Close" });
   // The sheet's own Save button has no job here — the tour's buttons are in the body, where they

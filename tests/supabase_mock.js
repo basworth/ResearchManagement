@@ -44,9 +44,56 @@ function makeMockSupabase(opts) {
   // real backend rejecting the write, instead of silently succeeding and flipping syncOnline true.
   const authError = { message: "new row violates row-level security policy" };
   const inserted = [];
+  // Tables other than `items`. Each one is a plain array the test can inspect and preload; the
+  // chain below is deliberately small — just what the app actually calls — so the mock can't
+  // quietly accept something PostgREST would reject.
+  const tables = Object.assign({ support_grants: [], feedback: [] }, opts.tables || {});
+  // `rpc(name)` answers from here. A missing entry returns an error rather than an empty list,
+  // because "the function isn't there" and "the function found nothing" lead to opposite fixes.
+  const rpcs = opts.rpcs || {};
   let currentTable = "items";
+  function otherTable(name) {
+    const rows = tables[name] || (tables[name] = []);
+    const copy = () => JSON.parse(JSON.stringify(rows));
+    const query = () => {
+      const q = {
+        rows: copy(),
+        is(col, val) { q.rows = q.rows.filter(r => (r[col] ?? null) === val); return q; },
+        eq(col, val) { q.rows = q.rows.filter(r => r[col] === val); return q; },
+        gt(col, val) { q.rows = q.rows.filter(r => r[col] > val); return q; },
+        maybeSingle: () => Promise.resolve(session ? { data: q.rows[0] ?? null, error: null } : { data: null, error: authError }),
+        then: (res, rej) => Promise.resolve(session ? { data: q.rows, error: null } : { data: null, error: authError }).then(res, rej),
+      };
+      return q;
+    };
+    return {
+      select: () => query(),
+      insert(row) {
+        if (!session) return Promise.resolve({ data: null, error: authError });
+        const arr = Array.isArray(row) ? row : [row];
+        arr.forEach(r => {
+          rows.push(Object.assign({ id: "row-" + (rows.length + 1), created_at: nowIso() }, r));
+          // Also recorded in the flat `inserted` log, tagged with its table. Tests written before
+          // these per-table arrays existed read that log, and a mock that quietly stops recording
+          // is a mock that turns real assertions into green ticks.
+          inserted.push(Object.assign({ table: name }, r));
+        });
+        return Promise.resolve({ data: arr, error: null });
+      },
+      update(patch) {
+        return {
+          eq(col, val) {
+            if (!session) return Promise.resolve({ data: null, error: authError });
+            rows.forEach(r => { if (r[col] === val) Object.assign(r, patch); });
+            return Promise.resolve({ data: null, error: null });
+          }
+        };
+      },
+    };
+  }
   function fromTable(table) {
     currentTable = table || "items";
+    if (currentTable !== "items") return otherTable(currentTable);
     return {
       select(cols) {
         return {
@@ -115,6 +162,10 @@ function makeMockSupabase(opts) {
       };
     },
     removeChannel() {},
+    rpc: async (name) => (name in rpcs)
+      ? { data: typeof rpcs[name] === "function" ? rpcs[name]() : rpcs[name], error: null }
+      : { data: null, error: { message: 'function public.' + name + '() does not exist', code: "42883" } },
+    __tables: tables,
     __items: items,
     __inserted: inserted,
     __setSession: (s) => { session = s; }
