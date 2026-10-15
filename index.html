@@ -128,6 +128,25 @@
     table.wl .wl-steps { max-width: 440px; }
   }
 
+  /* Walkthrough & Help */
+  .tour-body { font-size: 14.5px; line-height: 1.6; color: var(--text); }
+  .tour-body p { margin: 0 0 11px 0; }
+  .tour-body p:last-child { margin-bottom: 0; }
+  .tour-rule {
+    background: var(--bg); border-left: 3px solid var(--red);
+    border-radius: 8px; padding: 10px 12px; font-size: 13.5px;
+  }
+  .tour-dots { display: flex; justify-content: center; gap: 6px; margin-top: 16px; }
+  .tour-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
+  .tour-dot.on { background: var(--blue); }
+  .help-head {
+    width: 100%; border: none; background: none; font-family: inherit; cursor: pointer;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 13px 15px; font-size: 15px; font-weight: 600; color: var(--text); text-align: left;
+  }
+  .help-chev { color: var(--text2); font-size: 11px; transition: transform .2s; }
+  .help-body { padding: 0 15px 14px 15px; }
+
   /* Tab bar */
   nav.tabbar {
     position: fixed; bottom: 0; left: 0; right: 0; z-index: 30;
@@ -464,6 +483,10 @@
     </div>
     <div style="display:flex;gap:8px;align-items:center">
       <span id="sync-pill" class="syncpill" style="display:none">Synced</span>
+      <!-- In the header rather than the tab bar: the tab bar is already six items on a phone, and
+           a seventh would shrink every label. Help has to be reachable from every screen without
+           anyone having to remember where it lives. -->
+      <button class="topbar-btn" id="help-btn" aria-label="Help" title="How this works">?</button>
       <button class="topbar-btn" id="add-btn" aria-label="Add">+</button>
     </div>
   </header>
@@ -1764,6 +1787,10 @@ async function handleAuthChange(event, session) {
       // Forwarded emails that arrived while nobody was looking.
       if (parseIncomingSuggestions()) render();
       maybePromptDisplayName();
+      // After, not instead: maybePromptDisplayName opens its own sheet when the account is new,
+      // and maybeShowTour stands down while any sheet is open. It gets its chance on the next
+      // sign-in, by which point the person has a name and a role and the tour can talk to them.
+      maybeShowTour();
     } catch (e) {
       console.warn("pull after sign-in failed", e);
       setSyncPill(false, "Offline");
@@ -8032,6 +8059,13 @@ function renderSettings() {
   const currentSubs = subs();
   const allMeetings = state.meetings.slice().sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
   $main.innerHTML = `
+  <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px">
+    <div style="flex:1;min-width:0">
+      <div style="font-size:15px;font-weight:600">How this works</div>
+      <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-top:2px">The short walkthrough, what each tab is for, and who can see your lab's work.</div>
+    </div>
+    <button class="btn secondary" id="settings-help" style="width:auto;padding:8px 14px;flex:none">Open</button>
+  </div>
   <div class="section-title">Account</div>
   <div class="card" style="font-size:14px;line-height:1.55">
     Signed in as <b>${esc(currentUser ? currentUser.email : "")}</b>${isAdmin() ? `<div style="font-size:12.5px;color:var(--text2);margin-top:4px">Admin — you can see and edit every project, whether or not you're named on it.</div>` : ""}
@@ -8294,6 +8328,7 @@ function renderSettings() {
       if (box) { box.focus(); box.select(); }
     });
   };
+  document.getElementById("settings-help").onclick = () => openHelpSheet();
   document.getElementById("sign-out-btn").onclick = async () => {
     if (!confirm("Sign out of Team Sync on this device?")) return;
     try { await sb.auth.signOut(); } catch (e) { console.warn(e); }
@@ -9472,17 +9507,200 @@ async function fetchDeadlineFeed() {
 // Adam must be able to read every lab's feedback and `items` is sealed per workspace — see
 // supabase/migrations/002-feedback.sql. Nothing here is a study record, so nothing crosses the
 // boundary that matters.
-function openFeedbackSheet() {
+/* ============ Finding your way around ============
+ *
+ * Until now the only way to learn this app was to have Adam sitting next to you. That was fine
+ * while every user was someone he'd walked through it himself. A second lab arrives with nobody
+ * to ask, so three things exist here:
+ *
+ *   openTour()      a short guided first run, shown once per account
+ *   openHelpSheet() the same ground, permanently, from the ? in the header
+ *   openFeedbackSheet()  the way to say something is broken
+ *
+ * The tour deliberately follows the name/role prompt rather than preceding it: being asked who
+ * you are is a reasonable first thing to meet, and a tour before that would be explaining an app
+ * to someone the app can't yet name.
+ */
+// Bumped when the steps change enough that people who've already seen it should see it again.
+const TOUR_VERSION = 1;
+function tourSteps() {
+  const admin = isAdmin();
+  const steps = [
+    {
+      title: "Welcome",
+      body: `<p>This is where the lab keeps track of every research project — what stage it's at,
+        who's doing what, and what's due.</p>
+        <p>It replaces the spreadsheet nobody could ever find the current version of. Everything
+        you change is visible to your lab straight away.</p>
+        <p class="tour-rule"><b>One rule, and it matters:</b> nothing that identifies a patient
+        goes in here. No names, no MRNs, no dates of birth, no images with identifiers burnt in.
+        Refer to a case by study number. This isn't a PHI system and should never become one.</p>`,
+    },
+    {
+      title: "Projects",
+      body: `<p>Every project lives under <b>Studies</b>, and each one sits in a <b>phase</b> —
+        Idea, IRB, Initiation, Enrolling, Analysis, Manuscript, Published, and so on.</p>
+        <p>The phase decides what the project's page shows you. A project at IRB asks about
+        approvals and the initiation checklist; one at Manuscript asks about journals and
+        submissions. You won't be asked for things that don't apply yet.</p>
+        <p>By default the Studies tab shows <b>your</b> projects — the ones you're PI or on the
+        team for. The Who filter at the top opens that up.</p>`,
+    },
+    {
+      title: "Tasks",
+      body: `<p><b>Tasks</b> are the small, dated things: respond to stipulations, enrol subjects
+        41–45, draft the methods section.</p>
+        <p>Assign one to somebody and <b>they get an email</b>, straight away. After that they're
+        reminded when it's due soon and again when it's overdue — one message listing everything,
+        not one per task.</p>
+        <p>If your email never arrives, check <b>Settings → Alerts to</b>. Rush hands out two
+        addresses and most people only read one of them.</p>`,
+    },
+    {
+      title: "Deadlines",
+      body: `<p>The <b>Dashboard</b> carries a shared calendar of conference abstract deadlines and
+        grant deadlines, kept up to date for you.</p>
+        <p>Tag a project to a deadline and two things happen: it appears on that deadline's list,
+        and a <b>"Submit abstract"</b> task is created with the right due date. Untag it and the
+        task goes away again.</p>
+        <p>The calendar itself is shared across the whole department. <b>Which projects you've
+        tagged to it is not</b> — only your own lab sees those.</p>`,
+    },
+    {
+      title: "Who sees what",
+      body: `<p>Your lab's projects, tasks, notes and documents are visible to <b>your lab only</b>.
+        That isn't a filter on the screen — the database itself refuses to hand another lab's
+        records over, so there's no setting anyone could get wrong.</p>
+        <p>What <i>is</i> shared: the deadline calendar and the journal list. Nothing with a
+        project title on it.</p>
+        <p>If Adam ever needs to get into your lab's data to fix something, he has to grant himself
+        time-limited access with a stated reason, and <b>you'll see a banner at the top of the app
+        naming him and the reason</b> for as long as it lasts.</p>`,
+    },
+    {
+      title: admin ? "Your team" : "When something's wrong",
+      body: admin
+        ? `<p>You can invite your own team from <b>Settings → Invite teammate</b>. They'll land in
+           your lab, not anybody else's, and you can see who was invited and never finished setting
+           up.</p>
+           <p>The <b>Org Chart</b> in Settings is where you say who reports to whom. That drives
+           the team filters and who gets chased about a stalled study.</p>
+           <p>Hit the <b>?</b> in the top corner any time to come back to all of this.</p>`
+        : `<p>If something doesn't work, or you want it to do something it doesn't, use
+           <b>Suggest a change</b> at the bottom of the screen. It reaches Adam directly, with your
+           name and which screen you were on, so nobody has to ask.</p>
+           <p>A sentence is plenty. "Uploading a PDF does nothing when I click Upload" is a perfect
+           bug report.</p>
+           <p>Hit the <b>?</b> in the top corner any time to come back to all of this.</p>`,
+    },
+  ];
+  return steps;
+}
+// Plain Next/Back rather than anything that points at live elements on the page. A tour that
+// highlights real buttons breaks the first time a button moves, and breaks silently — it just
+// starts pointing at nothing.
+function openTour(i) {
+  const steps = tourSteps();
+  i = Math.max(0, Math.min(i || 0, steps.length - 1));
+  const s = steps[i];
+  const last = i === steps.length - 1;
+  openSheet(s.title, `
+    <div class="tour-body">${s.body}</div>
+    <div class="tour-dots">${steps.map((_, n) =>
+      `<span class="tour-dot${n === i ? " on" : ""}"></span>`).join("")}</div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      ${i > 0 ? `<button class="btn secondary" id="tour-back" style="flex:1">Back</button>` : ""}
+      <button class="btn" id="tour-next" style="flex:2">${last ? "Get started" : "Next"}</button>
+    </div>
+    <div style="text-align:center;margin-top:10px">
+      <button id="tour-skip" style="border:none;background:none;color:var(--text2);font-size:13px;font-family:inherit;cursor:pointer;padding:4px 8px">
+        ${last ? "" : "Skip — I'll find my way"}
+      </button>
+    </div>`,
+    () => true,
+    (sh) => {
+      const done = () => { markTourSeen(); closeSheet(); };
+      sh.querySelector("#tour-next").onclick = () => { if (last) done(); else openTour(i + 1); };
+      const back = sh.querySelector("#tour-back");
+      if (back) back.onclick = () => openTour(i - 1);
+      const skip = sh.querySelector("#tour-skip");
+      if (skip && !last) skip.onclick = done;
+    },
+    { saveLabel: "", cancelLabel: "Close" });
+  // The sheet's own Save button has no job here — the tour's buttons are in the body, where they
+  // can say "Next" and "Back" rather than "Save".
+  const save = document.getElementById("sheet-save");
+  if (save) save.style.visibility = "hidden";
+}
+// Recorded on the profile, not in localStorage: someone who signs in on their phone after being
+// shown it on a laptop has already seen it, and showing it again reads as the app forgetting them.
+function markTourSeen() {
+  if (!currentUser) return;
+  const p = profileFor(currentUser.id);
+  if (p && p.tourSeen === TOUR_VERSION) return;
+  upsertProfile(null, { tourSeen: TOUR_VERSION });
+}
+// Only once the account is actually set up — a tour on top of the "who are you" prompt would be
+// two sheets deep on somebody's first ten seconds.
+function maybeShowTour() {
+  if (!currentUser) return;
+  const p = profileFor(currentUser.id);
+  if (!p || !p.name || !p.position) return;
+  if (p.tourSeen === TOUR_VERSION) return;
+  if (document.getElementById("sheet")) return;   // something else is already asking them something
+  openTour(0);
+}
+function openHelpSheet() {
+  const steps = tourSteps();
+  openSheet("How this works", `
+    <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin:2px 2px 14px 2px">
+      Everything below is also in the short walkthrough. Tap a heading to open it.
+    </div>
+    ${steps.map((s, n) => `
+      <div class="card help-item" style="padding:0;overflow:hidden">
+        <button class="help-head" data-help="${n}">
+          <span>${esc(s.title)}</span><span class="help-chev">▸</span>
+        </button>
+        <div class="help-body tour-body" id="help-body-${n}" style="display:none">${s.body}</div>
+      </div>`).join("")}
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn secondary" id="help-tour" style="flex:1">Show me around</button>
+      <button class="btn" id="help-problem" style="flex:1">Something's wrong</button>
+    </div>
+    <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin-top:12px;text-align:center">
+      Still stuck? "Something's wrong" reaches Adam directly, with your name and which screen you
+      were on attached.
+    </div>`,
+    () => true,
+    (sh) => {
+      sh.querySelectorAll(".help-head").forEach(b => {
+        b.onclick = () => {
+          const body = sh.querySelector("#help-body-" + b.dataset.help);
+          const open = body.style.display !== "none";
+          body.style.display = open ? "none" : "block";
+          b.querySelector(".help-chev").style.transform = open ? "" : "rotate(90deg)";
+        };
+      });
+      sh.querySelector("#help-tour").onclick = () => { closeSheet(); setTimeout(() => openTour(0), 320); };
+      sh.querySelector("#help-problem").onclick = () => { closeSheet(); setTimeout(() => openFeedbackSheet("problem"), 320); };
+    },
+    { cancelLabel: "Close" });
+  const save = document.getElementById("sheet-save");
+  if (save) save.style.visibility = "hidden";
+}
+// `preKind` lets Help open this straight onto "something isn't working", so "Something's wrong"
+// doesn't land the person on a form where the default answer is "an idea".
+function openFeedbackSheet(preKind) {
   const where = (typeof tab === "string" ? tab : "") + (detailStudyId ? " / a study" : "");
-  openSheet("Suggest a change", `
+  openSheet(preKind === "problem" ? "Something's wrong" : "Suggest a change", `
     <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin-bottom:12px">
       Tell us what you'd like changed, or what isn't working. It goes straight to Adam — you don't
       need to write it up formally, a sentence is plenty.
     </div>
     <div class="frow"><label>This is</label>
       <select id="fb-kind" style="flex:1">
-        <option value="idea">An idea — something I'd like it to do</option>
-        <option value="problem">A problem — something isn't working</option>
+        <option value="idea"${preKind === "problem" ? "" : " selected"}>An idea — something I'd like it to do</option>
+        <option value="problem"${preKind === "problem" ? " selected" : ""}>A problem — something isn't working</option>
       </select>
     </div>
     <div style="margin-top:10px">
@@ -9505,12 +9723,22 @@ function openFeedbackSheet() {
 async function submitFeedback(kind, body, page) {
   if (!sb) { toast("Connect Team Sync first — otherwise this can't reach anyone"); return; }
   const p = currentUser ? profileFor(currentUser.id) : null;
+  // The id is generated here rather than read back from the insert. `.insert().select()` asks
+  // PostgREST to return the stored row, which needs SELECT permission on `feedback` as well as
+  // INSERT — and if that permission isn't there, the whole submission fails rather than just the
+  // read. Sending a report must not depend on being allowed to read reports.
+  const feedbackId = uid();
   const row = {
+    id: feedbackId,
     author_id: currentUser && currentUser.id,
     author_name: (p && p.name) || me() || "",
     author_email: (p && (p.alertEmail || p.email)) || (currentUser && currentUser.email) || "",
     workspace: myWorkspace, kind, page: page || "", body
   };
+  // Stored first. The email below is a courtesy on top of a record that already exists — if the
+  // mail fails, the report is still there to be found. Until 15 Oct there WAS no email: reports
+  // landed in a table nothing read, which from the reporter's side is indistinguishable from
+  // being ignored.
   const { error } = await sb.from("feedback").insert(row);
   if (error) {
     console.warn("feedback failed", error);
@@ -9520,6 +9748,20 @@ async function submitFeedback(kind, body, page) {
   }
   toast(kind === "problem" ? "Thank you — sent to Adam. He'll come back to you."
                            : "Thank you — your idea is on the list.");
+  // Deliberately not awaited into the toast above: the person has done their part the moment the
+  // row is stored, and making them wait on an SMTP round trip to hear "thank you" would be
+  // backwards. A failure here is logged, not shown — it isn't theirs to fix.
+  try {
+    const { data: sess } = await sb.auth.getSession();
+    const tok = sess && sess.session && sess.session.access_token;
+    if (tok) {
+      await fetch(SUPABASE_URL + "/functions/v1/feedback-alert", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
+        body: JSON.stringify({ id: feedbackId })
+      });
+    }
+  } catch (e) { console.warn("feedback-alert failed", e); }
 }
 
 // A file dropped anywhere other than a document slot must do nothing. The browser's default is
@@ -9530,6 +9772,7 @@ async function submitFeedback(kind, body, page) {
 }));
 
 document.getElementById("feedback-btn").onclick = () => openFeedbackSheet();
+document.getElementById("help-btn").onclick = () => openHelpSheet();
 
 document.querySelectorAll("nav.tabbar button").forEach(b => {
   b.onclick = () => {

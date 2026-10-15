@@ -56,8 +56,13 @@ const SENSITIVE = ["study", "task", "profile", "matchHint", "suggestion"];
 
 console.log("\n-- Every bulk read of people's data is scoped to one lab --");
 
-const fns = fs.readdirSync(DIR).filter((d) => fs.existsSync(path.join(DIR, d, "index.ts")));
-check("all seven functions found", fns.length === 7, fns);
+// Named rather than counted, so adding a function is a deliberate edit here instead of a number
+// going up. A scan that silently skips a new function is worse than no scan.
+const EXPECTED = ["admin-requests", "feedback-alert", "import-publications", "ingest-email",
+                  "invite-user", "request-update", "stage-alerts", "task-emails"];
+const fns = fs.readdirSync(DIR).filter((d) => fs.existsSync(path.join(DIR, d, "index.ts"))).sort();
+check("every known function is scanned, and no unknown one is skipped",
+  JSON.stringify(fns) === JSON.stringify(EXPECTED), { found: fns, expected: EXPECTED });
 
 const unscoped = [];
 for (const fn of fns) {
