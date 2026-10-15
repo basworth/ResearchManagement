@@ -71,6 +71,15 @@ async function send(to: string, subject: string, html: string) {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   try {
+    // A dry run exists because the only other way to exercise this function is to email the whole
+    // team. After the per-lab rewrite there was no safe way to confirm it even booted, and a
+    // function you can't run is a function you find out about on the morning it breaks.
+    //
+    // It does everything except send, and except CLAIM: writing to email_log would mark alerts as
+    // sent and silently suppress the real run. So a dry run ignores what has already gone out and
+    // reports what it finds, grouped by lab, with no names or addresses in the answer.
+    const reqBody = await req.json().catch(() => ({}));
+    const dryRun = reqBody?.dryRun === true;
     const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
     // `workspace` is selected and everything below runs ONE LAB AT A TIME. This function holds
@@ -90,6 +99,7 @@ Deno.serve(async (req) => {
       (stages ?? []).find((st) => st.key === key)?.label ?? key;
 
     async function claim(studyId: string, recipient: string, kind: string) {
+      if (dryRun) return true;   // never consume a claim — see the note at the top
       const { error: e } = await db.from("email_log").insert({ task_id: studyId, recipient, kind });
       if (!e) return true;
       if ((e as { code?: string }).code === "23505") return false;   // already sent
@@ -214,6 +224,18 @@ Deno.serve(async (req) => {
     }
 
     }   // end per-workspace
+
+    if (dryRun) {
+      // Counts only. The point is "did it boot, and is it grouping by lab", not who gets what.
+      const perLab: Record<string, { recipients: number; stalls: number; irb: number }> = {};
+      for (const [key, b] of perPerson) {
+        const lab = key.split("|")[0];
+        const e = perLab[lab] ?? (perLab[lab] = { recipients: 0, stalls: 0, irb: 0 });
+        e.recipients++; e.stalls += b.items.length; e.irb += b.irb.length;
+      }
+      return json({ ok: true, dryRun: true, workspaces, perLab,
+        note: "Nothing was sent and no claims were taken, so these counts ignore alerts that already went out." });
+    }
 
     let sent = 0;
     const failures: string[] = [];

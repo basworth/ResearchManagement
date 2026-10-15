@@ -245,7 +245,11 @@ async function handleAssignment(record: any, oldRecord: any): Promise<number> {
 }
 
 // ---------- 2. Scheduled sweep for due-soon and overdue ----------
-async function handleSweep(): Promise<number> {
+// `dryRun` does everything but send, and takes no claims — writing to email_log would mark the
+// reminders as sent and suppress the real sweep. It returns counts per lab, no names or
+// addresses. It exists because this function's only other mode is "email everyone", which is not
+// a way to check that a change booted.
+async function handleSweep(dryRun = false): Promise<number | Record<string, unknown>> {
   const { data, error } = await db.from("items").select("data, workspace").eq("kind", "task");
   if (error) throw error;
 
@@ -270,7 +274,7 @@ async function handleSweep(): Promise<number> {
     for (const rawName of task.assignees ?? []) {
       const profile = profiles.get(canonName(rawName).toLowerCase());
       if (!profile) continue;
-      if (!(await claim(task.id, profile.email, kind))) continue; // already nudged
+      if (!dryRun && !(await claim(task.id, profile.email, kind))) continue; // already nudged
       const bkey = ws + "|" + profile.email;
       let b = buckets.get(bkey);
       if (!b) { b = { profile, dueSoon: [], overdue: [], claims: [], labels: new Map() }; buckets.set(bkey, b); }
@@ -280,6 +284,17 @@ async function handleSweep(): Promise<number> {
     }
   }
   }   // end per-workspace
+
+  if (dryRun) {
+    const perLab: Record<string, { recipients: number; dueSoon: number; overdue: number }> = {};
+    for (const [key, b] of buckets) {
+      const lab = key.split("|")[0];
+      const e = perLab[lab] ?? (perLab[lab] = { recipients: 0, dueSoon: 0, overdue: 0 });
+      e.recipients++; e.dueSoon += b.dueSoon.length; e.overdue += b.overdue.length;
+    }
+    return { dryRun: true, workspaces, perLab,
+      note: "Nothing was sent and no claims were taken, so these counts ignore reminders that already went out." };
+  }
 
   let sent = 0;
   const failures: string[] = [];
@@ -317,13 +332,22 @@ async function handleSweep(): Promise<number> {
   return sent;
 }
 
+// Needed so a dry run can be triggered from a browser at all; the real cron and webhook callers
+// are server-side and never see it.
+const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, content-type" };
+
 Deno.serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   try {
     const body = await req.json().catch(() => ({}));
     // Database webhooks post {type, record, old_record}; the cron job posts {mode:"sweep"}.
     if (body?.record || body?.type) {
       const sent = await handleAssignment(body.record, body.old_record);
       return Response.json({ ok: true, mode: "assignment", sent });
+    }
+    if (body?.dryRun === true) {
+      return Response.json({ ok: true, mode: "sweep", ...(await handleSweep(true) as Record<string, unknown>) },
+        { headers: CORS });
     }
     const sent = await handleSweep();
     return Response.json({ ok: true, mode: "sweep", sent });
