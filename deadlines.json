@@ -1,6 +1,6 @@
 {
  "_comment": "Abstract-deadline feed for Research Tracker. The biweekly scheduled task rewrites this file after checking each society. The app fetches it on load and merges any entry whose verifiedOn is newer. 'key' must stay stable so updates match the right meeting. Set unconfirmed=false only when a date is verified from the society's official call for abstracts.",
- "updatedOn": "2026-10-14T08:00",
+ "updatedOn": "2026-10-15T09:15",
  "removedKeys": [
   "ICRS|8th ICRS Summit (Porto)"
  ],
@@ -50,7 +50,7 @@
    "location": "Las Vegas, NV",
    "link": "https://www.aaos.org/annual/explore-the-program/abstracts-applications/",
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "AANA|2027 Annual Meeting",
@@ -141,11 +141,11 @@
    "type": "abstract",
    "name": "19th World Congress",
    "deadline": "2026-10-22",
-   "dates": "May 1–3, 2027, Rotterdam. Abstract deadline EXTENDED to Oct 22, 2026 (midnight CEST) — per notice to submitters; the public ICRS dates page still showed Oct 15 when this was recorded, so go by the extension. Notifications sent early Jan 2027. 300-word limit, up to 2 figures/tables; ethics approval required for experimental clinical/animal studies. Full details at cartilage.org/icrs2027/call-for-abstracts/.",
+   "dates": "May 1–3, 2027, Rotterdam. Abstract deadline EXTENDED to Oct 22, 2026 (midnight CEST) — now confirmed on the official ICRS call-for-abstracts page (submissions Aug 15 – Oct 22, 2026; \"the deadline will not be extended\"). Note: the separate ICRS Important Dates page still shows the old Oct 15. Notifications sent early Jan 2027. 300-word limit, up to 2 figures/tables; ethics approval required for experimental clinical/animal studies. No submission fee. Full details at cartilage.org/icrs2027/call-for-abstracts/.",
    "location": "Rotterdam, NL",
    "link": "https://cartilage.org/icrs2027/important-dates-deadlines/",
    "unconfirmed": false,
-   "verifiedOn": "2026-10-14T08:00"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "AOSSM|2026 Annual Meeting",
@@ -156,7 +156,7 @@
    "location": "",
    "link": "https://www.sportsmed.org/education/abstract-and-instructional-course-submissions",
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "IPSG|2026 Annual Meeting",
@@ -182,7 +182,7 @@
    "criteria": "$20,000 award. Application deadline 7/1/2026 (no LOI). See the OREF RFA for eligibility and proposal requirements; apply via proposalCENTRAL.",
    "funded": [],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "OREF|Mentored Clinician Scientist Grant",
@@ -197,7 +197,7 @@
    "criteria": "$20,000. Applicant must have been awarded an NIH 'K' (career development) award to apply. Application deadline 6/24/2026 (no LOI).",
    "funded": [],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "OREF|Resident Research Project Grant",
@@ -212,7 +212,7 @@
    "criteria": "$5,000. For orthopaedic residents. LOI due 4/22/2026; application deadline 6/24/2026.",
    "funded": [],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30",
+   "verifiedOn": "2026-10-15T09:15",
    "loiDeadline": "2026-04-22"
   },
   {
@@ -228,7 +228,7 @@
    "criteria": "$20,000. For orthopaedic residents in clinician-scientist training. LOI due 4/22/2026; application deadline 6/24/2026. See OREF RFA on proposalCENTRAL.",
    "funded": [],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30",
+   "verifiedOn": "2026-10-15T09:15",
    "loiDeadline": "2026-04-22"
   },
   {
@@ -244,7 +244,7 @@
    "criteria": "Honorary award (joint with ORS). Nomination-based; application deadline 9/11/2026.",
    "funded": [],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "OREF|Career Development Grant",
@@ -259,7 +259,7 @@
    "criteria": "$300,000 over three years. An orthopaedic surgeon must serve as PI, co-investigator, or MPI, licensed to practice and working in a U.S. institution; a PhD may serve as co-PI/MPI if holding a faculty appointment in a U.S. orthopaedic department. LOI due 8/13/2026; application deadline 10/15/2026. Full eligibility on the RFA via proposalCENTRAL.",
    "funded": [],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30",
+   "verifiedOn": "2026-10-15T09:15",
    "loiDeadline": "2026-08-13"
   },
   {
@@ -275,7 +275,7 @@
    "criteria": "$100,000. PI must be an early-stage investigator (completed terminal research degree or post-graduate clinical training within the past 10 years, no prior successful NIH R01-equivalent as PI). An orthopaedic surgeon must be part of the project as PI, co-PI, co-I, or MPI. LOI due 8/13/2026; application deadline 10/15/2026.",
    "funded": [],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30",
+   "verifiedOn": "2026-10-15T09:15",
    "loiDeadline": "2026-08-13"
   },
   {
@@ -291,7 +291,7 @@
    "criteria": "$50,000. PI must be an orthopaedic surgeon licensed and working in a U.S. institution; residents, fellows, and surgeons who completed formal training within the last 4 years may apply. LOI due 8/13/2026; application deadline 10/15/2026.",
    "funded": [],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30",
+   "verifiedOn": "2026-10-15T09:15",
    "loiDeadline": "2026-08-13"
   },
   {
@@ -307,7 +307,7 @@
    "criteria": "$45,000. PI or co-PI must be a Certified Registered Nurse Anesthetist (CRNA) in good standing with NBCRNA, optionally with a collaborating PhD and/or MD; a PhD may serve as PI if a CRNA serves as co-PI. LOI due 8/13/2026; application deadline 10/15/2026.",
    "funded": [],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30",
+   "verifiedOn": "2026-10-15T09:15",
    "loiDeadline": "2026-08-13"
   },
   {
@@ -323,7 +323,7 @@
    "criteria": "Open to orthopaedic residents in PGY3–PGY5, orthopaedic fellows, and orthopaedic surgeons less than two years in practice, with a demonstrated career interest in orthopaedic clinical research. No LOI; application deadline 11/10/2026. Apply via proposalCENTRAL.",
    "funded": [],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "AOSSM|AF Hip Osteoarthritis Grant",
@@ -342,7 +342,7 @@
     "Mechanical Loading Effects in OA Progression Following ACL Reconstruction — Camila B. Carballo, PT, PhD (2019)"
    ],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30",
+   "verifiedOn": "2026-10-15T09:15",
    "loiDeadline": "2026-04-17"
   },
   {
@@ -362,7 +362,7 @@
     "Evaluating the Efficacy of Erector Spinae Block in Routine Hip Arthroscopy — Benjamin Coobs, MD (2022)"
    ],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "AOSSM|JRF Ortho Allograft Grant",
@@ -381,7 +381,7 @@
     "Nonorthotopic osteochondral allograft transplantation to the femoral head — Christopher Nagelli, PhD (2023)"
    ],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "AOSSM|Arnoczky Young Investigator Grant",
@@ -400,7 +400,7 @@
     "Sex Differences in FAIS Hip Synovium Leading to Differences in Outcomes — Stephanie Wong, MD (2023, Basic)"
    ],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "AOSSM|Playmaker Grant Lab",
@@ -419,7 +419,7 @@
     "Valgus Force on the UCL During Batter's Swing and Hitting Motion — Bradley A. Lezak, MD (2025)"
    ],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "AOSSM|MAST Research Initiative Grant",
@@ -453,7 +453,7 @@
     "Oral Losartan to Decrease the Risk of Postoperative Arthrofibrosis Following Primary and Revision Anterior Cruciate Ligament Reconstruction — Andrew S. Bi, MD (2025)"
    ],
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "AAOS|OREF Clinical Gaps Research Grant",
@@ -475,15 +475,15 @@
    "society": "NIH",
    "type": "grant",
    "name": "NIH Research Project Grant (Parent R01)",
-   "deadline": "2026-10-05",
-   "dates": "Standard NIH due dates, 3 cycles/year — new applications: Feb 5, Jun 5, Oct 5; renewal/resubmission/revision: Mar 5, Jul 5, Nov 5. Next new-application deadline Oct 5, 2026 (renewal/resubmission Nov 5, 2026). Two companion FOAs: PA-25-305 (clinical trial required) and PA-25-301 (clinical trial not allowed); both expire 1/8/2028. NIAMS (musculoskeletal/orthopaedic) is a participating institute.",
+   "deadline": "2027-02-05",
+   "dates": "Standard NIH due dates, 3 cycles/year — new applications: Feb 5, Jun 5, Oct 5; renewal/resubmission/revision: Mar 5, Jul 5, Nov 5 (5:00 PM local time). Oct 5, 2026 new-application cycle has passed; next new-application deadline Feb 5, 2027 (renewal/resubmission/revision Nov 5, 2026). Two companion FOAs: PA-25-305 (clinical trial required) and PA-25-301 (clinical trial not allowed); both expire 1/8/2028. NIAMS (musculoskeletal/orthopaedic) is a participating institute.",
    "location": "",
    "link": "https://grants.nih.gov/grants/guide/parent_announcements.htm",
    "aim": "Broad, unsolicited investigator-initiated research support across NIH's mission — the standard mechanism for an independent MSK/orthopaedic research program, funded through whichever institute (e.g., NIAMS) is relevant to the science.",
    "criteria": "No topic restriction. Standard NIH eligibility — domestic and foreign higher-ed, nonprofit, for-profit, and government organizations; any PI with the expertise/resources to lead the work. No hard budget cap, but detailed (non-modular) budgets are required above $500,000 direct costs/year and need prior IC approval. Confirm your target institute (e.g., NIAMS) is listed as a participating organization before submitting. Apply via NIH ASSIST or Grants.gov Workspace.",
    "funded": [],
    "unconfirmed": false,
-   "verifiedOn": "2026-08-05T16:35"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "NIH|Parent R21 (Exploratory/Developmental)",
@@ -498,7 +498,7 @@
    "criteria": "Combined direct costs may not exceed $275,000 over the project period, with no more than $200,000 in any single year; project period capped at 2 years. Standard NIH eligibility (same organization types as the parent R01). Confirm your target institute (e.g., NIAMS) is listed as a participating organization before submitting.",
    "funded": [],
    "unconfirmed": false,
-   "verifiedOn": "2026-08-05T16:35"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "NIAMS|Clinical Observational Studies in MSK Rheumatic Skin Disease (R01)",
@@ -525,7 +525,7 @@
    "location": "San Francisco, CA",
    "link": "https://www.ors.org/2027-call-for-abstracts/",
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "ORS|2027 Late-Breaking Abstracts",
@@ -537,7 +537,7 @@
    "location": "San Francisco, CA",
    "link": "https://www.ors.org/futureannualmeetings/",
    "unconfirmed": false,
-   "verifiedOn": "2026-10-01T09:30"
+   "verifiedOn": "2026-10-15T09:15"
   },
   {
    "key": "ISHA|2027 Annual Scientific Meeting",
