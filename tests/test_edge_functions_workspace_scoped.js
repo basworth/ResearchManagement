@@ -22,6 +22,20 @@ const fs = require("fs");
 const path = require("path");
 const DIR = path.join(__dirname, "..", "supabase", "functions");
 
+// The edge-function sources live in Adam's workspace folder and are deliberately NOT published to
+// the public repo, so in CI there is nothing here to read. Say so and pass, rather than crashing.
+//
+// run-all.js has its own skip rule for this, but it works by grepping each test file for the
+// literal string "supabase/" — and this file builds the path with path.join, so the rule never
+// matched it. The result was a red CI run on every push, which is exactly the "train everyone to
+// ignore a red run" failure that rule was written to prevent. A test that knows its own
+// preconditions doesn't depend on another file guessing them correctly.
+if (!fs.existsSync(DIR)) {
+  console.log("SKIPPED — supabase/functions isn't in this checkout, so there are no sources to scan.");
+  console.log("0 passed, 0 failed");
+  process.exit(0);
+}
+
 let pass = 0, fail = 0;
 function check(name, cond, detail) {
   if (cond) { console.log("  ok  ", name); pass++; }

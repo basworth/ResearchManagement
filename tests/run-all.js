@@ -72,9 +72,14 @@ const files = fs.readdirSync(DIR)
 // Matches the whole `supabase/` folder, not just `supabase/functions`: the first version of this
 // check looked only for the functions path and let a test that reads supabase/*.sql through,
 // which turned the very first CI run red.
+//
+// Widened 15 Oct 2026 from /supabase\// to also catch a path built with path.join — a test that
+// said path.join(__dirname, "..", "supabase", "functions") slipped through, crashed on a missing
+// directory, and turned CI red on every push for a day. Tests should also guard themselves (see
+// the top of test_edge_functions_workspace_scoped.js); this is the backstop, not the only check.
 const needsFunctions = fs.existsSync(path.join(DIR, "..", "supabase"))
   ? []
-  : files.filter(f => /supabase\//.test(fs.readFileSync(path.join(DIR, f), "utf8")));
+  : files.filter(f => /supabase\/|["']supabase["']/.test(fs.readFileSync(path.join(DIR, f), "utf8")));
 const toRun = files.filter(f => !needsFunctions.includes(f));
 
 const failures = [];
