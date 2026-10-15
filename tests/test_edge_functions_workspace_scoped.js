@@ -114,8 +114,19 @@ const taskEmails = fs.readFileSync(path.join(DIR, "task-emails", "index.ts"), "u
 check("task-emails loads profiles for one lab", /loadProfiles\(workspace: string\)/.test(taskEmails));
 check("...and studies for one lab", /loadStudies\(workspace: string\)/.test(taskEmails));
 check("...and the sweep loops over workspaces", /for \(const ws of workspaces\)/.test(taskEmails));
-check("...and the assignment webhook takes the lab from the row that fired it",
-  /record\.workspace/.test(taskEmails));
+// Stronger than it was: the webhook's posted payload is ignored entirely and the task is re-read
+// from the database, so the lab (and the task's own content) come from the stored row. The
+// trigger that fires this sends the public anon key, so the payload can't be trusted at all.
+check("...and the assignment webhook re-reads the stored task rather than trusting the payload",
+  /stored\?\.data/.test(taskEmails) && /stored\.workspace/.test(taskEmails));
+check("...and the sweep is scheduler-only", /fromScheduler\(req\)/.test(taskEmails));
+const stageAlertsSrc = fs.readFileSync(path.join(DIR, "stage-alerts", "index.ts"), "utf8");
+check("stage-alerts is scheduler-only too", /x-cron-secret/.test(stageAlertsSrc));
+// Unset must mean open. A check that failed closed on a missing environment variable would stop
+// every reminder the moment it deployed, before the secret was in place.
+check("...and an unset secret leaves it open rather than silently stopping the mail",
+  /if \(!CRON_SECRET\) return true;/.test(taskEmails)
+  && /CRON_SECRET && req\.headers\.get\("x-cron-secret"\)/.test(stageAlertsSrc));
 
 console.log("\n-- request-update refuses a study in another lab --");
 const reqUpdate = fs.readFileSync(path.join(DIR, "request-update", "index.ts"), "utf8");
