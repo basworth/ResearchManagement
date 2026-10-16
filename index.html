@@ -1079,8 +1079,27 @@ function subs() {
 // empty. (It also made pushAllLocal fail outright: two rows with the same id in one upsert is
 // a Postgres error.) So give the preferences row its own stable, derived uuid. `pref.id` stays
 // the user id, since that's what every lookup in the app matches on.
-function prefRowId(userId) {
-  const s = "pref:" + String(userId || "");
+function prefRowId(userId) { return derivedRowId("pref:" + String(userId || "")); }
+// The roster, degrees, name aliases and the initiation checklist all live in a `meta` row, and
+// until 16 Oct 2026 there was exactly ONE of them, readable by every lab because `meta` sat in
+// the shared commons alongside the deadline calendar. That meant a second lab would open the app
+// and find the first lab's seventeen people in its roster and its task-assignment pickers — and,
+// worse, pushRoster writes the whole object, so the two labs would take turns overwriting each
+// other's team list.
+//
+// None of it was ever genuinely shared: a roster, a set of credentials and a site-activation
+// checklist belong to one lab. So each lab gets its own row.
+//
+// The original lab keeps the id its row has always had. Deriving a new one for it would mean
+// copying seventeen names, their degrees and a customised stage list to a fresh row and leaving
+// the old one orphaned — a migration with nothing to gain and a way to lose something.
+const FIRST_WORKSPACE = "sports-yanke";
+function metaRowId(ws) {
+  const w = String(ws || "").trim() || FIRST_WORKSPACE;
+  return w === FIRST_WORKSPACE ? ROSTER_ID : derivedRowId("meta:" + w);
+}
+function derivedRowId(seed) {
+  const s = String(seed || "");
   let h1 = 0x811c9dc5, h2 = 0x01000193, h3 = 0x9e3779b9, h4 = 0x85ebca6b;
   for (let i = 0; i < s.length; i++) {
     const c = s.charCodeAt(i);
@@ -2100,9 +2119,11 @@ async function pullAll() {
     // My own profile row is always kept, whichever lab is on screen: it's how the app knows who I
     // am, what I'm called, and which lab I actually belong to.
     const ws = activeWorkspace();
+    // The deadline calendar is the only thing genuinely shared between labs. `meta` used to be in
+    // here too — see metaRowId for why it no longer is.
     const rows = data.filter(r =>
       (r.workspace || myWorkspace) === ws
-      || r.kind === "meeting" || r.kind === "meta"
+      || r.kind === "meeting"
       || (r.kind === "profile" && currentUser && r.id === currentUser.id));
 
     state.studies = rows.filter(r => r.kind === "study").map(r => r.data);
@@ -2123,7 +2144,17 @@ async function pullAll() {
     if (sch) state.scholar = sch.data;
     setMatchHints(state.matchHints);
   setMeetings(state.meetings);
-    const meta = rows.find(r => r.kind === "meta");
+    const meta = rows.find(r => r.kind === "meta" && r.id === metaRowId(ws))
+              || rows.find(r => r.kind === "meta");
+    // A lab with no roster row yet — a brand-new one, or another lab being viewed under support
+    // access. Clear rather than leave the previous lab's names sitting in the pickers, which is
+    // how you end up assigning a spine task to a sports coordinator.
+    if (!meta) {
+      state.roster = [];
+      state.rosterDegrees = {};
+      state.nameAliases = {};
+      state.stageAdds = [];
+    }
     if (meta && Array.isArray(meta.data.names)) state.roster = meta.data.names;
     if (meta && meta.data.degrees && typeof meta.data.degrees === "object") state.rosterDegrees = meta.data.degrees;
     if (meta) state.orgPermissions = !!meta.data.orgPermissions;
@@ -2132,6 +2163,7 @@ async function pullAll() {
     // Team-wide, so a stage one person removed doesn't come back for everyone else.
     if (meta && Array.isArray(meta.data.stageAdds)) state.stageAdds = meta.data.stageAdds;
     rows.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; setBaseline(r.id, r.data); });
+    await loadAppAdmins();
     await loadSupportGrants();
     migrate();
     saveLocal();
@@ -2141,6 +2173,28 @@ async function pullAll() {
 // The grants table is small and its own rules already decide what you may see: grants you hold,
 // and grants over your own lab. A failure here must never break a pull — an older database that
 // hasn't had 002 applied simply has no banner, rather than no app.
+// Who holds the PLATFORM role, as opposed to being an admin of their own lab. Since 16 Oct 2026
+// these are different things: `isAdmin()` below means "runs this lab" and comes from the profile
+// flag; this means "can reach across labs" and comes from the app_admins table, which nothing
+// grants automatically. See migration 004.
+let appAdminIds = [];
+function isAppAdmin() {
+  return !!(currentUser && appAdminIds.indexOf(currentUser.id) >= 0);
+}
+async function loadAppAdmins() {
+  if (!sb) { appAdminIds = []; return; }
+  try {
+    const { data, error } = await sb.from("app_admins").select("user_id");
+    if (error) throw error;
+    appAdminIds = (data || []).map(r => r.user_id);
+  } catch (e) {
+    // Readable by every signed-in account by policy, so a failure here is a connection problem.
+    // Falling back to "nobody" hides the cross-lab controls rather than offering ones that would
+    // then be refused by the server.
+    console.warn("app_admins unavailable", e);
+    appAdminIds = [];
+  }
+}
 async function loadSupportGrants() {
   if (!sb) { supportGrants = []; return; }
   try {
@@ -2159,7 +2213,15 @@ async function loadSupportGrants() {
     toast("Support access has ended — you're back in your own lab");
   }
 }
-function pushRoster() { pushItem("meta", { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null, nameAliases: state.nameAliases || {}, stageAdds: state.stageAdds || [] }); }
+function rosterPayload() {
+  return { id: metaRowId(activeWorkspace()), names: state.roster, degrees: state.rosterDegrees || {},
+           orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null,
+           nameAliases: state.nameAliases || {}, stageAdds: state.stageAdds || [] };
+}
+function pushRoster() {
+  const p = rosterPayload();
+  pushItem("meta", p, p.id);
+}
 // The fields this person actually changed: every top-level key where our copy differs from the
 // server copy we started from. Keys the baseline had and we no longer do count as changes too,
 // or deleting a field could never be saved.
@@ -2401,7 +2463,7 @@ async function pushAllLocal() {
     ...(state.matchHints || []).map(h => ({ id: h.id, kind: "matchHint", data: h, updated_at: now() })),
     // Must carry every meta field, not just names — an earlier version dropped degrees and
     // would silently wipe them on a full re-push.
-    { id: ROSTER_ID, kind: "meta", data: { id: ROSTER_ID, names: state.roster, degrees: state.rosterDegrees || {}, orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null, nameAliases: state.nameAliases || {}, stageAdds: state.stageAdds || [] }, updated_at: now() }
+    (() => { const p = rosterPayload(); return { id: p.id, kind: "meta", data: p, updated_at: now() }; })()
   ];
   // Every row needs the workspace stamp; the database rejects the whole batch without it.
   await sb.from("items").upsert(rows.map(r => Object.assign({ workspace: myWorkspace }, r)));
@@ -8263,7 +8325,7 @@ function renderSettings() {
     </div>
     <button class="btn secondary" id="settings-help" style="width:auto;padding:8px 14px;flex:none">Open</button>
   </div>
-  ${isAdmin() ? `
+  ${isAppAdmin() ? `
   <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px">
     <div style="flex:1;min-width:0">
       <div style="font-size:15px;font-weight:600">Support access</div>
@@ -8407,6 +8469,21 @@ function renderSettings() {
       <button id="invite-send" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 16px;font-weight:700;font-size:15px;cursor:pointer">Invite</button>
     </div>
     <div id="invite-msg" style="font-size:13px;line-height:1.45;margin-top:8px"></div>
+    ${isAppAdmin() ? `
+    <div style="border-top:0.5px solid var(--line);margin-top:12px;padding-top:12px">
+      <div class="frow" style="gap:12px;cursor:pointer;padding:0" id="invite-newlab-row">
+        <input type="checkbox" id="invite-newlab" style="flex:0;width:20px;height:20px">
+        <label for="invite-newlab" style="flex:1;font-size:14px">They're starting their own lab</label>
+      </div>
+      <div id="invite-ws-row" style="display:none;margin-top:8px">
+        <input id="invite-ws" autocomplete="off" placeholder="e.g. spine-singh" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+        <div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:6px">
+          Lowercase letters, numbers and hyphens. This becomes the name of their workspace, and
+          <b>it can't be changed afterwards</b> — their studies, tasks and documents are stamped
+          with it. Leave the box unticked and they join ${esc(myWorkspace)} like everyone else.
+        </div>
+      </div>
+    </div>` : ""}
   </div>
 
   <div class="section-title">Invites Waiting</div>
@@ -8718,7 +8795,30 @@ function renderSettings() {
       warnUndeliverableInvite(email, say, input);
       return;
     }
-    doSendInvite(email, {}, say, input);
+    // The box only exists for an app admin, and only matters when ticked. Validated here with
+    // the same expression the server uses, so a typo is a sentence rather than a 400.
+    const newLab = document.getElementById("invite-newlab");
+    const extra = {};
+    if (newLab && newLab.checked) {
+      const ws = (document.getElementById("invite-ws").value || "").trim().toLowerCase();
+      if (!/^[a-z0-9][a-z0-9-]{1,40}$/.test(ws)) {
+        say("A workspace name is lowercase letters, numbers and hyphens — e.g. spine-singh.", "var(--red)");
+        return;
+      }
+      if (ws === myWorkspace) {
+        say("That's this lab. Untick the box to invite them into it.", "var(--red)");
+        return;
+      }
+      extra.workspace = ws;
+    }
+    doSendInvite(email, extra, say, input);
+  };
+  const newLabRow = document.getElementById("invite-newlab-row");
+  if (newLabRow) newLabRow.onclick = (e) => {
+    const box = document.getElementById("invite-newlab");
+    if (e.target !== box) box.checked = !box.checked;
+    document.getElementById("invite-ws-row").style.display = box.checked ? "" : "none";
+    if (box.checked) document.getElementById("invite-ws").focus();
   };
   // Split out so the two pre-send questions — "that domain doesn't receive our mail" and "this
   // looks like somebody already here" — can each hand off to the same sender rather than
