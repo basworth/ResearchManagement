@@ -1719,9 +1719,19 @@ let viewWorkspace = "";
 // who covers a division is in several, which is the whole point of lab_members (migration 008).
 // Seeded from the profile so the app works identically before the table is read.
 let myLabs = [];
+// Sections this account COVERS — not the section it belongs to, which is a label on the profile
+// and grants nothing. Declared here beside myLabs rather than next to the loader that fills them,
+// so labsIAmIn() below can never read them before they exist — a temporal-dead-zone error at
+// startup would take the whole page down.
+let myDivisions = [];
+let divisionLabs = {};   // division key -> [workspace]
 function labsIAmIn() {
   const set = new Set(myLabs);
   if (myWorkspace) set.add(myWorkspace);   // never lock someone out of their own lab
+  // Coverage of a division is coverage of every lab in it. Mirrors my_workspaces() in migration
+  // 009 — if these two ever disagree the server wins, and this list being the narrower of the two
+  // is the safe direction to be wrong in.
+  labsViaDivisions().forEach(ws => set.add(ws));
   return [...set];
 }
 function activeWorkspace() { return viewWorkspace || myWorkspace; }
@@ -2274,6 +2284,7 @@ async function pullAll() {
     // `workspace` is captured here so stampFor can keep a record in the lab that owns it.
     rows.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at, workspace: r.workspace }; setBaseline(r.id, r.data); });
     await loadAppAdmins();
+    await loadDivisions();
     await loadSupportGrants();
     migrate();
     saveLocal();
@@ -2295,7 +2306,7 @@ function isAppAdmin() {
 // leaves the list empty, which labsIAmIn() backfills with the profile lab — so the worst case is
 // the single-lab behaviour this replaced, never a lockout.
 async function loadLabMembership() {
-  if (!sb || !currentUser) { myLabs = []; return; }
+  if (!sb || !currentUser) { myLabs = []; myDivisions = []; return; }
   try {
     const { data, error } = await sb.from("lab_members").select("workspace").eq("user_id", currentUser.id);
     if (error) throw error;
@@ -2303,6 +2314,71 @@ async function loadLabMembership() {
   } catch (e) {
     console.warn("lab membership unavailable", e);
     myLabs = [];
+  }
+  await loadDivisionCoverage();
+}
+// COVERAGE, not section membership. Being in Sports is a label on your profile and grants
+// nothing; covering Sports means seeing every lab in it, including labs added later (migration
+// 009). Keeping these apart is the point of that migration — Adam is in Sports and covers
+// nothing, so he must not reach another PI's studies through it.
+//
+// The database expands coverage itself inside my_workspaces(), so these two reads exist only to
+// keep the CLIENT-side filter in pullAll() agreeing with what the server will actually return.
+// If they fail, the server still enforces the truth — the filter just falls back to direct lab
+// membership, so the failure mode is seeing too little, never too much.
+async function loadDivisionCoverage() {
+  myDivisions = [];
+  divisionLabs = {};
+  if (!sb || !currentUser) return;
+  try {
+    const { data: mine, error: e1 } = await sb.from("division_coverage")
+      .select("division").eq("user_id", currentUser.id);
+    if (e1) throw e1;
+    myDivisions = (mine || []).map(r => r.division).filter(Boolean);
+    if (!myDivisions.length) return;
+    const { data: labs, error: e2 } = await sb.from("lab_divisions")
+      .select("workspace, division").in("division", myDivisions);
+    if (e2) throw e2;
+    (labs || []).forEach(r => {
+      if (!r.division || !r.workspace) return;
+      (divisionLabs[r.division] = divisionLabs[r.division] || []).push(r.workspace);
+    });
+  } catch (e) {
+    // The tables may simply not exist yet on an instance where 009 hasn't run. That is a normal
+    // state, not an error worth showing anybody.
+    console.warn("division coverage unavailable", e);
+    myDivisions = [];
+    divisionLabs = {};
+  }
+}
+// Every lab reachable through a division this account covers.
+function labsViaDivisions() {
+  const out = [];
+  myDivisions.forEach(d => (divisionLabs[d] || []).forEach(ws => out.push(ws)));
+  return out;
+}
+// Every division that exists, and which labs are in each. Readable by anyone signed in, the same
+// as lab_members — knowing that a division called Sports exists reveals nothing about what is in
+// those labs, and the invite box and the admin panel both need the list.
+let allDivisions = [];
+let allLabDivisions = [];
+async function loadDivisions() {
+  if (!sb) { allDivisions = []; allLabDivisions = []; return; }
+  try {
+    const [{ data: divs, error: e1 }, { data: links, error: e2 }] = await Promise.all([
+      sb.from("divisions").select("key, name").order("name"),
+      sb.from("lab_divisions").select("workspace, division"),
+    ]);
+    if (e1) throw e1;
+    if (e2) throw e2;
+    allDivisions = divs || [];
+    allLabDivisions = links || [];
+  } catch (e) {
+    // Normal before migration 009 has run anywhere. An empty list hides the division controls,
+    // which is better than offering a control the server would refuse.
+    console.warn("divisions unavailable", e);
+    allDivisions = [];
+    allLabDivisions = [];
   }
 }
 async function loadAppAdmins() {
@@ -2394,6 +2470,20 @@ async function mergeWithServer(kind, rowId, obj) {
 // row is what my_workspace() reads, he would wake up a member of Kern's lab with no access to his
 // own 119 studies. The database would have allowed it: he has support access, so the policy says
 // yes. Nothing would look wrong until everything did.
+// Set for the duration of one save, when somebody on several PIs' teams has chosen whose study
+// they're creating. Cleared immediately afterwards in a finally, so it can never carry over into
+// the next record — a study silently filed in the wrong PI's lab is close to undetectable.
+let newRecordLab = "";
+// The PI of a lab, as far as this account can tell: the lab admin whose profile sits in it. Team
+// members can read their PI's profiles, so this resolves for every lab they can create in.
+// Returns "" rather than a guess when it can't tell — a confidently wrong PI name on a study is
+// worse than an empty box the person fills in.
+function piNameForLab(ws) {
+  if (!ws) return "";
+  const p = (state.profiles || []).find(x =>
+    x && x.admin && remoteMeta[x.id] && remoteMeta[x.id].workspace === ws);
+  return p && p.name ? p.name : "";
+}
 function stampFor(kind, rowId) {
   if (kind === "profile" && currentUser && rowId === currentUser.id) return myWorkspace;
   // An EXISTING record keeps the lab it already belongs to. This matters the moment anybody is
@@ -2402,6 +2492,11 @@ function stampFor(kind, rowId) {
   // row's own stamp is the authority; the editor's identity is not.
   const known = remoteMeta[rowId];
   if (known && known.workspace) return known.workspace;
+  // A new study whose owner was chosen explicitly — someone on several PIs' teams saying which
+  // one it's for. Checked only for records with no stamp of their own, so it can never move an
+  // existing row, and only honoured for a lab this account actually belongs to: the server would
+  // refuse anything else, and refusing here gives a clearer failure than a policy rejection.
+  if (newRecordLab && labsIAmIn().indexOf(newRecordLab) >= 0) return newRecordLab;
   // Genuinely new, or a record this device has never seen from the server: the lab in view.
   return activeWorkspace();
 }
@@ -8744,6 +8839,14 @@ function renderSettings() {
     </div>
     <button class="btn secondary" id="settings-help" style="width:auto;padding:8px 14px;flex:none">Open</button>
   </div>
+  ${isAdmin() ? `
+  <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px;margin-top:10px">
+    <div style="flex:1;min-width:0">
+      <div style="font-size:15px;font-weight:600">My research team</div>
+      <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-top:2px">People who see every one of your studies, named on them or not, and whose new studies are filed as yours.</div>
+    </div>
+    <button class="btn secondary" id="settings-team" style="width:auto;padding:8px 14px;flex:none">Open</button>
+  </div>` : ""}
   ${isAppAdmin() ? `
   <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px">
     <div style="flex:1;min-width:0">
@@ -8751,6 +8854,18 @@ function renderSettings() {
       <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-top:2px">Get into another lab to fix something. Time-limited, and they see a banner naming you and why.</div>
     </div>
     <button class="btn secondary" id="settings-support" style="width:auto;padding:8px 14px;flex:none">Open</button>
+  </div>
+  <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px;margin-top:10px">
+    <div style="flex:1;min-width:0">
+      <div style="font-size:15px;font-weight:600">Sections</div>
+      <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-top:2px">Sports, Spine and so on. A section is a label — being in one gives nobody access. Naming someone to cover a section is what does.</div>
+    </div>
+    <button class="btn secondary" id="settings-divisions" style="width:auto;padding:8px 14px;flex:none">Open</button>
+  </div>` : ""}
+  ${myDivisions.length ? `
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-top:10px">
+    You cover <b>${myDivisions.map(d => esc((allDivisions.find(x => x.key === d) || {}).name || d)).join(", ")}</b>
+    — ${labsViaDivisions().length} lab${labsViaDivisions().length === 1 ? "" : "s"} in total, including your own.
   </div>` : ""}
   <div class="section-title">Account</div>
   <div class="card" style="font-size:14px;line-height:1.55">
@@ -8900,6 +9015,20 @@ function renderSettings() {
           Lowercase letters, numbers and hyphens. This becomes the name of their workspace, and
           <b>it can't be changed afterwards</b> — their studies, tasks and documents are stamped
           with it. Leave the box unticked and they join ${esc(myWorkspace)} like everyone else.
+        </div>
+        <!-- Which part of the department they're in. A label, not a permission: being in Sports
+             doesn't let anyone in Sports see this lab. Coverage is granted separately, to named
+             people, in Settings → Sections. -->
+        <div style="margin-top:10px">
+          <label for="invite-division" style="font-size:12px;color:var(--text2);display:block;margin-bottom:4px">What section are they in?</label>
+          <select id="invite-division" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+            <option value="">Not sure yet — set it later</option>
+            ${(allDivisions || []).map(d => `<option value="${esc(d.key)}">${esc(d.name)}</option>`).join("")}
+          </select>
+          <div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:6px">
+            Just where they sit in the department. It doesn't give anyone access to their lab —
+            the people who cover a section are named separately, in Settings → Sections.
+          </div>
         </div>
       </div>
     </div>` : ""}
@@ -9095,6 +9224,10 @@ function renderSettings() {
   document.getElementById("settings-help").onclick = () => openHelpSheet();
   const supportBtn = document.getElementById("settings-support");
   if (supportBtn) supportBtn.onclick = () => openSupportSheet();
+  const teamBtn = document.getElementById("settings-team");
+  if (teamBtn) teamBtn.onclick = () => openResearchTeamSheet();
+  const divBtn = document.getElementById("settings-divisions");
+  if (divBtn) divBtn.onclick = () => openSectionsSheet();
   document.getElementById("sign-out-btn").onclick = async () => {
     if (!confirm("Sign out of Team Sync on this device?")) return;
     try { await sb.auth.signOut(); } catch (e) { console.warn(e); }
@@ -9290,6 +9423,10 @@ function renderSettings() {
         return;
       }
       extra.workspace = ws;
+      // Recorded now, applied only once the invite actually goes out — see doSendInvite. Putting
+      // a lab in a division before the lab exists would leave a dangling row if the send fails.
+      const divSel = document.getElementById("invite-division");
+      extra._division = divSel ? divSel.value : "";
     }
     doSendInvite(email, extra, say, input);
   };
@@ -9311,7 +9448,12 @@ function renderSettings() {
     const btn = document.getElementById("invite-send");
     if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
     try {
-      const out = await callInviteFn(Object.assign({ email }, extra || {}));
+      // Underscore-prefixed keys are ours, not the function's — strip them before the call so an
+      // older deployed invite-user doesn't reject the payload as an unknown field.
+      const payload = Object.assign({ email }, extra || {});
+      const division = payload._division || "";
+      delete payload._division;
+      const out = await callInviteFn(payload);
       // The server spotted an address that looks like somebody already here. Show who, and let
       // Adam decide — two real people genuinely can be a.smith and asmith, so this asks rather
       // than refuses.
@@ -9324,6 +9466,22 @@ function renderSettings() {
       say(expectFiltered && out.ok ? filteredNote : (out.message || "Invite sent."),
         expectFiltered && out.ok ? "var(--orange)" : (out.alreadyActive ? "var(--orange)" : "var(--green)"));
       if (out.ok) { if (input) input.value = ""; loadPendingInvites(); }
+      // Only once the invite really went out, and only for a brand-new lab. Failing to file the
+      // division must not read as a failed invite — the person has been invited either way — so
+      // this says what happened and what to do, rather than throwing.
+      if (out.ok && division && extra && extra.workspace) {
+        const named = (allDivisions.find(d => d.key === division) || {}).name || division;
+        try {
+          const { error } = await sb.from("lab_divisions")
+            .upsert({ workspace: extra.workspace, division }, { onConflict: "workspace,division" });
+          if (error) throw error;
+          await loadDivisionCoverage();
+          toast(extra.workspace + " joined " + named + " — undo it in Settings → Divisions");
+        } catch (e) {
+          console.warn("could not file the new lab under its division", e);
+          toast("Invite sent, but " + extra.workspace + " wasn't added to " + named + ". Add it in Settings → Divisions.");
+        }
+      }
       toast(expectFiltered && out.ok ? filteredNote : (out.message || "Invite sent"));
     } catch (e) {
       say(e.message || "Could not send the invite.", "var(--red)");
@@ -9601,8 +9759,22 @@ function openStudyForm(existing, onCreated) {
     <div class="fgroup">
       <div class="frow"><label>Title</label><input id="f-title" placeholder="IRB study name / title" value="${esc(s.title)}"></div>
       <div class="frow"><label>Nickname</label><input id="f-nickname" placeholder="Short name (e.g. ACL Registry)" value="${esc(s.nickname || "")}"></div>
-      <div class="frow"><label>PI</label><input id="f-pi" list="dl-pis" placeholder="Principal investigator" value="${esc(s.pi)}"></div>
+      <div class="frow"><label>PI</label><input id="f-pi" list="dl-pis" placeholder="Principal investigator" value="${esc(s.pi || (existing ? "" : piNameForLab(myWorkspace)))}"></div>
     </div>
+    ${!existing && labsIAmIn().length > 1 ? `
+    <!-- Only for someone on more than one PI's team. For everybody else there is exactly one
+         answer and asking would be noise. -->
+    <div class="fgroup">
+      <div class="frow"><label>Whose study</label>
+        <select id="f-study-lab">
+          ${labsIAmIn().map(ws => `<option value="${esc(ws)}" ${ws === myWorkspace ? "selected" : ""}>${esc(piNameForLab(ws) || ws)}</option>`).join("")}
+        </select>
+      </div>
+      <div style="font-size:12.5px;color:var(--text2);line-height:1.45;padding:0 14px 10px">
+        It'll live in their tracker, not yours, and they'll see it straight away. This can't be
+        changed afterwards.
+      </div>
+    </div>` : ""}
     <datalist id="dl-pis">${PIS.map(p => `<option value="${esc(p)}">`).join("")}</datalist>
     <div class="fgroup">
       <div class="frow" style="display:block">
@@ -9660,7 +9832,17 @@ function openStudyForm(existing, onCreated) {
         // the study page's Notes section. The old blob is left untouched on existing records.
       });
       delete s.type;
-      upsertStudy(s);
+      // Whose study is this? Only asked of somebody in more than one lab — Will works for Adam
+      // and for Chahla, so "the lab I happen to be in" is not an answer. The choice decides the
+      // workspace the row is stamped with, which is what keeps it in the right PI's tracker, and
+      // it has to be set before upsertStudy because stampFor reads it on the way through.
+      const labSel = document.getElementById("f-study-lab");
+      if (!existing && labSel && labSel.value) newRecordLab = labSel.value;
+      try {
+        upsertStudy(s);
+      } finally {
+        newRecordLab = "";   // never leaks into the next record created
+      }
       toast(existing ? "Study updated" : "Study added");
       if (!existing && onCreated) onCreated(s.id);
     });
@@ -10415,6 +10597,261 @@ async function endSupportGrant(g) {
   toast("Support access ended — " + g.workspace + " can see that it's over");
 }
 // Admin-only. Lists the labs with counts and nothing else (see list_workspaces in migration 002),
+// Divisions: who covers what, and which labs are in each. App-admin only, enforced in the
+// database too (migration 009) — a lab admin adding their own lab to a division would be handing
+// their studies to whoever covers it, and adding themselves would be taking everyone else's.
+//
+// Deliberately shows the consequence next to every control rather than in a preamble nobody
+// reads: the member list says how many labs that person can therefore see, and removing a lab
+// says what stops being visible.
+async function openSectionsSheet() {
+  if (!sb) { toast("Connect Team Sync first"); return; }
+  await loadDivisions();
+  let labs = [];
+  try {
+    const { data, error } = await sb.rpc("list_workspaces");
+    if (error) throw error;
+    labs = (data || []).map(l => l.workspace).filter(Boolean);
+  } catch (e) {
+    // Not fatal: the sheet still works for removing things and for adding people. Only the
+    // "add a lab" picker needs the full list.
+    console.warn("could not list labs", e);
+  }
+  let members = [];
+  try {
+    const { data, error } = await sb.from("division_coverage").select("user_id, division, note");
+    if (error) throw error;
+    members = data || [];
+  } catch (e) {
+    console.warn("could not read division coverage", e);
+  }
+  // Names come from the profiles this account can actually see, which is its own labs. Somebody
+  // covering a division from a lab we can't read shows as their id rather than a confident wrong
+  // name — saying "unknown" is better than guessing.
+  const nameFor = (uid) => {
+    const p = (state.profiles || []).find(x => x.id === uid);
+    return p && p.name ? p.name : "(someone outside your labs · " + String(uid).slice(0, 8) + "…)";
+  };
+  const labsIn = (key) => allLabDivisions.filter(l => l.division === key).map(l => l.workspace);
+
+  const body = allDivisions.length ? allDivisions.map(d => {
+    const inside = labsIn(d.key);
+    const covering = members.filter(m => m.division === d.key);
+    const addable = labs.filter(ws => inside.indexOf(ws) < 0);
+    return `
+    <div class="section-title">${esc(d.name)}</div>
+    <div class="card" style="font-size:13.5px;line-height:1.6">
+      <div style="font-weight:600;margin-bottom:4px">Labs in this section</div>
+      ${inside.length ? inside.map(ws => `
+        <div class="task-row" style="padding:6px 0">
+          <div style="flex:1;min-width:0">${esc(ws)}</div>
+          <button class="mini-btn" data-div-rmlab="${esc(d.key)}|${esc(ws)}" style="margin:0">Remove</button>
+        </div>`).join("")
+        : `<div style="color:var(--text2)">No labs in this section yet.</div>`}
+      ${addable.length ? `
+        <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+          <select data-div-labpick="${esc(d.key)}" style="flex:1;min-width:150px;border:none;background:var(--bg);border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
+            ${addable.map(ws => `<option value="${esc(ws)}">${esc(ws)}</option>`).join("")}
+          </select>
+          <button class="mini-btn" data-div-addlab="${esc(d.key)}" style="margin:0">Add lab</button>
+        </div>` : ""}
+
+      <div style="font-weight:600;margin:12px 0 4px">Who covers it <span style="font-weight:400;color:var(--text2)">— these people can see every lab above</span></div>
+      ${covering.length ? covering.map(m => `
+        <div class="task-row" style="padding:6px 0">
+          <div style="flex:1;min-width:0">
+            <div>${esc(nameFor(m.user_id))}</div>
+            <div style="font-size:12px;color:var(--text2)">Can see and edit ${inside.length} lab${inside.length === 1 ? "" : "s"}${m.note ? " · " + esc(m.note) : ""}</div>
+          </div>
+          <button class="mini-btn" data-div-rmcover="${esc(d.key)}|${esc(m.user_id)}" style="margin:0">Remove</button>
+        </div>`).join("")
+        : `<div style="color:var(--text2)">Nobody. The labs above are visible only to their own teams — which is the normal case.</div>`}
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <select data-div-personpick="${esc(d.key)}" style="flex:1;min-width:150px;border:none;background:var(--bg);border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
+          ${(state.profiles || [])
+            .filter(p => !isLinkedProfile(p) && covering.every(m => m.user_id !== p.id))
+            .map(p => `<option value="${esc(p.id)}">${esc(p.name || p.email || p.id)}</option>`).join("")}
+        </select>
+        <button class="mini-btn" data-div-addcover="${esc(d.key)}" style="margin:0">Give coverage</button>
+      </div>
+    </div>`;
+  }).join("") : `<div class="card" style="color:var(--text2);font-size:14px;line-height:1.5">
+      No sections yet. Create one below — a section is just a name that labs are grouped
+      under.</div>`;
+
+  openSheet("Sections", `
+    <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin:2px 2px 12px 2px">
+      A section is a part of the department — Sports, Spine. Putting a lab in one is just a label
+      and gives nobody access to it.
+      <br><br>
+      <b>Covering</b> a section is the part that grants something. Whoever covers it can see and
+      edit everything in every lab in that section, including labs added later, the same as a
+      member of those labs. It does not make them an admin: they still can't invite people or
+      change a lab's settings.
+    </div>
+    ${body}
+    <div class="section-title">New section</div>
+    <div class="card" style="display:flex;gap:8px;flex-wrap:wrap">
+      <input id="div-new-name" placeholder="e.g. Spine" style="flex:1;min-width:150px;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+      <button class="mini-btn" id="div-new-add" style="margin:0">Create</button>
+    </div>`, () => true);
+  const saveBtn = document.getElementById("sheet-save");
+  if (saveBtn) saveBtn.style.visibility = "hidden";
+
+  // Every handler reloads and reopens, so the sheet always shows what the database actually says
+  // rather than what we hoped it would say.
+  const redo = async (msg) => { toast(msg); await loadDivisionCoverage(); render(); openSectionsSheet(); };
+  const fail = (e) => toast("Couldn't do that — " + (refusalReason(e) || "try again"));
+
+  document.querySelectorAll("[data-div-addlab]").forEach(btn => btn.onclick = async () => {
+    const key = btn.dataset.divAddlab;
+    const sel = document.querySelector(`[data-div-labpick="${key}"]`);
+    if (!sel || !sel.value) return;
+    try {
+      const { error } = await sb.from("lab_divisions").insert({ workspace: sel.value, division: key });
+      if (error) throw error;
+      await redo(sel.value + " added to the section — anyone covering it can now see that lab");
+    } catch (e) { fail(e); }
+  });
+  document.querySelectorAll("[data-div-rmlab]").forEach(btn => btn.onclick = async () => {
+    const [key, ws] = btn.dataset.divRmlab.split("|");
+    try {
+      const { error } = await sb.from("lab_divisions").delete().eq("division", key).eq("workspace", ws);
+      if (error) throw error;
+      await redo(ws + " removed — it's visible to its own team again");
+    } catch (e) { fail(e); }
+  });
+  document.querySelectorAll("[data-div-addcover]").forEach(btn => btn.onclick = async () => {
+    const key = btn.dataset.divAddcover;
+    const sel = document.querySelector(`[data-div-personpick="${key}"]`);
+    if (!sel || !sel.value) return;
+    try {
+      const { error } = await sb.from("division_coverage").insert({ user_id: sel.value, division: key });
+      if (error) throw error;
+      await redo("Added — they'll see those labs next time they open the tracker");
+    } catch (e) { fail(e); }
+  });
+  document.querySelectorAll("[data-div-rmcover]").forEach(btn => btn.onclick = async () => {
+    const [key, uid] = btn.dataset.divRmcover.split("|");
+    try {
+      const { error } = await sb.from("division_coverage").delete().eq("division", key).eq("user_id", uid);
+      if (error) throw error;
+      await redo("Removed — they keep their own lab and lose the rest");
+    } catch (e) { fail(e); }
+  });
+  const newBtn = document.getElementById("div-new-add");
+  if (newBtn) newBtn.onclick = async () => {
+    const name = (document.getElementById("div-new-name").value || "").trim();
+    if (!name) { toast("Give it a name first"); return; }
+    // The key is derived rather than asked for: it's an internal identifier, and one more box to
+    // fill in is one more thing to get wrong.
+    const key = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    if (!key) { toast("That name has no letters or numbers in it"); return; }
+    if (allDivisions.some(d => d.key === key)) { toast("There's already a section called that"); return; }
+    try {
+      const { error } = await sb.from("divisions").insert({ key, name });
+      if (error) throw error;
+      await redo(name + " created — add labs to it, then say who covers it");
+    } catch (e) { fail(e); }
+  };
+}
+// A PI's direct research team. Will and TJ work for Adam: they need to see everything of his,
+// not only what they're named on, and to start studies that are his from the moment they exist.
+//
+// Membership of the team IS membership of the PI's lab. Labs are one-per-PI, so "everything of
+// Adam's" and "everything in sports-yanke" are the same set of rows — which means no second
+// visibility mechanism to keep in step with the first. A team row is an ordinary lab_members row
+// with source = 'team'; migration 010 is what lets a lab admin write one for their own lab.
+//
+// Being on a team is NOT being an admin. They cannot in turn add anybody, invite anybody, or
+// change the lab's settings — the policy checks is_lab_admin(), which they don't have.
+async function openResearchTeamSheet() {
+  if (!sb) { toast("Connect Team Sync first"); return; }
+  let rows = [];
+  try {
+    const { data, error } = await sb.from("lab_members")
+      .select("user_id, source, added_at").eq("workspace", myWorkspace);
+    if (error) throw error;
+    rows = data || [];
+  } catch (e) {
+    toast("Couldn't read the team — " + (refusalReason(e) || "try again"));
+    return;
+  }
+  const meId = currentUser && currentUser.id;
+  const nameFor = (uid) => {
+    const p = (state.profiles || []).find(x => x.id === uid);
+    return p && p.name ? p.name : "(invited, not signed in yet · " + String(uid).slice(0, 8) + "…)";
+  };
+  // Your own row is yours by definition and removing it would lock you out of your own lab.
+  const others = rows.filter(r => r.user_id !== meId);
+  const addable = (state.profiles || [])
+    .filter(p => !isLinkedProfile(p) && p.id !== meId && rows.every(r => r.user_id !== p.id));
+
+  openSheet("My research team", `
+    <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin:2px 2px 12px 2px">
+      People here see <b>every one of your studies</b>, including ones they aren't named on, and
+      anything they create is yours — filed in your lab with you on it.
+      <br><br>
+      It does not make them an admin. They can't add anyone else, invite anyone, or change your
+      lab's settings.
+    </div>
+    <div class="section-title">On your team</div>
+    <div class="card" style="font-size:13.5px;line-height:1.6">
+      ${others.length ? others.map(r => `
+        <div class="task-row" style="padding:7px 0">
+          <div style="flex:1;min-width:0">
+            <div>${esc(nameFor(r.user_id))}</div>
+            <div style="font-size:12px;color:var(--text2)">${r.source === "team" ? "Added by you" : r.source === "profile" ? "In your lab from the start" : "Added by an administrator"}</div>
+          </div>
+          <button class="mini-btn" data-team-rm="${esc(r.user_id)}" style="margin:0">Remove</button>
+        </div>`).join("")
+        : `<div style="color:var(--text2)">Nobody yet. Only you can see your studies.</div>`}
+    </div>
+    ${addable.length ? `
+    <div class="section-title">Add someone</div>
+    <div class="card" style="display:flex;gap:8px;flex-wrap:wrap">
+      <select id="team-pick" style="flex:1;min-width:150px;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+        ${addable.map(p => `<option value="${esc(p.id)}">${esc(p.name || p.email || p.id)}</option>`).join("")}
+      </select>
+      <button class="mini-btn" id="team-add" style="margin:0">Add</button>
+    </div>` : `
+    <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-top:10px">
+      Everyone on the tracker is already on your team. To add somebody new, invite them first.
+    </div>`}`, () => true);
+  const saveBtn = document.getElementById("sheet-save");
+  if (saveBtn) saveBtn.style.visibility = "hidden";
+
+  const addBtn = document.getElementById("team-add");
+  if (addBtn) addBtn.onclick = async () => {
+    const sel = document.getElementById("team-pick");
+    if (!sel || !sel.value) return;
+    const who = (state.profiles || []).find(p => p.id === sel.value);
+    try {
+      const { error } = await sb.from("lab_members")
+        .insert({ user_id: sel.value, workspace: myWorkspace, source: "team" });
+      if (error) throw error;
+      toast((who && who.name ? who.name : "They") + " can now see all your studies — remove them in Settings → My research team");
+      openResearchTeamSheet();
+    } catch (e) {
+      toast("Couldn't add them — " + (refusalReason(e) || "try again"));
+    }
+  };
+  document.querySelectorAll("[data-team-rm]").forEach(btn => btn.onclick = async () => {
+    const uid = btn.dataset.teamRm;
+    const who = nameFor(uid);
+    try {
+      const { error } = await sb.from("lab_members")
+        .delete().eq("user_id", uid).eq("workspace", myWorkspace);
+      if (error) throw error;
+      // Nothing of theirs is deleted — studies they created stay in this lab, with them still
+      // named on the ones they're named on. They simply stop seeing the rest.
+      toast(who + " removed — their studies stay here, they just can't see yours any more");
+      openResearchTeamSheet();
+    } catch (e) {
+      toast("Couldn't remove them — " + (refusalReason(e) || "try again"));
+    }
+  });
+}
 // and asks for a reason and a duration before anything is granted.
 async function openSupportSheet() {
   if (!sb) { toast("Connect Team Sync first"); return; }
