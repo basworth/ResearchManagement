@@ -2256,7 +2256,12 @@ async function pullAll() {
     const rows = data.filter(r =>
       mine.indexOf(r.workspace || myWorkspace) >= 0
       || r.kind === "meeting"
-      || (r.kind === "profile" && currentUser && r.id === currentUser.id)
+      // Every profile the server chose to send. Since migration 013 that means "anyone who
+      // shares a lab with me", which the client cannot work out for itself — it never sees other
+      // people's lab_members rows. Filtering on the profile's own label instead made Chahla
+      // disappear from Adam's roster the moment his primary lab became his own: the row arrived
+      // and was discarded locally, which looks exactly like the database being wrong.
+      || r.kind === "profile"
       // A study in somebody else's lab that names me. The server decides this (migration 012);
       // without the same test here the row would arrive and then be thrown away locally, which
       // looks exactly like the feature not working. Deliberately NOT applied while viewing a lab

@@ -117,6 +117,16 @@ function check(name, cond, detail) {
   check("...and never while in a support-access view", /!viewWorkspace && r\.kind === "study"/.test(html),
     (html.match(/.{0,80}isCollaboratorOn\(r\.data\).{0,40}/) || [])[0]);
 
+  console.log("\n-- Profiles are trusted from the server, not re-filtered --");
+  // Migration 013 lets you see anyone who shares a lab with you. The client cannot evaluate that
+  // — it never sees other people's lab_members rows — so it must keep every profile the server
+  // sends. Filtering on the profile's own lab label instead made Chahla vanish from Adam's
+  // roster the moment his primary lab became his own.
+  check("pullAll keeps every profile row", /\|\| r\.kind === "profile"\n/.test(html),
+    (html.match(/.{0,60}r\.kind === "profile".{0,60}/) || [])[0]);
+  check("...and no longer tests it against my own id",
+    !/r\.kind === "profile" && currentUser && r\.id === currentUser\.id/.test(html));
+
   console.log("\n-- The migration --");
   const MIG = path.join(PROJECT, "supabase", "migrations", "012-cross-lab-collaboration.sql");
   if (!fs.existsSync(MIG)) {
