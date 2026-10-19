@@ -8842,8 +8842,8 @@ function renderSettings() {
   ${isAdmin() ? `
   <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px;margin-top:10px">
     <div style="flex:1;min-width:0">
-      <div style="font-size:15px;font-weight:600">My research team</div>
-      <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-top:2px">People who see every one of your studies, named on them or not, and whose new studies are filed as yours.</div>
+      <div style="font-size:15px;font-weight:600">My lab &amp; who sees what</div>
+      <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-top:2px">Who is in your lab and what each of them can see. Onboard an RA, offboard one who has left.</div>
     </div>
     <button class="btn secondary" id="settings-team" style="width:auto;padding:8px 14px;flex:none">Open</button>
   </div>` : ""}
@@ -10765,6 +10765,53 @@ async function openSectionsSheet() {
 //
 // Being on a team is NOT being an admin. They cannot in turn add anybody, invite anybody, or
 // change the lab's settings — the policy checks is_lab_admin(), which they don't have.
+// Mirrors is_involved() and assigned_on_study() from migration 011. The database is the authority
+// — this exists so the sheet can SHOW what someone can see before you change anything, and so the
+// two definitions can be compared in a test. If they ever disagree, the server wins and the
+// number on screen is merely wrong, which is the safe direction.
+function nameVariantsFor(profile) {
+  const full = String((profile && profile.name) || "").trim().toLowerCase();
+  if (!full) return [];
+  const out = new Set([full]);
+  const parts = full.split(/\s+/);
+  // Surname alone, because author lists frequently carry only that. Two letters or fewer would
+  // match half the roster, so it's dropped — same cutoff as the SQL.
+  if (parts.length > 1 && parts[parts.length - 1].length > 2) out.add(parts[parts.length - 1]);
+  // Every name that was merged INTO this one. Anu Hakimiyan is written "Anu" on two studies and
+  // "Arnavaz(Anu) Hakimiyan" on her profile; without this she loses both. Found by comparing this
+  // function against the dry run Adam had already approved — the counts differed by exactly two.
+  const aliases = (state && state.nameAliases) || {};
+  Object.keys(aliases).forEach(from => {
+    if (String(aliases[from] || "").trim().toLowerCase() !== full) return;
+    const a = String(from || "").trim().toLowerCase();
+    if (a.length > 2) out.add(a);
+  });
+  return [...out];
+}
+function studyNameHaystack(s) {
+  const nm = (a) => typeof a === "string" ? a : [a && a.fore, a && a.last].filter(Boolean).join(" ");
+  const h = [];
+  if (Array.isArray(s.team)) s.team.forEach(t => h.push(t));
+  else if (s.team) h.push(s.team);
+  if (s.pi) h.push(s.pi);
+  if (Array.isArray(s.authors)) s.authors.forEach(a => h.push(nm(a)));
+  const pub = s.publication || {};
+  if (Array.isArray(pub.authors)) pub.authors.forEach(a => h.push(nm(a)));
+  if (pub.authorList) h.push(pub.authorList);
+  return h.map(x => String(x || "").trim().toLowerCase()).filter(Boolean);
+}
+function studiesVisibleTo(profile) {
+  const names = nameVariantsFor(profile);
+  if (!names.length) return [];
+  const byStudy = {};
+  (state.tasks || []).forEach(t => { if (t.studyId) (byStudy[t.studyId] = byStudy[t.studyId] || []).push(t); });
+  return (state.studies || []).filter(s => {
+    const assigned = (byStudy[s.id] || []).some(t =>
+      (t.assignees || []).some(a => names.some(n => String(a || "").toLowerCase().includes(n))));
+    if (assigned) return true;
+    return studyNameHaystack(s).some(h => names.some(n => h.indexOf(n) >= 0));
+  });
+}
 async function openResearchTeamSheet() {
   if (!sb) { toast("Connect Team Sync first"); return; }
   let rows = [];
@@ -10787,24 +10834,35 @@ async function openResearchTeamSheet() {
   const addable = (state.profiles || [])
     .filter(p => !isLinkedProfile(p) && p.id !== meId && rows.every(r => r.user_id !== p.id));
 
-  openSheet("My research team", `
+  openSheet("My lab", `
     <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin:2px 2px 12px 2px">
-      People here see <b>every one of your studies</b>, including ones they aren't named on, and
-      anything they create is yours — filed in your lab with you on it.
+      Who is in your lab, and what each of them can see. Adding somebody here is onboarding;
+      removing them is offboarding — they keep nothing and their own work stays where it is.
       <br><br>
-      It does not make them an admin. They can't add anyone else, invite anyone, or change your
-      lab's settings.
+      <b>Your lab admins</b> see every study of yours. <b>Everyone else</b> sees only the studies
+      they're on: named in the Team, named as PI, in the author list, or assigned a task.
     </div>
-    <div class="section-title">On your team</div>
+    <div class="section-title">In your lab</div>
     <div class="card" style="font-size:13.5px;line-height:1.6">
-      ${others.length ? others.map(r => `
+      ${others.length ? others.map(r => {
+        const p = (state.profiles || []).find(x => x.id === r.user_id);
+        const how = r.source === "team" ? "Added by you" : r.source === "profile" ? "In your lab from the start" : "Added by an administrator";
+        // The number is the point of this row: it says what offboarding would take away, and
+        // makes a name that matches nothing visible before somebody complains.
+        const sees = p && p.admin
+          ? "Lab admin — sees all " + (state.studies || []).length + " of your studies"
+          : p ? "Sees " + studiesVisibleTo(p).length + " of " + (state.studies || []).length + " studies"
+              : "Hasn't signed in yet";
+        const none = p && !p.admin && studiesVisibleTo(p).length === 0;
+        return `
         <div class="task-row" style="padding:7px 0">
           <div style="flex:1;min-width:0">
             <div>${esc(nameFor(r.user_id))}</div>
-            <div style="font-size:12px;color:var(--text2)">${r.source === "team" ? "Added by you" : r.source === "profile" ? "In your lab from the start" : "Added by an administrator"}</div>
+            <div style="font-size:12px;color:${none ? "var(--orange)" : "var(--text2)"}">${esc(sees)}${none ? " — check their name matches how they're written on studies" : ""} · ${esc(how)}</div>
           </div>
           <button class="mini-btn" data-team-rm="${esc(r.user_id)}" style="margin:0">Remove</button>
-        </div>`).join("")
+        </div>`;
+      }).join("")
         : `<div style="color:var(--text2)">Nobody yet. Only you can see your studies.</div>`}
     </div>
     ${addable.length ? `
@@ -10816,7 +10874,7 @@ async function openResearchTeamSheet() {
       <button class="mini-btn" id="team-add" style="margin:0">Add</button>
     </div>` : `
     <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-top:10px">
-      Everyone on the tracker is already on your team. To add somebody new, invite them first.
+      Everyone on the tracker is already in your lab. To add somebody new, invite them first.
     </div>`}`, () => true);
   const saveBtn = document.getElementById("sheet-save");
   if (saveBtn) saveBtn.style.visibility = "hidden";
@@ -10830,7 +10888,7 @@ async function openResearchTeamSheet() {
       const { error } = await sb.from("lab_members")
         .insert({ user_id: sel.value, workspace: myWorkspace, source: "team" });
       if (error) throw error;
-      toast((who && who.name ? who.name : "They") + " can now see all your studies — remove them in Settings → My research team");
+      toast((who && who.name ? who.name : "They") + " is in your lab — they'll see the studies they're named on. Undo in Settings → My lab");
       openResearchTeamSheet();
     } catch (e) {
       toast("Couldn't add them — " + (refusalReason(e) || "try again"));
@@ -10845,7 +10903,7 @@ async function openResearchTeamSheet() {
       if (error) throw error;
       // Nothing of theirs is deleted — studies they created stay in this lab, with them still
       // named on the ones they're named on. They simply stop seeing the rest.
-      toast(who + " removed — their studies stay here, they just can't see yours any more");
+      toast(who + " offboarded — their work stays exactly where it is, they just can't reach it");
       openResearchTeamSheet();
     } catch (e) {
       toast("Couldn't remove them — " + (refusalReason(e) || "try again"));
