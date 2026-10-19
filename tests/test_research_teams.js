@@ -166,11 +166,15 @@ function check(name, cond, detail) {
   }
 
   console.log("\n-- The team sheet says what it does and doesn't do --");
-  check("it promises full visibility of the PI's studies",
-    /every one of your studies/.test(html));
-  check("...and denies admin in the same breath", /does not make them an admin/.test(html));
-  check("removing somebody doesn't remove their work",
-    /their studies stay here/.test(html));
+  check("it says lab admins see everything of the PI's",
+    /Your lab admins<\/b> see every study of yours/.test(html));
+  check("...and that everyone else sees only their own work",
+    /Everyone else<\/b> sees only the studies\s*\n?\s*they're on/.test(html));
+  check("...and denies admin in the same breath",
+    /Being here does not make someone an admin/.test(html));
+  check("offboarding doesn't remove their work",
+    /their own work stays where it is/.test(html)
+    && /their work stays exactly where it is/.test(html));
   check("it writes source = 'team'", /source: "team"/.test(html));
   check("you can't remove yourself from your own lab", /r\.user_id !== meId/.test(html));
 

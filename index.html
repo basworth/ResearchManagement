@@ -9497,8 +9497,12 @@ function renderSettings() {
           const { error } = await sb.from("lab_divisions")
             .upsert({ workspace: extra.workspace, division }, { onConflict: "workspace,division" });
           if (error) throw error;
+          // Both, not just coverage: loadDivisionCoverage refreshes what *I* can reach, while
+          // loadDivisions refreshes the section lists the Sections sheet draws. Reloading only
+          // the first left the new lab invisible there until a full page refresh.
+          await loadDivisions();
           await loadDivisionCoverage();
-          toast(extra.workspace + " joined " + named + " — undo it in Settings → Divisions");
+          toast(extra.workspace + " joined " + named + " — undo it in Settings → Sections");
         } catch (e) {
           console.warn("could not file the new lab under its division", e);
           toast("Invite sent, but " + extra.workspace + " wasn't added to " + named + ". Add it in Settings → Divisions.");
@@ -10862,6 +10866,9 @@ async function openResearchTeamSheet() {
       <br><br>
       <b>Your lab admins</b> see every study of yours. <b>Everyone else</b> sees only the studies
       they're on: named in the Team, named as PI, in the author list, or assigned a task.
+      <br><br>
+      Being here does not make someone an admin. They can't invite anyone, change your lab's
+      settings, or add anybody else to it.
     </div>
     <div class="section-title">In your lab</div>
     <div class="card" style="font-size:13.5px;line-height:1.6">
