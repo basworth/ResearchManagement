@@ -1725,6 +1725,19 @@ let myLabs = [];
 // startup would take the whole page down.
 let myDivisions = [];
 let divisionLabs = {};   // division key -> [workspace]
+// Named on a study, wherever it lives. Mirrors is_collaborator() in migration 012, and is
+// deliberately stricter than the inside-a-lab test: full name only, and Team or PI only — never
+// the author list. A surname would let two different Coles read each other's labs, and carrying
+// author credit across a boundary would expose a new lab's whole published back-catalogue to
+// every co-author elsewhere on day one.
+function isCollaboratorOn(d) {
+  if (!d || !currentUser) return false;
+  const me = String((primaryProfileFor(currentUser.id) || {}).name || "").trim().toLowerCase();
+  if (!me) return false;   // a blank name must never behave like a wildcard
+  if (String(d.pi || "").trim().toLowerCase() === me) return true;
+  const team = Array.isArray(d.team) ? d.team : [];
+  return team.some(t => String(t || "").trim().toLowerCase() === me);
+}
 function labsIAmIn() {
   const set = new Set(myLabs);
   if (myWorkspace) set.add(myWorkspace);   // never lock someone out of their own lab
@@ -2243,7 +2256,12 @@ async function pullAll() {
     const rows = data.filter(r =>
       mine.indexOf(r.workspace || myWorkspace) >= 0
       || r.kind === "meeting"
-      || (r.kind === "profile" && currentUser && r.id === currentUser.id));
+      || (r.kind === "profile" && currentUser && r.id === currentUser.id)
+      // A study in somebody else's lab that names me. The server decides this (migration 012);
+      // without the same test here the row would arrive and then be thrown away locally, which
+      // looks exactly like the feature not working. Deliberately NOT applied while viewing a lab
+      // under a support grant — that view is meant to be that lab and nothing else.
+      || (!viewWorkspace && r.kind === "study" && isCollaboratorOn(r.data)));
 
     state.studies = rows.filter(r => r.kind === "study").map(r => r.data);
     state.tasks = rows.filter(r => r.kind === "task").map(r => r.data);
@@ -2366,12 +2384,16 @@ async function loadDivisions() {
   if (!sb) { allDivisions = []; allLabDivisions = []; return; }
   try {
     const [{ data: divs, error: e1 }, { data: links, error: e2 }] = await Promise.all([
-      sb.from("divisions").select("key, name").order("name"),
+      // Sorted below rather than by the server: .order() is one more thing the read has to
+      // support, and a failure here is swallowed into "no sections exist", which looks identical
+      // to the feature being off. Thirty rows at most — sorting them here costs nothing.
+      sb.from("divisions").select("key, name"),
       sb.from("lab_divisions").select("workspace, division"),
     ]);
     if (e1) throw e1;
     if (e2) throw e2;
-    allDivisions = divs || [];
+    allDivisions = (divs || []).slice().sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || "")));
     allLabDivisions = links || [];
   } catch (e) {
     // Normal before migration 009 has run anywhere. An empty list hides the division controls,
@@ -8858,13 +8880,13 @@ function renderSettings() {
   <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px;margin-top:10px">
     <div style="flex:1;min-width:0">
       <div style="font-size:15px;font-weight:600">Sections</div>
-      <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-top:2px">Sports, Spine and so on. A section is a label — being in one gives nobody access. Naming someone to cover a section is what does.</div>
+      <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-top:2px">Sports, Spine and so on. A section is a label — being in one gives nobody access. Naming a section admin is what does.</div>
     </div>
     <button class="btn secondary" id="settings-divisions" style="width:auto;padding:8px 14px;flex:none">Open</button>
   </div>` : ""}
   ${myDivisions.length ? `
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-top:10px">
-    You cover <b>${myDivisions.map(d => esc((allDivisions.find(x => x.key === d) || {}).name || d)).join(", ")}</b>
+    You're section admin for <b>${myDivisions.map(d => esc((allDivisions.find(x => x.key === d) || {}).name || d)).join(", ")}</b>
     — ${labsViaDivisions().length} lab${labsViaDivisions().length === 1 ? "" : "s"} in total, including your own.
   </div>` : ""}
   <div class="section-title">Account</div>
@@ -9027,7 +9049,7 @@ function renderSettings() {
           </select>
           <div style="font-size:12px;color:var(--text2);line-height:1.5;margin-top:6px">
             Just where they sit in the department. It doesn't give anyone access to their lab —
-            the people who cover a section are named separately, in Settings → Sections.
+            section admins are named separately, in Settings → Sections.
           </div>
         </div>
       </div>
@@ -10656,7 +10678,7 @@ async function openSectionsSheet() {
           <button class="mini-btn" data-div-addlab="${esc(d.key)}" style="margin:0">Add lab</button>
         </div>` : ""}
 
-      <div style="font-weight:600;margin:12px 0 4px">Who covers it <span style="font-weight:400;color:var(--text2)">— these people can see every lab above</span></div>
+      <div style="font-weight:600;margin:12px 0 4px">Section admins <span style="font-weight:400;color:var(--text2)">— these people can see every lab above</span></div>
       ${covering.length ? covering.map(m => `
         <div class="task-row" style="padding:6px 0">
           <div style="flex:1;min-width:0">
@@ -10665,14 +10687,14 @@ async function openSectionsSheet() {
           </div>
           <button class="mini-btn" data-div-rmcover="${esc(d.key)}|${esc(m.user_id)}" style="margin:0">Remove</button>
         </div>`).join("")
-        : `<div style="color:var(--text2)">Nobody. The labs above are visible only to their own teams — which is the normal case.</div>`}
+        : `<div style="color:var(--text2)">No section admin. The labs above are visible only to their own teams — which is the normal case.</div>`}
       <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
         <select data-div-personpick="${esc(d.key)}" style="flex:1;min-width:150px;border:none;background:var(--bg);border-radius:8px;padding:8px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
           ${(state.profiles || [])
             .filter(p => !isLinkedProfile(p) && covering.every(m => m.user_id !== p.id))
             .map(p => `<option value="${esc(p.id)}">${esc(p.name || p.email || p.id)}</option>`).join("")}
         </select>
-        <button class="mini-btn" data-div-addcover="${esc(d.key)}" style="margin:0">Give coverage</button>
+        <button class="mini-btn" data-div-addcover="${esc(d.key)}" style="margin:0">Make section admin</button>
       </div>
     </div>`;
   }).join("") : `<div class="card" style="color:var(--text2);font-size:14px;line-height:1.5">
@@ -10684,10 +10706,9 @@ async function openSectionsSheet() {
       A section is a part of the department — Sports, Spine. Putting a lab in one is just a label
       and gives nobody access to it.
       <br><br>
-      <b>Covering</b> a section is the part that grants something. Whoever covers it can see and
-      edit everything in every lab in that section, including labs added later, the same as a
-      member of those labs. It does not make them an admin: they still can't invite people or
-      change a lab's settings.
+      A <b>section admin</b> is the part that grants something. They can see and edit everything
+      in every lab in that section, including labs added later, the same as a member of those labs.
+      It does not make them an app admin: they still can't invite people or change a lab's settings.
     </div>
     ${body}
     <div class="section-title">New section</div>
@@ -10710,7 +10731,7 @@ async function openSectionsSheet() {
     try {
       const { error } = await sb.from("lab_divisions").insert({ workspace: sel.value, division: key });
       if (error) throw error;
-      await redo(sel.value + " added to the section — anyone covering it can now see that lab");
+      await redo(sel.value + " added to the section — its section admins can now see that lab");
     } catch (e) { fail(e); }
   });
   document.querySelectorAll("[data-div-rmlab]").forEach(btn => btn.onclick = async () => {
@@ -10728,7 +10749,7 @@ async function openSectionsSheet() {
     try {
       const { error } = await sb.from("division_coverage").insert({ user_id: sel.value, division: key });
       if (error) throw error;
-      await redo("Added — they'll see those labs next time they open the tracker");
+      await redo("Section admin added — they'll see those labs next time they open the tracker");
     } catch (e) { fail(e); }
   });
   document.querySelectorAll("[data-div-rmcover]").forEach(btn => btn.onclick = async () => {
@@ -10736,7 +10757,7 @@ async function openSectionsSheet() {
     try {
       const { error } = await sb.from("division_coverage").delete().eq("division", key).eq("user_id", uid);
       if (error) throw error;
-      await redo("Removed — they keep their own lab and lose the rest");
+      await redo("No longer section admin — they keep their own lab and lose the rest");
     } catch (e) { fail(e); }
   });
   const newBtn = document.getElementById("div-new-add");
@@ -10751,7 +10772,7 @@ async function openSectionsSheet() {
     try {
       const { error } = await sb.from("divisions").insert({ key, name });
       if (error) throw error;
-      await redo(name + " created — add labs to it, then say who covers it");
+      await redo(name + " created — add labs to it, then name a section admin");
     } catch (e) { fail(e); }
   };
 }
