@@ -80,7 +80,18 @@ const text = () => doc.getElementById("main").textContent.replace(/\s+/g, " ");
   check("counts senior-author papers", /2 senior author/.test(t) || /senior author/.test(t));
 
   console.log("\n-- The breakdowns --");
-  check("papers per year, including the empty years in the span", /2024/.test(t) && /2025/.test(t) && /2026/.test(t));
+  // Per-year became a vertical SVG chart on 19 Oct, with two-digit labels, so the old
+  // four-digit text match no longer applies. The property is unchanged and now checked against
+  // the chart's own structure, which is stronger than matching text: one bar per year across the
+  // whole span, empty years included.
+  const chart = doc.querySelector("svg[aria-label^='Papers per year']");
+  check("there's a papers-per-year chart", !!chart);
+  check("one bar per year across the span 2024–2026",
+    chart && chart.querySelectorAll("rect").length === 3,
+    chart && chart.querySelectorAll("rect").length);
+  const chartYears = [...(chart ? chart.querySelectorAll("text") : [])]
+    .map(n => n.textContent.trim()).filter(x => /^\d{2}$/.test(x));
+  check("...labelled 24, 25 and 26", ["24", "25", "26"].every(y => chartYears.includes(y)), chartYears);
   check("topics are named from the titles", /Patellofemoral/.test(t) && /Cartilage restoration/.test(t) && /Shoulder/.test(t), t);
   check("journals are listed", /Arthroscopy/.test(t) && /Am J Sports Med/.test(t));
   check("author position is broken down", /First author/.test(t) && /Middle author/.test(t));

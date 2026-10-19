@@ -5055,6 +5055,59 @@ function barRowHTML(label, value, max, colour, extra) {
       <div class="progressbar"><div style="width:${Math.max(pct, 2)}%;background:${colour}"></div></div>
     </div>`;
 }
+// Papers per year as a compact vertical bar chart. Inline SVG, no library — the file has no
+// script tags and no build step, and adding a charting dependency for nineteen rectangles would
+// cost more than it buys.
+//
+// Why vertical: the horizontal bars this replaced used one full row per year, so a twenty-year
+// career ran off the screen and you could not see the shape of it. The shape is the point.
+//
+// Sizing is a viewBox scaled to the card's width rather than a fixed pixel size, so it fits a
+// phone and a desktop from one definition. Bars keep their own slot whatever the span, so a year
+// with no papers stays visible as a gap instead of silently closing up — the same reason the
+// series is built across every year rather than only the ones with papers.
+function thisYearIsPartial(yearRow) {
+  const y = new Date().getFullYear();
+  return yearRow.some(([yr, n]) => Number(yr) === y && n > 0);
+}
+function pubYearChartHTML(yearRow, maxYear) {
+  if (!yearRow.length) return "";
+  const SLOT = 26, BAR = 16, TOP = 16, PLOT = 100;
+  const BASE = TOP + PLOT, H = BASE + 24, W = SLOT * yearRow.length;
+  const thisYear = new Date().getFullYear();
+  const scale = (n) => (maxYear ? (n / maxYear) * PLOT : 0);
+
+  const bars = yearRow.map(([y, n], i) => {
+    const x = i * SLOT + (SLOT - BAR) / 2;
+    // A zero year still gets a sliver, so it reads as "that year, none" rather than as a bar
+    // that failed to draw.
+    const h = n ? Math.max(scale(n), 3) : 2;
+    const yTop = BASE - h;
+    const current = Number(y) === thisYear;
+    // The current year is lighter because it is incomplete — it will keep growing, and drawing it
+    // at full strength invites reading a part-year as a decline.
+    const fill = current ? "color-mix(in srgb, var(--blue) 42%, var(--card))" : "var(--blue)";
+    return `<rect x="${x}" y="${yTop}" width="${BAR}" height="${h}" rx="3" fill="${fill}"></rect>`
+      // Zero is left blank: a row of 0s across the early years is noise, and the empty slot
+      // already says it.
+      + (n ? `<text x="${x + BAR / 2}" y="${yTop - 5}" text-anchor="middle" font-size="11"
+           font-weight="700" fill="var(--text)">${n}</text>` : "")
+      + `<text x="${x + BAR / 2}" y="${BASE + 16}" text-anchor="middle" font-size="10"
+           fill="var(--text2)">${String(y).slice(-2)}</text>`;
+  }).join("");
+
+  const total = yearRow.reduce((a, [, n]) => a + n, 0);
+  const span = yearRow[0][0] + "–" + yearRow[yearRow.length - 1][0];
+  return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}"
+       preserveAspectRatio="xMidYMax meet" role="img"
+       style="display:block;max-height:${H}px;overflow:visible;font-family:inherit"
+       aria-label="Papers per year, ${esc(span)}: ${total} in total">
+      <title>Papers per year, ${esc(span)}</title>
+      <line x1="0" y1="${BASE + 0.5}" x2="${W}" y2="${BASE + 0.5}"
+            stroke="var(--line)" stroke-width="1"></line>
+      ${bars}
+    </svg>`;
+}
 function statTileHTML(big, label, sub) {
   return `<div class="card" style="flex:1;min-width:120px;padding:12px 14px;margin:0">
       <div style="font-size:26px;font-weight:800;line-height:1.1">${esc(String(big))}</div>
@@ -5200,9 +5253,12 @@ function renderPublications() {
       ${statTileHTML(lastA, "senior author", "last-author papers")}
     </div>`;
 
-  html += `<div class="section-title">Papers per year</div><div class="card">`;
-  yearRow.forEach(([y, n]) => { html += barRowHTML(String(y), n, maxYear, "var(--blue)"); });
-  html += `</div>`;
+  html += `<div class="section-title">Papers per year</div>
+    <div class="card">${pubYearChartHTML(yearRow, maxYear)}
+      <div style="font-size:11.5px;color:var(--text2);margin-top:6px">
+        ${thisYearIsPartial(yearRow) ? "The lighter bar is this year, still in progress." : "&nbsp;"}
+      </div>
+    </div>`;
 
   html += `<div class="section-title">Where you sit on the author list</div><div class="card">
       ${barRowHTML("First author", firstA, papers.length, "var(--green)")}
