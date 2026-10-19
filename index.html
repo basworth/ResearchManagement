@@ -1660,6 +1660,15 @@ let myWorkspace = "sports-yanke";
 // look — see openSupportSheet. Keeping it separate from myWorkspace matters: myWorkspace is who
 // you ARE, and must not drift just because of what you're looking at.
 let viewWorkspace = "";
+// Every lab this account belongs to. Almost always one — the lab on their profile — but a CRCM
+// who covers a division is in several, which is the whole point of lab_members (migration 008).
+// Seeded from the profile so the app works identically before the table is read.
+let myLabs = [];
+function labsIAmIn() {
+  const set = new Set(myLabs);
+  if (myWorkspace) set.add(myWorkspace);   // never lock someone out of their own lab
+  return [...set];
+}
 function activeWorkspace() { return viewWorkspace || myWorkspace; }
 // Live support grants this account can see. The database shows you grants you hold and grants
 // over your own lab, and nothing else — so the same list drives both banners.
@@ -2155,11 +2164,19 @@ async function pullAll() {
     //
     // My own profile row is always kept, whichever lab is on screen: it's how the app knows who I
     // am, what I'm called, and which lab I actually belong to.
+    // Before the filter below, which is the thing that needs it. Loaded after myWorkspace is
+    // settled and before any row is sorted into state, or a multi-lab person sees only their
+    // primary lab on the first pull and the rest appears a refresh later.
+    await loadLabMembership();
     const ws = activeWorkspace();
     // The deadline calendar is the only thing genuinely shared between labs. `meta` used to be in
     // here too — see metaRowId for why it no longer is.
+    // Normally every lab this person belongs to — one for almost everybody, several for a CRCM
+    // who covers a division. While viewing another lab under a support grant it is that lab
+    // alone, so their records never mix with your own.
+    const mine = viewWorkspace ? [viewWorkspace] : labsIAmIn();
     const rows = data.filter(r =>
-      (r.workspace || myWorkspace) === ws
+      mine.indexOf(r.workspace || myWorkspace) >= 0
       || r.kind === "meeting"
       || (r.kind === "profile" && currentUser && r.id === currentUser.id));
 
@@ -2199,7 +2216,8 @@ async function pullAll() {
     if (meta && meta.data.nameAliases && typeof meta.data.nameAliases === "object") state.nameAliases = meta.data.nameAliases;
     // Team-wide, so a stage one person removed doesn't come back for everyone else.
     if (meta && Array.isArray(meta.data.stageAdds)) state.stageAdds = meta.data.stageAdds;
-    rows.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at }; setBaseline(r.id, r.data); });
+    // `workspace` is captured here so stampFor can keep a record in the lab that owns it.
+    rows.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at, workspace: r.workspace }; setBaseline(r.id, r.data); });
     await loadAppAdmins();
     await loadSupportGrants();
     migrate();
@@ -2217,6 +2235,20 @@ async function pullAll() {
 let appAdminIds = [];
 function isAppAdmin() {
   return !!(currentUser && appAdminIds.indexOf(currentUser.id) >= 0);
+}
+// Which labs this account belongs to. Readable by anyone signed in (migration 008); a failure
+// leaves the list empty, which labsIAmIn() backfills with the profile lab — so the worst case is
+// the single-lab behaviour this replaced, never a lockout.
+async function loadLabMembership() {
+  if (!sb || !currentUser) { myLabs = []; return; }
+  try {
+    const { data, error } = await sb.from("lab_members").select("workspace").eq("user_id", currentUser.id);
+    if (error) throw error;
+    myLabs = (data || []).map(r => r.workspace).filter(Boolean);
+  } catch (e) {
+    console.warn("lab membership unavailable", e);
+    myLabs = [];
+  }
 }
 async function loadAppAdmins() {
   if (!sb) { appAdminIds = []; return; }
@@ -2309,6 +2341,13 @@ async function mergeWithServer(kind, rowId, obj) {
 // yes. Nothing would look wrong until everything did.
 function stampFor(kind, rowId) {
   if (kind === "profile" && currentUser && rowId === currentUser.id) return myWorkspace;
+  // An EXISTING record keeps the lab it already belongs to. This matters the moment anybody is
+  // in two labs: Carla covers all of Sports, so opening a study in Chahla's lab and saving it
+  // would otherwise stamp it with HER primary lab and silently move the study out of his. The
+  // row's own stamp is the authority; the editor's identity is not.
+  const known = remoteMeta[rowId];
+  if (known && known.workspace) return known.workspace;
+  // Genuinely new, or a record this device has never seen from the server: the lab in view.
   return activeWorkspace();
 }
 async function pushItem(kind, obj, rowIdOverride, opts) {
@@ -2331,11 +2370,12 @@ async function pushItem(kind, obj, rowIdOverride, opts) {
     }
     // The stamp goes on every write. Without it the database rejects the row outright — which is
     // the point: a save can only ever land in the saver's own lab.
-    const { error } = await sb.from("items").upsert({ id: rowId, kind, data: toWrite, updated_at: updatedAt, workspace: stampFor(kind, rowId) });
+    const stamp = stampFor(kind, rowId);
+    const { error } = await sb.from("items").upsert({ id: rowId, kind, data: toWrite, updated_at: updatedAt, workspace: stamp });
     if (error) throw error;
     setBaseline(rowId, toWrite);
     // Advance our own baseline immediately so the save we just made isn't flagged as stale.
-    remoteMeta[rowId] = { kind, updated_at: updatedAt };
+    remoteMeta[rowId] = { kind, updated_at: updatedAt, workspace: stamp };
     if (editingRef && editingRef.id === rowId) editingRef.baseline = updatedAt;
     setSyncPill(true, realtimeConfirmed ? "Live" : "Synced");
   } catch (e) {
@@ -2399,7 +2439,7 @@ function subscribeRealtime() {
         if (payload.eventType === "DELETE") {
           applyRealtimeDelete(payload.old && payload.old.id);
         } else if (payload.new) {
-          applyRealtimeRow(payload.new.kind, payload.new.id, payload.new.data, payload.new.updated_at);
+          applyRealtimeRow(payload.new.kind, payload.new.id, payload.new.data, payload.new.updated_at, payload.new.workspace);
         }
       })
       .subscribe((status) => {
@@ -2417,9 +2457,9 @@ function unsubscribeRealtime() {
 }
 // Apply one changed row from another device/tab without touching unrelated in-flight edits —
 // only the matching array entry is replaced, not the whole studies/tasks/meetings list.
-function applyRealtimeRow(kind, id, data, updatedAt) {
-  if (kind === "file") { remoteMeta[id] = { kind, updated_at: updatedAt }; return; }
-  remoteMeta[id] = { kind, updated_at: updatedAt };
+function applyRealtimeRow(kind, id, data, updatedAt, ws) {
+  if (kind === "file") { remoteMeta[id] = { kind, updated_at: updatedAt, workspace: ws }; return; }
+  remoteMeta[id] = { kind, updated_at: updatedAt, workspace: ws };
   setBaseline(id, data);
   if (kind === "meta") {
     if (Array.isArray(data.names)) { state.roster = data.names; saveLocal(); render(); }
