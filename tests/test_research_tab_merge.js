@@ -208,6 +208,31 @@ const BLOCKS = [
   const emptyWatch = w.document.getElementById("main").innerHTML;
   check("still renders the figures", /Papers per year/.test(emptyWatch));
 
+  console.log("\n-- No papers at all is a normal state, not a broken page --");
+  // This is what anyone signed out sees, and what a brand-new lab sees on day one. It shipped
+  // once printing the literal word "undefined", because the empty branch returned only `html`
+  // and the tab interpolated a `body` that didn't exist. Every key the callers read must exist.
+  ev('state.studies = []; tab = "research"; render();');
+  await wait(80);
+  const bare = w.document.getElementById("main").innerHTML;
+  check("the tab still renders", bare.length > 200, bare.length);
+  check("it says there's nothing yet", /No published papers recorded yet/.test(bare));
+  check("no 'undefined' anywhere on the page", !/\bundefined\b/.test(bare),
+    (bare.match(/.{0,80}undefined.{0,80}/) || [])[0]);
+  check("...and no 'null' or 'NaN' either", !/>\s*(null|NaN)\s*</.test(bare),
+    (bare.match(/.{0,60}(null|NaN).{0,60}/) || [])[0]);
+  // The same branch, via the standalone page.
+  ev('showPublications = true; tab = "studies"; render();');
+  await wait(80);
+  const bareStandalone = w.document.getElementById("main").innerHTML;
+  check("the standalone page is clean too", !/\bundefined\b/.test(bareStandalone),
+    (bareStandalone.match(/.{0,80}undefined.{0,80}/) || [])[0]);
+  check("...and still offers a way back", /id="pub-back"/.test(bareStandalone));
+  // Every caller-read key is present on the empty return, not just the two seen above.
+  const keys = ev('JSON.stringify(Object.keys(pubStatsHTML({ key: "nobody", own: true })))');
+  check("the empty return carries band, body and html",
+    ["band", "body", "html"].every(k => keys.includes('"' + k + '"')), keys);
+
   console.log("\n-- One definition, not two --");
   // The point of the refactor: both screens call the same builder. If somebody re-inlines the
   // markup later this count goes up and the two copies start to drift.

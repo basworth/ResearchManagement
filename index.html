@@ -5499,7 +5499,7 @@ function renderResearch() {
   $main.innerHTML = (stats.band || "")
     + `<div class="rw-grid">${side}${main}</div>`
     + (hasWatch ? rwTailHTML(w) : "");
-  wirePubStats();
+  if (!stats.empty) wirePubStats();
 }
 
 // Everything the old Publications page drew, as a string, so the Research tab and the co-author
@@ -5508,10 +5508,11 @@ function renderResearch() {
 function pubStatsHTML(subject) {
   const papers = publishedPapers(subject.key);
   if (!papers.length) {
-    return {
-      empty: true,
-      html: `<div class="card" style="color:var(--text2);line-height:1.5">No published papers recorded yet${subject.own ? "" : " for " + esc(subject.name)}.</div>`,
-    };
+    // Every key the callers read must be present, even here. An earlier version returned only
+    // `html`, so the Research tab interpolated an undefined `body` and printed the literal word
+    // "undefined" to anyone signed out — the one state where this branch is normal.
+    const none = `<div class="card" style="color:var(--text2);line-height:1.5">No published papers recorded yet${subject.own ? "" : " for " + esc(subject.name)}.</div>`;
+    return { empty: true, band: "", body: none, html: none };
   }
   const years = papers.map(x => Number(x.p.year)).filter(Boolean);
   const firstYear = Math.min(...years), lastYear = Math.max(...years);
