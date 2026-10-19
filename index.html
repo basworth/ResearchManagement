@@ -1919,6 +1919,9 @@ async function handleAuthChange(event, session) {
       // and maybeShowTour stands down while any sheet is open. It gets its chance on the next
       // sign-in, by which point the person has a name and a role and the tour can talk to them.
       maybeShowTour();
+      // Someone who met the tour before this existed, or skipped it. Stands down if the tour or
+      // the setup prompt is already on screen.
+      maybeAskFields();
     } catch (e) {
       console.warn("pull after sign-in failed", e);
       setSyncPill(false, "Offline");
@@ -10147,7 +10150,9 @@ function openTour(i) {
     </div>`,
     () => true,
     (sh) => {
-      const done = () => { markTourSeen(); closeSheet(); };
+      // Chained, not called alongside: the field picker opens a sheet of its own, and two sheets
+      // deep on somebody's first minute is how a welcome becomes an obstacle course.
+      const done = () => { markTourSeen(); closeSheet(); setTimeout(maybeAskFields, 400); };
       sh.querySelector("#tour-next").onclick = () => { if (last) done(); else openTour(i + 1); };
       const back = sh.querySelector("#tour-back");
       if (back) back.onclick = () => openTour(i - 1);
@@ -10184,6 +10189,69 @@ function maybeShowTour() {
   if (p.tourSeen === TOUR_VERSION) return;
   if (document.getElementById("sheet")) return;   // something else is already asking them something
   openTour(0);
+}
+// A brand-new lab tracks one field, not eleven. Without this, the first thing a spine PI sees is
+// forty sports deadlines, and the fix — Settings, scroll, eleven toggles — is something somebody
+// has to think to tell him. Asking once, at the only moment it's obviously relevant, is cheaper
+// than a line in an onboarding email that nobody reads twice.
+//
+// Only for a PI setting up an empty lab. An established lab's people are never interrupted: their
+// colleagues already chose, and a sheet asking them to re-pick would be a regression.
+function needsFieldChoice() {
+  if (!currentUser) return false;
+  const p = profileFor(currentUser.id);
+  if (!p || !p.name || !p.position) return false;
+  if (p.fieldsChosen) return false;
+  if (!isAdmin()) return false;          // the person who runs the lab makes this call
+  if (state.studies.length) return false; // not a new lab
+  return true;
+}
+function maybeAskFields() {
+  if (!needsFieldChoice()) return;
+  if (document.getElementById("sheet")) return;
+  openFieldChoiceSheet();
+}
+function openFieldChoiceSheet() {
+  const fields = allFields();
+  const counts = {};
+  fields.forEach(f => { counts[f] = state.meetings.filter(m => fieldOf(m) === f && !m.hidden).length; });
+  // Sorted by how much is actually tracked in each — a field with 23 deadlines is a likelier
+  // answer than one with none, and it saves reading an alphabetical list to the bottom.
+  const ordered = fields.slice().sort((a, b) => counts[b] - counts[a] || a.localeCompare(b));
+  openSheet("Which fields do you work in?", `
+    <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin:2px 2px 12px 2px">
+      The tracker carries one conference and grant calendar for the whole department. Tick the
+      fields your lab submits to and the rest stay out of your way. You can change this any time
+      under <b>Settings &rsaquo; Conference Fields</b>, and it only affects what <i>you</i> see.
+    </div>
+    <div class="fgroup">
+      ${ordered.map(f => `
+        <div class="frow field-pick-row" style="gap:12px;cursor:pointer">
+          <input type="checkbox" class="field-pick" data-field="${esc(f)}" style="flex:0;width:22px;height:22px">
+          <div style="flex:1">
+            <div style="font-size:15px;font-weight:600">${esc(f)}</div>
+            <div style="font-size:11.5px;color:var(--text2)">${counts[f]} ${counts[f] === 1 ? "deadline" : "deadlines"} tracked</div>
+          </div>
+        </div>`).join("")}
+    </div>`,
+    () => {
+      const picked = [...document.querySelectorAll(".field-pick")].filter(c => c.checked).map(c => c.dataset.field);
+      // Nothing ticked means "show me everything" rather than an empty board. An empty deadline
+      // board with no explanation reads as a broken app, not as a choice they made.
+      if (!picked.length) {
+        upsertProfile(null, { fieldsChosen: true });
+        toast("Showing every field — narrow it any time in Settings");
+        return true;
+      }
+      fields.forEach(f => setFieldSub(f, picked.indexOf(f) >= 0));
+      upsertProfile(null, { fieldsChosen: true });
+      render();
+      toast(picked.length === 1 ? picked[0] + " deadlines only — change it in Settings"
+                                : picked.length + " fields shown — change them in Settings");
+      return true;
+    },
+    (sh) => { bindRowCheckboxes("#sheet .field-pick-row"); },
+    { saveLabel: "Done", cancelLabel: "Skip" });
 }
 function openHelpSheet() {
   const steps = tourSteps();
