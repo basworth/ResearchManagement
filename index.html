@@ -145,6 +145,23 @@
   .rw-badge-diff{background:var(--orange);color:#fff}
   @media(max-width:560px){.rw-row{grid-template-columns:1fr}}
   .rw-chart text{fill:var(--text2);font-size:10px}
+  /* One column by default — the phone case — and two side by side once there's room. The chart
+     comes first in source order so it stays on top on a phone without reordering anything. */
+  .rw-grid{display:grid;grid-template-columns:1fr;gap:16px;align-items:start}
+  @media(min-width:900px){.rw-grid{grid-template-columns:300px 1fr;gap:20px}}
+  .rw-list{display:flex;flex-direction:column;gap:8px}
+  .rw-item{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+  .rw-item>summary{list-style:none;cursor:pointer;padding:12px 14px;display:block}
+  .rw-item>summary::-webkit-details-marker{display:none}
+  /* A caret that turns, so a closed row reads as openable rather than as a dead card. */
+  .rw-item>summary::before{content:"\25B8";float:right;color:var(--text2);font-size:11px;
+    margin-left:10px;transition:transform .2s;display:inline-block}
+  .rw-item[open]>summary::before{transform:rotate(90deg)}
+  .rw-item[open]>summary{border-bottom:1px solid var(--line)}
+  .rw-sum{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .rw-short{font-size:13.5px;line-height:1.45;color:var(--text)}
+  .rw-body{padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+  .rw-body .rw-title{margin:0 0 2px}
 
   /* Nested society subscriptions in Settings */
   .sub-field + .sub-field { border-top: 0.5px solid var(--line); }
@@ -565,6 +582,7 @@
     <button data-tab="tasks"><span class="icon">☑</span>Tasks</button>
     <button data-tab="worklist"><span class="icon">▦</span>Worklist</button>
     <button data-tab="notes"><span class="icon">🗒</span>Notes</button>
+    <button data-tab="research"><span class="icon">◎</span>Research</button>
     <button data-tab="settings"><span class="icon">⚙</span>Settings</button>
   </nav>
   <button id="feedback-btn" title="Suggest a change or report a problem"
@@ -1163,7 +1181,9 @@ function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(
 
 /* ============ State ============ */
 let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [] };
-let tab = "dashboard";
+// Opens on Research: it is the page he reads rather than edits, and the one with something new
+// on it each week. Every other tab and every deep link is unchanged.
+let tab = "research";
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
 let studyDesignFilter = "All designs";
@@ -1177,9 +1197,6 @@ let detailStudyId = null;
 // The publications dashboard, and the co-author page it opens onto. Both live under the Studies
 // tab so the tab bar doesn't grow an eighth button for something opened a few times a month.
 let showPublications = false;
-// Research Watch is a sub-view of Publications rather than a seventh tab: the tab bar is already
-// six items and a seventh would shrink every label on a phone.
-let showWatch = false;
 // Loaded from watch.json at startup, the same way the deadline feed is. Null until it arrives,
 // and null is a valid state — the view says so rather than breaking.
 let watchData = null;
@@ -3329,11 +3346,11 @@ function render() {
   captureDrafts(document);
   document.querySelectorAll("nav.tabbar button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
   const addBtn = document.getElementById("add-btn");
-  addBtn.style.visibility = (tab === "settings" || tab === "notes") ? "hidden" : "visible";
-  if (tab === "dashboard") renderDashboard();
+  addBtn.style.visibility = (tab === "settings" || tab === "notes" || tab === "research") ? "hidden" : "visible";
+  if (tab === "research") renderResearch();
+  else if (tab === "dashboard") renderDashboard();
   else if (tab === "studies") {
     if (coauthorName) renderCoauthor();
-    else if (showWatch) renderResearchWatch();
     else if (showPublications) renderPublications();
     else if (detailStudyId) renderStudyDetail();
     else renderStudies();
@@ -5251,6 +5268,20 @@ function citationsFor(pmid) {
   return c ? (c[pmid] ?? null) : null;
 }
 
+// The per-year series, pulled out of renderPublications so the Research tab can draw the same
+// chart from the same numbers. One definition, so the two can never disagree.
+function pubYearSeries(subjectKey) {
+  const papers = publishedPapers(subjectKey);
+  const years = papers.map(x => Number(x.p.year)).filter(Boolean);
+  if (!years.length) return { papers, yearRow: [], maxYear: 0, firstYear: null, lastYear: null };
+  const firstYear = Math.min(...years), lastYear = Math.max(...years);
+  const perYear = {};
+  years.forEach(y => { perYear[y] = (perYear[y] || 0) + 1; });
+  const yearRow = [];
+  for (let y = firstYear; y <= lastYear; y++) yearRow.push([y, perYear[y] || 0]);
+  return { papers, yearRow, maxYear: Math.max(...yearRow.map(r => r[1])), firstYear, lastYear };
+}
+
 /* ============ Research Watch ============
  *
  * Field-wide literature and trial watch, as opposed to every other view in the app, which is
@@ -5296,6 +5327,60 @@ function rwPmidLink(pmid,label){
   return `<a href="https://pubmed.ncbi.nlm.nih.gov/${rwEsc(pmid)}/" target="_blank" rel="noopener">${rwEsc(label||("PMID "+pmid))}</a>`;
 }
 
+// One sentence by default, the full detail on demand. The long fields are three paragraphs per
+// item and ten items is a wall — but the detail is the reason the thing exists, so it is one tap
+// away rather than gone. <details> because it needs no JavaScript and the browser handles the
+// keyboard and screen-reader behaviour correctly for free.
+function rwShort(item) {
+  if (item.short) return item.short;
+  // Older files have no `short`. First sentence of `frame` is a decent stand-in, and far better
+  // than an empty row.
+  const f = String(item.frame || "");
+  const stop = f.search(/\.\s/);
+  return stop > 0 ? f.slice(0, stop + 1) : f;
+}
+function rwDetailRow(label, value) {
+  return value ? `<div class="rw-row"><b>${rwEsc(label)}</b><span>${rwEsc(value)}</span></div>` : "";
+}
+function rwItemHTML(it, kind) {
+  const isPaper = kind === "paper";
+  const badge = isPaper
+    ? `<span class="badge${it.verdict === "different" ? " rw-badge-diff" : ""}">${rwVerdictLabel(it.verdict)}</span>`
+    : `<span class="badge">${rwEsc(it.kind)}</span>`;
+  const links = isPaper
+    ? `${rwPmidLink(it.pmid, "PMID " + it.pmid)}${it.doi ? ` <a href="https://doi.org/${rwEsc(it.doi)}" target="_blank" rel="noopener">DOI</a>` : ""}`
+    : `<a href="https://clinicaltrials.gov/study/${rwEsc(it.id)}" target="_blank" rel="noopener">${rwEsc(it.id)}</a>`;
+  const refs = (it.refs || []).map(r => rwPmidLink(r.pmid, r.label + " (PMID " + r.pmid + ")")).join(" · ");
+  return `
+    <details class="rw-item">
+      <summary>
+        <div class="rw-sum">
+          <div class="rw-meta">${badge}<span>${rwEsc(it.meta)}</span>${links}</div>
+          <div class="rw-short">${rwEsc(rwShort(it))}</div>
+        </div>
+      </summary>
+      <div class="rw-body">
+        <h3 class="rw-title">${rwEsc(it.title)}</h3>
+        ${rwDetailRow("Frame", it.frame)}
+        ${isPaper && it.versus ? `<div class="rw-row"><b>vs yours</b><span>${rwEsc(it.versus)}${refs ? `<br><span class="rw-note">${refs}</span>` : ""}</span></div>` : ""}
+        ${it.forWork ? `<div class="rw-row dir"><b>For your work</b><span>${rwEsc(it.forWork)}</span></div>` : ""}
+      </div>
+    </details>`;
+}
+// The tail that sits under both lists: provenance, the unpublished-data flag, and the footnotes.
+function rwTailHTML(w) {
+  const also = w.alsoNoted || [], mtg = w.meetingAbstracts || {};
+  return `
+    ${also.length ? `<div class="section-title">Also noted</div>
+      <ul class="rw-note" style="margin:0;padding-left:18px">${also.map(a =>
+        `<li>${rwEsc(a.text)} ${rwPmidLink(a.pmid)}</li>`).join("")}</ul>` : ""}
+    <div class="section-title">Meeting abstracts — currently unpublished data</div>
+    <div class="rw-note rw-flag">${rwEsc(mtg.note || "")}${mtg.leadUrl
+      ? ` <a href="${rwEsc(mtg.leadUrl)}" target="_blank" rel="noopener">Lead</a>` : ""}</div>
+    <p class="rw-note">Generated ${rwEsc(w.generated || "")}${w.reviewed ? "" : " · awaiting review"}.
+      Comparisons use abstracts only; check the full text before citing.
+      Sources: PubMed and ClinicalTrials.gov. Trial status changes often.</p>`;
+}
 function researchWatchHTML(w){
   w=w||{};
   const dev=w.inDevelopment||[],papers=w.newPapers||[],also=w.alsoNoted||[],mtg=w.meetingAbstracts||{};
@@ -5333,12 +5418,53 @@ function researchWatchHTML(w){
     <p class="rw-note">Sources: PubMed and ClinicalTrials.gov. Trial status changes often.</p>
   </div>`;
 }
-// Its own renderer, matching the shape of the other sub-views: a Back control, then the content.
-function renderResearchWatch() {
-  $title.textContent = "Research Watch";
-  $main.innerHTML = `<button class="btn secondary" id="rw-back" style="margin-bottom:10px">‹ Back</button>`
-    + researchWatchHTML(watchData);
-  document.getElementById("rw-back").onclick = () => { showWatch = false; render(); };
+// The Research tab. Two columns on a desktop — the chart and the counts beside the lists, so the
+// shape of his own output sits next to what the field is doing — and one column on a phone with
+// the chart first. Grid rather than flex, so the single-column fallback is one media query.
+function renderResearch() {
+  $title.textContent = "Research";
+  const w = watchData || {};
+  const dev = w.inDevelopment || [], papers = w.newPapers || [];
+  if (!dev.length && !papers.length) {
+    $main.innerHTML = `<div class="card"><div class="section-title">Research</div>
+      <p class="rw-note">No Research Watch data yet. This page fills itself from watch.json,
+      which is regenerated separately — nothing here is stored in the tracker.</p></div>`;
+    return;
+  }
+  const subject = publicationsSubject();
+  const series = pubYearSeries(subject.key);
+  const cites = state.scholar && state.scholar.icite;
+
+  const side = `
+    <div class="rw-side">
+      <div class="section-title">Your papers per year</div>
+      <div class="card">${rwYearChartSVG(series.yearRow)}
+        <div class="rw-note" style="margin-top:6px">
+          ${series.papers.length} published${series.firstYear ? ` · ${series.firstYear}–${series.lastYear}` : ""}
+        </div>
+      </div>
+      ${cites ? `<div class="card" style="margin-top:10px">
+        <div style="display:flex;gap:14px;flex-wrap:wrap">
+          <div><div style="font-size:22px;font-weight:800;line-height:1.1">${cites.h}</div>
+               <div class="rw-note">h-index</div></div>
+          <div><div style="font-size:22px;font-weight:800;line-height:1.1">${cites.i10}</div>
+               <div class="rw-note">i10</div></div>
+          <div><div style="font-size:22px;font-weight:800;line-height:1.1">${cites.total}</div>
+               <div class="rw-note">citations</div></div>
+        </div>
+        <div class="rw-note" style="margin-top:6px">iCite, as of ${esc(cites.asOf ? fmtDate(cites.asOf) : "")}</div>
+      </div>` : ""}
+    </div>`;
+
+  const main = `
+    <div class="rw-main">
+      <div class="section-title">In development or early phase</div>
+      <div class="rw-list">${dev.map(d => rwItemHTML(d, "trial")).join("")}</div>
+      <div class="section-title">New papers that touch your publications</div>
+      <div class="rw-list">${papers.map(pp => rwItemHTML(pp, "paper")).join("")}</div>
+    </div>`;
+
+  $main.innerHTML = `<div class="rw-grid">${side}${main}</div>${rwTailHTML(w)}`;
 }
 function renderPublications() {
   const subject = publicationsSubject();
@@ -5393,10 +5519,7 @@ function renderPublications() {
   const metrics = (state.scholar && Array.isArray(state.scholar.points)) ? state.scholar.points.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))) : [];
   const latest = metrics[metrics.length - 1];
 
-  let html = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
-      <button class="btn secondary" id="pub-back" style="margin:0;width:auto;padding:9px 16px">‹ Back</button>
-      <button class="btn secondary" id="pub-watch" style="margin:0;width:auto;padding:9px 16px">Research Watch ›</button>
-    </div>`;
+  let html = `<button class="btn secondary" id="pub-back" style="margin-bottom:10px">‹ Back</button>`;
   if (!subject.own) {
     html += `<div class="card" style="padding:10px 14px;margin-bottom:10px;font-size:13.5px;line-height:1.5">
         Showing <b>${esc(subject.name)}</b>'s publications — ${esc(subject.via || "")}.
@@ -5525,7 +5648,6 @@ function renderPublications() {
 
   $main.innerHTML = html;
   document.getElementById("pub-back").onclick = () => { showPublications = false; tab = "dashboard"; render(); };
-  document.getElementById("pub-watch").onclick = () => { showWatch = true; render(); };
   $main.querySelectorAll("[data-coauthor]").forEach(el => el.onclick = () => {
     coauthorName = el.dataset.coauthor; render();
   });
@@ -10150,7 +10272,7 @@ async function fetchResearchWatch() {
     const data = await res.json();
     if (data && typeof data === "object") {
       watchData = data;
-      if (showWatch) render();   // already looking at it when the file landed
+      if (tab === "research") render();   // already looking at it when the file landed
     }
   } catch (e) { /* offline, missing, or opened as a local file — the empty state covers it */ }
 }
@@ -10690,7 +10812,6 @@ document.querySelectorAll("nav.tabbar button").forEach(b => {
     // detail view (even when tapping Studies from inside a project) and reset Tasks to "Mine".
     detailStudyId = null;
     showPublications = false;
-    showWatch = false;
     coauthorName = null;
     if (tab === "tasks") taskFilter = "Mine";
     render();

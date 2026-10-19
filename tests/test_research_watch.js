@@ -160,46 +160,68 @@ function check(name, cond, detail) {
   check("...with no literal colours", !/#[0-9a-f]{3,8}\b/i.test(chartSVG) && !/rgba?\(/i.test(chartSVG));
   check("an empty series returns nothing", ev("rwYearChartSVG([])") === "");
 
-  console.log("\n-- It's reachable from Publications, and Back works --");
-  ev('tab = "studies"; showPublications = true; showWatch = false; render();');
-  await wait(250);
-  const btn = w.document.getElementById("pub-watch");
-  check("Publications offers a Research Watch button", !!btn);
+  console.log("\n-- It is the default tab, and it renders --");
+  // Moved from a sub-view of Publications to its own bottom tab on 19 Oct, and made the landing
+  // page: it is the thing he reads rather than edits.
+  check("the app opens on Research", ev("tab") === "research", ev("tab"));
   w.__watch2 = realWatch;
-  ev("watchData = window.__watch2");
-  btn.click();
+  ev("watchData = window.__watch2; render();");
   await wait(250);
-  check("it opens the view", ev("showWatch") === true);
-  check("...showing the content", /In development or early phase/.test(w.document.querySelector("#main").textContent));
-  check("...with its own Back control", !!w.document.getElementById("rw-back"));
-  w.document.getElementById("rw-back").click();
-  await wait(250);
-  check("Back returns to Publications", ev("showWatch") === false
-    && /Papers per year/.test(w.document.querySelector("#main").textContent));
+  const tabMain = w.document.querySelector("#main").textContent;
+  check("...showing the trials", /In development or early phase/.test(tabMain));
+  check("...and the papers", /New papers that touch your publications/.test(tabMain));
+  check("there's a Research button in the tab bar",
+    !!w.document.querySelector('button[data-tab="research"]'));
+  check("the old in-Publications button is gone", !w.document.getElementById("pub-watch"));
 
-  console.log("\n-- A missing file doesn't break Publications --");
-  ev("watchData = null; showWatch = true; render();");
+  console.log("\n-- Each item is one line until you open it --");
+  const items = [...w.document.querySelectorAll("details.rw-item")];
+  check("every trial and paper is a collapsible row", items.length === 10, items.length);
+  check("all start closed", items.every(d => !d.open));
+  // The summary carries the short sentence; the long fields live in the body.
+  const firstSummary = items[0].querySelector("summary").textContent;
+  check("the summary shows the short sentence",
+    firstSummary.includes(realWatch.inDevelopment[0].short), firstSummary.slice(0, 160));
+  check("...and not the long frame text",
+    !firstSummary.includes(realWatch.inDevelopment[0].forWork));
+  const firstBody = items[0].querySelector(".rw-body").textContent;
+  check("the body carries the long fields",
+    firstBody.includes(realWatch.inDevelopment[0].forWork), firstBody.slice(0, 120));
+
+  console.log("\n-- A file without `short` still reads sensibly --");
+  check("it falls back to the first sentence of frame",
+    ev('rwShort({frame:"First sentence here. Second one follows."})') === "First sentence here.",
+    ev('rwShort({frame:"First sentence here. Second one follows."})'));
+  check("...and prefers short when present",
+    ev('rwShort({short:"S", frame:"F. G."})') === "S");
+
+  console.log("\n-- The chart is on the Research tab and still on Publications --");
+  check("the tab has the chart", !!w.document.querySelector("svg[aria-label^='Papers per year']"));
+  ev('tab = "studies"; showPublications = true; render();');
   await wait(250);
-  check("the view says there's nothing yet",
+  check("Publications kept its chart",
+    !!w.document.querySelector("svg[aria-label^='Papers per year']"));
+  ev('tab = "research"; render();');
+  await wait(200);
+
+  console.log("\n-- The old sub-view is retired --");
+  check("the showWatch flag is gone", ev("typeof showWatch") === "undefined");
+
+  console.log("\n-- A missing file leaves an empty tab, not a broken one --");
+  ev("watchData = null; tab = 'research'; render();");
+  await wait(250);
+  check("the tab says there's nothing yet",
     /No Research Watch data yet/.test(w.document.querySelector("#main").textContent));
-  check("...and Back still works", !!w.document.getElementById("rw-back"));
-  w.document.getElementById("rw-back").click();
+  check("...and the other tabs still work",
+    (function(){ w.document.querySelector('button[data-tab="studies"]').click(); return true; })());
   await wait(250);
-  check("Publications is intact", /Papers per year/.test(w.document.querySelector("#main").textContent));
-
-  console.log("\n-- Leaving the area clears the flag --");
-  // Otherwise Back from a study later lands on a view the person never opened.
-  ev("showWatch = true; tab = 'dashboard'; render();");
-  await wait(150);
-  const studiesTab = w.document.querySelector('button[data-tab="studies"]');
-  studiesTab.click();
-  await wait(250);
-  check("the Studies tab shows studies, not a stale Research Watch", ev("showWatch") === false,
-    ev("showWatch"));
+  check("Studies renders normally", ev("tab") === "studies");
+  ev("watchData = window.__watch2; tab = 'research'; render();");
+  await wait(200);
 
   console.log("\n-- Nothing from watch.json reaches the database --");
   check("researchWatchHTML never writes", !/pushItem|from\("items"\)/.test(ev("String(researchWatchHTML)")));
-  check("...nor does the renderer", !/pushItem|from\("items"\)/.test(ev("String(renderResearchWatch)")));
+  check("...nor does the tab renderer", !/pushItem|from\("items"\)/.test(ev("String(renderResearch)")));
 
   console.log("\n" + pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);
