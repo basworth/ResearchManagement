@@ -133,6 +133,19 @@ const settings = async (w) => {
   // Nothing may be revoked by a migration — that's Adam's standing rule.
   check("no existing admin is removed", !/delete from (public\.)?app_admins/i.test(sql),
     "004 deletes from app_admins");
+
+  // 005 is where he named the removal, so it may delete — but only with the ids written down, so
+  // the file is its own undo. And the pre-004 backfill that would silently demote them must stay
+  // commented out: it sets every profile's admin flag FROM app_admins, which since 004 means the
+  // opposite of what it used to.
+  const narrow = fs.readFileSync(require("path").join(SQL_DIR, "005-narrow-app-admins.sql"), "utf8");
+  check("005 records the ids it removes, so it can be undone",
+    ["54cf0eb7-2d42-4e3a-bd33-6634311afa64", "157f0d20-bbd7-4e0a-ac58-5ae347762ea8",
+     "4a168226-a860-4f80-8009-e24e3a2f488e"].every(id => narrow.includes(id)));
+  check("...and leaves Adam in place", !/delete .*921c9b34-9b9c-49b9-a085-29a146e37341/.test(narrow));
+  const setup = fs.readFileSync(require("path").join(PROJECT, "supabase", "admin-rights-setup.sql"), "utf8");
+  check("the pre-004 flag backfill is disarmed",
+    !/^\s*update items i\b/m.test(setup), "admin-rights-setup.sql would still demote lab admins");
   }
 
   console.log("\n" + pass + " passed, " + fail + " failed");
