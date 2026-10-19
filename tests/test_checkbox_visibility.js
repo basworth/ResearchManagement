@@ -99,6 +99,10 @@ function rowTogglesFromText(row) {
   // ---------- Every other checkbox in the app still renders ----------
   doc.querySelector('button[data-tab="settings"]').click();
   await wait(60);
+  // Societies nest under their subspecialty since 19 Oct, so expand them before counting. What
+  // this file is protecting is that checkboxes RENDER as real checkboxes everywhere — unchanged.
+  window.eval('allFields().forEach(f => settingsFieldOpen[f] = true); render();');
+  await wait(100);
   const subToggles = doc.querySelectorAll(".sub-toggle");
   console.log("Society subscription toggles present:", subToggles.length > 0);
   console.log("Society toggles are real checkboxes:", [...subToggles].every(c => c.type === "checkbox"));

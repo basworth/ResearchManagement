@@ -59,12 +59,23 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   check("ISHA gets a real full name, not just its code",
     window.eval('allSocieties()["ISHA"]') === "International Society for Hip Arthroscopy");
 
+  // Since 19 Oct the societies are nested under the subspecialty they belong to, rather than a
+  // flat A-to-Z list, so each one has to be expanded before its toggles render. The property this
+  // was written to protect is unchanged and still what's checked: a society that exists only in
+  // the feed — never in the hardcoded map — must still get a toggle, or it is visible on the
+  // board and impossible to switch off.
   doc.querySelector('button[data-tab="settings"]').click();
   await wait(80);
+  window.eval('allFields().forEach(f => settingsFieldOpen[f] = true); render();');
+  await wait(120);
   const toggles = [...doc.querySelectorAll(".sub-toggle")].map(t => t.dataset.soc);
   check("Settings shows a toggle for ORS", toggles.includes("ORS"), toggles);
   check("Settings shows a toggle for ISHA", toggles.includes("ISHA"));
-  check("Every society in the data has a toggle", socs.every(s => toggles.includes(s)));
+  check("Every society in the data has a toggle", socs.every(s => toggles.includes(s)),
+    socs.filter(s => !toggles.includes(s)));
+  // And it has to be under a sensible heading, not dumped in a catch-all.
+  const orsField = window.eval('fieldOf({society:"ORS"})');
+  check("ORS is filed under a subspecialty that makes sense", orsField === "Basic science", orsField);
 
   console.log("\n-- Turning a feed-only society off actually hides it --");
   window.eval('tab = "dashboard"; render();');
@@ -92,6 +103,13 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   console.log("\n-- ...but it is still tracked, not lost --");
   doc.querySelector('button[data-tab="settings"]').click();
   await wait(80);
+  // The meeting list collapsed on 19 Oct — it's a reference list, not something to scroll past on
+  // every visit. Still reachable, which is the point being protected here.
+  check("The collapsed header counts it without being opened",
+    /undated/.test(doc.querySelector("[data-toggle-meetings]").textContent),
+    doc.querySelector("[data-toggle-meetings]").textContent);
+  window.eval('trackedMeetingsOpen = true; render();');
+  await wait(120);
   const settings = doc.getElementById("main").innerHTML;
   check("It's listed under Tracked Meetings", settings.includes("18th ISHA Annual Scientific Meeting"), );
   check("It still exists in state", window.eval('state.meetings.some(m => m.society === "ISHA")') === true);

@@ -126,9 +126,15 @@ const visible = (doc, sel) => [...doc.querySelectorAll(sel)].filter(r => r.style
   console.log("Inline Hide removes the deadline from the board:", !doc.getElementById("main").innerHTML.includes("Keep Me"));
   console.log("Inline Hide sets the flag rather than deleting:", window.eval('state.meetings.find(function(m){return m.id==="m-keep"}).hidden') === true);
 
-  // Bring it back from Settings, where hidden ones still show
+  // Bring it back from Settings, where hidden ones still show. The meeting list collapsed on
+  // 19 Oct, so it has to be opened first — the point being protected is that a hidden deadline is
+  // still REACHABLE and reversible, which it is.
   doc.querySelector('button[data-tab="settings"]').click();
   await wait(60);
+  console.log("Collapsed header says one is hidden, so you know to look:",
+    /hidden/.test(doc.querySelector("[data-toggle-meetings]").textContent));
+  window.eval('trackedMeetingsOpen = true; render();');
+  await wait(120);
   const settingsUnhide = doc.querySelector('[data-meeting-hide="m-keep"]');
   console.log("Settings row offers an Unhide button:", !!settingsUnhide && settingsUnhide.textContent.trim() === "Unhide");
   settingsUnhide.click();

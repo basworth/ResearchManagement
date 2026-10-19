@@ -115,6 +115,10 @@ function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
   doc.getElementById("me-name").value = "PrefTestUser";
   doc.getElementById("me-name").dispatchEvent(new window.Event("change"));
   await wait(50);
+  // Societies nest under their subspecialty since 19 Oct — expand to reach the toggles. The
+  // property under test is that the choice PERSISTS per identity across a re-render, unchanged.
+  window.eval('allFields().forEach(f => settingsFieldOpen[f] = true); render();');
+  await wait(100);
   const firstToggle = doc.querySelector(".sub-toggle");
   const soc = firstToggle.dataset.soc;
   const before = firstToggle.checked;
@@ -123,6 +127,8 @@ function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
   await wait(50);
   settingsBtn.click(); // re-render settings fresh
   await wait(50);
+  window.eval('allFields().forEach(f => settingsFieldOpen[f] = true); render();');
+  await wait(100);
   const after = doc.querySelector(`.sub-toggle[data-soc="${soc}"]`).checked;
   console.log("Society subscription toggle persists (per-identity) after re-render:", after === !before);
 

@@ -160,7 +160,15 @@ function check(name, cond, detail) {
   check("it isn't on the board", !/55th Annual Meeting/.test(withUndated.document.querySelector("#main").textContent));
   withUndated.eval('tab = "settings"; render();');
   await wait(150);
-  check("...but it is in Settings", /55th Annual Meeting/.test(withUndated.document.querySelector("#main").textContent));
+  // The Tracked Meetings list collapsed on 19 Oct. It still has to be REACHABLE — that's the
+  // half of Adam's 2026-08-24 rule this check exists for — and the collapsed header has to say
+  // an undated one is in there, or nobody would know to look.
+  check("...and the collapsed header says one is undated",
+    /undated/.test(withUndated.document.querySelector("[data-toggle-meetings]").textContent),
+    withUndated.document.querySelector("[data-toggle-meetings]").textContent);
+  withUndated.eval('trackedMeetingsOpen = true; render();');
+  await wait(150);
+  check("...and it is in Settings once opened", /55th Annual Meeting/.test(withUndated.document.querySelector("#main").textContent));
 
   console.log("\n" + pass + " passed, " + fail + " failed");
   process.exit(fail ? 1 : 0);

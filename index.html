@@ -128,6 +128,16 @@
     table.wl .wl-steps { max-width: 440px; }
   }
 
+  /* Nested society subscriptions in Settings */
+  .sub-field + .sub-field { border-top: 0.5px solid var(--line); }
+  .sub-field.off > .frow > div:not([class]) { opacity: .55; }
+  .sub-field-chev {
+    font-size: 10px; color: var(--text2); cursor: pointer; user-select: none;
+    display: inline-block; transition: transform .2s; width: 12px; text-align: center;
+  }
+  .sub-socs { padding-bottom: 4px; }
+  .sub-socs .frow { border-top: 0.5px solid var(--line); }
+
   /* Conference-field grouping on the deadline board */
   .field-head {
     display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;
@@ -4275,6 +4285,12 @@ let pastMeetingOpen = {};
 // "get this out of my way for a minute" control, and a collapsed section that survived a reload
 // would hide a deadline from someone who had forgotten they closed it.
 let fieldOpen = {};
+// Which subspecialty is expanded in Settings. Separate from fieldOpen, which is the deadline
+// board's own collapsing — the same person wants different things open in the two places.
+let settingsFieldOpen = {};
+// The full meeting list in Settings. Closed by default — it is a reference list you go to on
+// purpose, not something to scroll past every time you open Settings.
+let trackedMeetingsOpen = false;
 // Which deadline rows on the board are expanded, keyed by meeting id. <details> keeps its own
 // open state in the DOM only, so every render() collapsed everything — including the render that
 // happens when you tap a linked project and come back. Opening a meeting is a statement about
@@ -8362,7 +8378,7 @@ function renderSettings() {
   })()}
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-top:-4px">
     Task assignments and deadline reminders go to <b>${esc((currentUser && alertEmailFor(currentUser.id)) || "—")}</b>. Clear the box to go back to your sign-in address — you always sign in with ${esc(currentUser ? currentUser.email : "your own address")} either way.<br><br>
-    The Studies tab defaults to showing just your projects, and your Society Subscriptions below sync across every device you log into.
+    The Studies tab defaults to showing just your projects, and your Deadline Subscriptions below sync across every device you log into.
   </div>
   <datalist id="dl-people-set">${state.roster.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
   <button class="btn danger" id="sign-out-btn">Sign Out</button>
@@ -8535,36 +8551,82 @@ function renderSettings() {
     </div>
   </div>` : ""}
 
-  <div class="section-title" id="fields-anchor">Conference Fields</div>
+  <div class="section-title" id="fields-anchor">Deadline Subscriptions</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
-    One deadline calendar covers the whole department, so switch off the fields you don't submit to
-    and the board only shows yours. Societies you keep below are still hidden if their field is off
-    here — this is the coarse control, the list underneath is the fine one.
+    One conference and grant calendar covers the whole department. Switch off the subspecialties you
+    don't submit to, and open one to pick individual societies within it. Personal to you — it
+    doesn't change what your teammates see.${me() ? " Saved under your name, so it follows you to any device." : " No name entered above, so this is saved on this device only."}
   </div>
-  <div class="fgroup">
-    ${allFields().map(f => {
-      const n = state.meetings.filter(m => fieldOf(m) === f && !m.hidden).length;
-      return `<div class="frow">
-        <div style="flex:1"><div style="font-size:15px;font-weight:600">${esc(f)}</div><div style="font-size:11.5px;color:var(--text2);line-height:1.3">${n} ${n === 1 ? "deadline" : "deadlines"} tracked</div></div>
-        <input type="checkbox" class="field-toggle" data-field-sub="${esc(f)}" ${currentFieldSubs[f] !== false ? "checked" : ""} style="flex:0;width:24px;height:24px">
-      </div>`;
-    }).join("")}
+  <div class="fgroup" id="subs-tree">
+    ${(() => {
+      // Societies nested under the subspecialty they belong to, rather than a field list and a
+      // flat A-to-Z of societies in a separate section. Those were two controls for one decision:
+      // switching off Spine and then scrolling past NASS, SRS and CSRS in an alphabetical list is
+      // the same thought twice, and it left people unsure which one was actually in charge.
+      const socs = allSocieties();
+      const byField = {};
+      Object.entries(socs).forEach(([code, full]) => {
+        const f = fieldOf({ society: code });
+        (byField[f] = byField[f] || []).push([code, full]);
+      });
+      const fields = allFields().filter(f => (byField[f] || []).length || state.meetings.some(m => fieldOf(m) === f));
+      // Busiest first: a subspecialty with twenty tracked deadlines is likelier to be the one
+      // you came here for than one with none.
+      const count = f => state.meetings.filter(m => fieldOf(m) === f && !m.hidden).length;
+      fields.sort((a, b) => count(b) - count(a) || a.localeCompare(b));
+      return fields.map(f => {
+        const list = (byField[f] || []).sort((a, b) => a[0].localeCompare(b[0]));
+        const fieldOn = currentFieldSubs[f] !== false;
+        const onCount = list.filter(([code]) => currentSubs[code] !== false).length;
+        const open = !!settingsFieldOpen[f];
+        return `
+        <div class="sub-field${fieldOn ? "" : " off"}">
+          <div class="frow" style="gap:10px">
+            <span class="sub-field-chev" data-subs-field="${esc(f)}" style="transform:rotate(${open ? 90 : 0}deg)">▸</span>
+            <div style="flex:1;cursor:pointer" data-subs-field="${esc(f)}">
+              <div style="font-size:15px;font-weight:600">${esc(f)}</div>
+              <div style="font-size:11.5px;color:var(--text2);line-height:1.3">
+                ${count(f)} ${count(f) === 1 ? "deadline" : "deadlines"}${list.length ? ` · ${onCount} of ${list.length} ${list.length === 1 ? "society" : "societies"} on` : ""}
+              </div>
+            </div>
+            <input type="checkbox" class="field-toggle" data-field-sub="${esc(f)}" ${fieldOn ? "checked" : ""} style="flex:0;width:24px;height:24px">
+          </div>
+          ${open ? `<div class="sub-socs">
+            ${list.length ? list.map(([code, full]) => `
+              <div class="frow" style="padding-left:26px">
+                <div style="flex:1"><div style="font-size:14.5px;font-weight:600">${esc(code)}</div><div style="font-size:11.5px;color:var(--text2);line-height:1.3">${esc(full)}</div></div>
+                <input type="checkbox" class="sub-toggle" data-soc="${esc(code)}" ${currentSubs[code] !== false ? "checked" : ""} ${fieldOn ? "" : "disabled"} style="flex:0;width:22px;height:22px">
+              </div>`).join("")
+            : `<div style="padding:8px 0 8px 26px;font-size:12.5px;color:var(--text2)">No societies tracked under this subspecialty yet.</div>`}
+            ${fieldOn ? "" : `<div style="padding:4px 0 8px 26px;font-size:12px;color:var(--orange)">The whole subspecialty is switched off, so none of these show regardless.</div>`}
+          </div>` : ""}
+        </div>`;
+      }).join("");
+    })()}
   </div>
 
-  <div class="section-title" id="societies-anchor">Society Subscriptions</div>
-  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">Toggle which societies appear on your dashboard deadline board. This is a personal view setting — it won't change what your teammates see.${me() ? " Saved under your name, so it follows you to any device." : " No name entered above, so this is saved on this device only."}</div>
-  <div class="fgroup">
-    ${Object.entries(allSocieties()).map(([k, full]) => `
-      <div class="frow">
-        <div style="flex:1"><div style="font-size:15px;font-weight:600">${k}</div><div style="font-size:11.5px;color:var(--text2);line-height:1.3">${esc(full)}</div></div>
-        <input type="checkbox" class="sub-toggle" data-soc="${k}" ${currentSubs[k] !== false ? "checked" : ""} style="flex:0;width:24px;height:24px">
-      </div>`).join("")}
-  </div>
-
-  <div class="section-title">Tracked Meetings</div>
-  <div class="card" style="padding:6px 0">
+  ${(() => {
+    // Fifty rows of every meeting in the department, open by default, sitting between the
+    // subscriptions and the data tools. It is a reference list — the place you come when you need
+    // to correct a date or unhide something — not something to scroll past on every visit. So it
+    // starts closed, says what's in it, and offers a search once it's open.
+    const hidden = allMeetings.filter(m => m.hidden).length;
+    const undated = allMeetings.filter(m => !m.deadline).length;
+    return `<div class="section-title" data-toggle-meetings style="cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px">
+      <span style="font-size:10px;color:var(--text2);display:inline-block;transition:transform .2s;transform:rotate(${trackedMeetingsOpen ? 90 : 0}deg)">▸</span>
+      <span style="flex:1">Tracked Meetings</span>
+      <span style="font-weight:600;color:var(--text2);text-transform:none;letter-spacing:0;font-size:12px">${allMeetings.length}${hidden ? " · " + hidden + " hidden" : ""}${undated ? " · " + undated + " undated" : ""}</span>
+    </div>
+    ${trackedMeetingsOpen ? "" : `<div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
+      Every conference and grant deadline the tracker knows about, across all subspecialties. Open it
+      to correct a date, unhide something, or add one of your own.
+    </div>`}`;
+  })()}
+  ${trackedMeetingsOpen ? `
+  ${sheetSearchHTML("meeting-search", "Search by society or meeting name")}
+  <div class="card" style="padding:6px 0" id="tracked-meeting-list">
     ${allMeetings.length ? allMeetings.map(m => `
-      <div class="task-row" style="padding:9px 16px;cursor:pointer" data-meeting-edit="${m.id}">
+      <div class="task-row meeting-row" style="padding:9px 16px;cursor:pointer" data-meeting-edit="${m.id}" data-search="${esc([m.society, m.name, m.location, (m.type||"abstract")==="grant"?"grant":"abstract"].filter(Boolean).join(" ").toLowerCase())}">
         <div style="flex:1;min-width:0">
           <div style="font-size:14.5px;font-weight:600"><span class="badge" style="background:var(--indigo);font-size:10px;padding:2px 7px;margin-right:6px">${esc(m.society)}</span>${esc(m.name)}</div>
           <div style="font-size:12px;color:var(--text2);margin-top:2px">${(m.type || "abstract") === "grant" ? "Grant" : "Abstract"} · ${m.deadline ? "Due " + fmtDate(m.deadline) : "No deadline set"}${m.unconfirmed ? " · ⚠︎ unconfirmed" : ""}${m.hidden ? ` · <span style="color:var(--orange);font-weight:700">hidden</span>` : ""}</div>
@@ -8573,7 +8635,8 @@ function renderSettings() {
         <span style="color:var(--text2);font-size:18px">›</span>
       </div>`).join("") : `<div style="color:var(--text2);font-size:14px;padding:8px 16px">No meetings tracked yet.</div>`}
   </div>
-  <button class="btn secondary" id="add-meeting-btn">+ Add Meeting Deadline</button>
+  <div id="meeting-search-empty" style="display:none;color:var(--text2);font-size:14px;text-align:center;padding:16px 12px">No meetings match your search.</div>
+  <button class="btn secondary" id="add-meeting-btn">+ Add Meeting Deadline</button>` : ""}
 
   <div class="section-title">Data</div>
   <button class="btn secondary" id="export-btn">Export Data (JSON backup)</button>
@@ -8636,6 +8699,16 @@ function renderSettings() {
     if (!confirm("Sign out of Team Sync on this device?")) return;
     try { await sb.auth.signOut(); } catch (e) { console.warn(e); }
   };
+  const meetingsToggle = $main.querySelector("[data-toggle-meetings]");
+  if (meetingsToggle) meetingsToggle.onclick = () => { trackedMeetingsOpen = !trackedMeetingsOpen; render(); };
+  if (trackedMeetingsOpen && $main.querySelector("#meeting-search")) {
+    bindSheetSearch("meeting-search", "#tracked-meeting-list .meeting-row", "meeting-search-empty");
+  }
+  $main.querySelectorAll("[data-subs-field]").forEach(el => el.onclick = () => {
+    const f = el.dataset.subsField;
+    settingsFieldOpen[f] = !settingsFieldOpen[f];
+    render();
+  });
   $main.querySelectorAll(".field-toggle").forEach(c => c.onchange = () => {
     const f = c.dataset.fieldSub;
     setFieldSub(f, c.checked);
@@ -8661,7 +8734,11 @@ function renderSettings() {
     upsertMeeting(m);
     toast(m.hidden ? "Hidden from the dashboard" : "Deadline unhidden");
   });
-  document.getElementById("add-meeting-btn").onclick = () => openMeetingForm(null);
+  // Only present while the Tracked Meetings section is expanded. getElementById on a collapsed
+  // section returns null, and an unguarded .onclick on null throws before every handler after it
+  // in this function is bound — which takes the whole Settings screen down, not just this button.
+  const addMeetingBtn = document.getElementById("add-meeting-btn");
+  if (addMeetingBtn) addMeetingBtn.onclick = () => openMeetingForm(null);
   document.getElementById("roster-add").onclick = () => {
     const n = document.getElementById("roster-name").value.trim();
     if (!n) return;

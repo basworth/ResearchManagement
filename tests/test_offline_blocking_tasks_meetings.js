@@ -49,6 +49,9 @@ function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
   // --- Meetings: Settings > Add Meeting Deadline should not open while offline ---
   settingsBtn.click();
   await wait(50);
+  // The Tracked Meetings section collapsed on 19 Oct and the Add button lives inside it.
+  window.eval('trackedMeetingsOpen = true; render();');
+  await wait(100);
   const addMeetingBtn = doc.getElementById("add-meeting-btn");
   addMeetingBtn.click();
   await wait(50);
