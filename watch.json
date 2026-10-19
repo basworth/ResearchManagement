@@ -1,0 +1,115 @@
+{
+  "schema": 1,
+  "generated": "2026-10-19",
+  "window": "2026-05 to 2026-10",
+  "reviewed": false,
+  "inDevelopment": [
+    {
+      "id": "NCT06576583",
+      "kind": "Phase II RCT",
+      "meta": "Recruiting · n=150 · 11 sites · primary completion Jan 2029",
+      "title": "Nasal chondrocyte engineered cartilage (N-TEC) vs AMIC vs patellofemoral arthroplasty for patellofemoral osteoarthritis",
+      "frame": "University Hospital Basel. A sister trial (NCT06163573, n=75) compares N-TEC with PRP.",
+      "forWork": "Your 2026 Cartilage commentary names offloading the patellofemoral joint as a major unanswered area. This trial has no osteochondral allograft or offloading arm, which leaves that comparison open for a future study.",
+      "relatedIds": ["NCT06163573"]
+    },
+    {
+      "id": "NCT06895889",
+      "kind": "Phase I/IIb first-in-human",
+      "meta": "n=36 · vs abrasion chondroplasty · primary completion Dec 2027",
+      "title": "EB-OC engineered osteochondral graft for full-thickness chondral and osteochondral knee defects",
+      "frame": "Epibone, Inc. Registry lists it as not yet recruiting even though the listed start date is January 2026, so confirm status before citing.",
+      "forWork": "An engineered graft would remove donor and storage variability, the same variables tested in the 2025 donor-variable study. The comparator is chondroplasty, so your allograft cohorts would be the benchmark for any later head-to-head design."
+    },
+    {
+      "id": "NCT07542184",
+      "kind": "Early feasibility",
+      "meta": "Recruiting · n=5 · single site · started Jul 30, 2026",
+      "title": "Nanochon Chondrograft implant for resurfacing knee cartilage lesions",
+      "frame": "First-in-human safety and performance study of an off-the-shelf implant, Nanochon, Inc.",
+      "forWork": "Off-the-shelf implants depend on surface fit. Your topography-matching work (patient-specific guides, phone-based scanning) could be applied to measuring implant congruity."
+    },
+    {
+      "id": "NCT04572256",
+      "kind": "Early Phase 1",
+      "meta": "Recruiting · n=30 · primary completion Jun 2027",
+      "title": "MOCHA: montelukast as a chondroprotective treatment after ACL reconstruction",
+      "frame": "Single-site placebo-controlled study (Austin Stone) in ACL and meniscus injury, aimed at post-traumatic osteoarthritis.",
+      "forWork": "It targets the knee environment, the other major gap in your Cartilage commentary. Your inflammatory biomarker and symptomatic-state work at chondroplasty offers a readout model for a similar trial in cartilage patients."
+    },
+    {
+      "id": "NCT07786207",
+      "kind": "Observational registry",
+      "meta": "Recruiting · target n=1000 · started Sep 23, 2026 · runs to 2034",
+      "title": "C-SHORE: Cartilage Repair Study of Health Outcomes and Real-world Evidence",
+      "frame": "Industry registry (Smith & Nephew) comparing a marketed product with other surgical treatments for knee joint surface lesions.",
+      "forWork": "Its outcome interpretation could use your anchor-based MCID and PASS thresholds (for example, microfracture). A threshold-validation or secondary-analysis collaboration is worth exploring. Industry sponsor, so independence needs a look."
+    }
+  ],
+  "newPapers": [
+    {
+      "pmid": "42591544",
+      "doi": "10.1177/23259671261457786",
+      "verdict": "mixed",
+      "meta": "OJSM · Aug 2026 · Tabbaa, Bugbee et al.",
+      "title": "Association of Donor Characteristics and Graft Storage Time with Survivorship of Osteochondral Allograft Transplantation in the Knee",
+      "frame": "220 patients (236 knees), mean follow-up 8.2 years. Donors over 20 years failed more (11.7% vs 3.7%, P=.039). Early-release grafts (1 to 14 days) failed more than late-release (22.7% vs 6%, P=.002). Donor BMI and sex matching had no effect.",
+      "versus": "Different on donor age and storage; similar on sex matching. Hevesi 2025 (372 patients, mean 5.4 years) found no association of donor sex, age, mismatch, or storage time with reoperation or failure.",
+      "refs": [{"pmid": "39755950", "label": "Hevesi 2025"}],
+      "forWork": "Your grafts were stored 14 to 28 days, so your cohort cannot test the under-14-day group where their signal sits. A reanalysis with their donor-age cutoff, and longer follow-up, would show whether the age signal appears in your data."
+    },
+    {
+      "pmid": "42578469",
+      "doi": "10.1177/03635465261470172",
+      "verdict": "mixed",
+      "meta": "AJSM · Aug 2026 · Park, Hughes et al. (Pittsburgh)",
+      "title": "Meniscal Allograft Transplantation Failure Is Associated With Female Sex: A 15-Year Survival Analysis",
+      "frame": "160 patients, median follow-up 15 years. Graft survival 84% at 10 years, 76% at 15, 69% at 20, 52% at 25. Female sex predicted failure only after adjusting for age and cartilage grade (P=.04).",
+      "versus": "Similar survival at 10 years; different on sex. Wagner 2023 (174 patients, mean 12.7 years) reported 84.5% failure-free survival at 10 years and 72.1% at 15, with no sex difference on log-rank (P=.390).",
+      "refs": [{"pmid": "37594374", "label": "Wagner 2023"}],
+      "forWork": "Your sex comparison was unadjusted. Rerunning it as a Cox model adjusted for age and compartment cartilage grade would test whether the same sex signal appears in the Rush cohort."
+    },
+    {
+      "pmid": "42540413",
+      "doi": "10.1016/j.jcot.2026.103565",
+      "verdict": "consistent",
+      "meta": "J Clin Orthop Trauma · Jul 2026 · Khan, Enc · PROSPERO CRD420261342726",
+      "title": "Biologic augmentation in knee preservation surgery: A systematic review of procedure-specific evidence",
+      "frame": "23 studies, only one low-risk RCT. Evidence for augmenting meniscal allograft, cartilage restoration, and osteochondral allograft was called insufficient for routine use. Authors ask for procedure-specific RCTs and standardized reporting of biologic preparation.",
+      "versus": "Consistent with your 2025 Arthroscopy BMAC RCT in osteochondral allograft (n=36; reoperation 5.3% vs 35.3%, P=.02; no PROM difference). Not confirmed whether it was among the 23 studies. PMID for your trial is not yet in the manifest; verify before citing.",
+      "refs": [],
+      "forWork": "The review describes the gap your RCT begins to fill. A larger multicenter trial with reported BMAC cell content (your 2023 ASMAR MSC concentration paper) matches what they ask for."
+    },
+    {
+      "pmid": "42389193",
+      "doi": "10.1016/j.ocarto.2026.100843",
+      "verdict": "similar",
+      "meta": "Osteoarthr Cartil Open · Jun 2026 · Scheepmaker, Saris, Korpershoek (Mayo)",
+      "title": "Arthroscopically and manually minced cartilage demonstrates lower cell viability and lower proteoglycan deposition compared to isolated chondrons and chondrocytes",
+      "frame": "Laboratory study using fresh human allograft cartilage, 28 days. Viability: chondrons 93.7%, chondrocytes 94%, manual mincing 79.8%, arthroscopic mincing 56.6%. Clinical mince samples varied more than 10-fold in cellularity.",
+      "versus": "Similar direction to your work showing that graft handling lowers chondrocyte viability (reaming; irrigation temperature and reamer speed). Different tissue and model, so a parallel, not a replication.",
+      "refs": [{"pmid": "39186448", "label": "Reaming 2024"}, {"pmid": "40353510", "label": "Irrigation temperature 2025"}],
+      "forWork": "Your viability methods could be applied to minced and particulated cartilage, adding irrigation and temperature variables that they did not test."
+    },
+    {
+      "pmid": "42730942",
+      "doi": "10.1007/s10237-026-02128-9",
+      "verdict": "extends",
+      "meta": "Biomech Model Mechanobiol · Sep 2026 · Lamberty, Coleman (Michigan)",
+      "title": "Combined cartilage thickness and mechanical property mismatch drives local strain amplification at the patellar osteochondral allograft interface",
+      "frame": "Idealized finite element model, donor-to-recipient thickness ratios 0.33 to 3.25. Interface strain rose with thickness disparity; functionally graded stiffness lowered it. No patient data.",
+      "versus": "Different variable. Your matching work addresses surface topography (overlapping vs oblong grafts; patient-specific guides). They add thickness and stiffness as a second matching dimension.",
+      "refs": [{"pmid": "33831318", "label": "Overlapping grafts 2021"}, {"pmid": "39101660", "label": "Patient-specific guides 2024"}],
+      "forWork": "Thickness could be added to your topography pipeline. Their authors call for experimental and patient-specific models, which your scan-based cohorts could supply."
+    }
+  ],
+  "alsoNoted": [
+    {"pmid": "42473026", "text": "Mowers et al., Arthroscopy 2026: systematic review of 973 patients found no consistent effect of donor-recipient sex mismatch on knee OCA outcomes, with bipolar grafts the best predictor of failure. Fits your 2025 donor-variable and sex-based outcome papers."},
+    {"pmid": "42208660", "text": "Yu et al., J ISAKOS 2026: meta-analysis of MAT at 10 years or more, pooled failure 31%, arthroplasty conversion 17%. A benchmark for your 10-year series (23% failure, 15% conversion)."}
+  ],
+  "meetingAbstracts": {
+    "items": [],
+    "note": "No abstract text could be verified this round. A Healio item dated June 16, 2026 (cryopreserved vs fresh osteochondral allografts in isolated patellofemoral lesions) looks like meeting coverage, but the page would not load. Anything listed here is unpublished data.",
+    "leadUrl": "https://www.healio.com/news/orthopedics/20260616/cryopreserved-fresh-osteochondral-allografts-similar-in-isolated-patellofemoral-lesions"
+  }
+}
