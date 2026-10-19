@@ -148,7 +148,13 @@
   /* One column by default — the phone case — and two side by side once there's room. The chart
      comes first in source order so it stays on top on a phone without reordering anything. */
   .rw-grid{display:grid;grid-template-columns:1fr;gap:16px;align-items:start}
-  @media(min-width:900px){.rw-grid{grid-template-columns:300px 1fr;gap:20px}}
+  /* The left column carries the whole publication record now, not just a thumbnail chart, so it
+     needs real width: co-author and journal bar rows are unreadable at 300px. Below 1040px the
+     two columns would both be too narrow, so it collapses to one and everything simply stacks. */
+  @media(min-width:1040px){.rw-grid{grid-template-columns:minmax(380px,420px) 1fr;gap:20px}}
+  /* Headline numbers, full width above the two columns. auto-fit rather than a fixed count
+     because how many tiles there are depends on whether iCite and Scholar figures exist. */
+  .pub-band{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:14px}
   .rw-list{display:flex;flex-direction:column;gap:8px}
   .rw-item{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
   .rw-item>summary{list-style:none;cursor:pointer;padding:12px 14px;display:block}
@@ -1181,9 +1187,41 @@ function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(
 
 /* ============ State ============ */
 let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [] };
-// Opens on Research: it is the page he reads rather than edits, and the one with something new
-// on it each week. Every other tab and every deep link is unchanged.
-let tab = "research";
+// Which tab you land on.
+//
+// Research is the first thing you see each day: it's the page you read rather than edit, and the
+// one with something new on it. But it's a briefing, and a briefing you've already read today is
+// just something in the way — so within the same day a refresh puts you back where you were.
+// Someone new, someone signed out, or anyone opening it for the first time that day gets Research.
+//
+// The day is the user's own local date, not elapsed hours: "have I looked at this today" is the
+// question being answered, and at 9am that shouldn't depend on what time you closed the laptop.
+// The key is written on every render, so it survives a crash as well as a deliberate reload.
+//
+// Deliberately only the tab, not the sub-view: restoring a half-open study detail or a co-author
+// drill-down after a refresh would be disorienting, and one of those is another person's record.
+const LAST_TAB_KEY = "rt-last-tab";
+const REAL_TABS = ["dashboard", "studies", "tasks", "worklist", "notes", "research", "settings"];
+// todayStr is declared further down with const, so it isn't callable yet — this duplicates the
+// one line of it rather than reordering the file around a startup detail.
+function localDayStr() {
+  const d = new Date(), p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+}
+function rememberTab() {
+  try { localStorage.setItem(LAST_TAB_KEY, JSON.stringify({ tab, day: localDayStr() })); }
+  catch (e) { /* private mode, a full quota — not worth interrupting anyone over */ }
+}
+function openingTab() {
+  // A deep link is an explicit instruction and outranks both rules.
+  if (/[?&#](study|tab)=/.test(location.search + location.hash)) return "research";
+  try {
+    const raw = JSON.parse(localStorage.getItem(LAST_TAB_KEY) || "null");
+    if (!raw || raw.day !== localDayStr()) return "research";
+    return REAL_TABS.indexOf(raw.tab) >= 0 ? raw.tab : "research";
+  } catch (e) { return "research"; }
+}
+let tab = openingTab();
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
 let studyDesignFilter = "All designs";
@@ -3344,6 +3382,7 @@ function clearDraft(el) {
 
 function render() {
   captureDrafts(document);
+  rememberTab();
   document.querySelectorAll("nav.tabbar button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
   const addBtn = document.getElementById("add-btn");
   addBtn.style.visibility = (tab === "settings" || tab === "notes" || tab === "research") ? "hidden" : "visible";
@@ -3438,8 +3477,10 @@ function bindDeadlineRows(root) {
       else delete openDeadlines[d.dataset.dl];
     });
   });
+  // Your own publication figures are the Research tab now, not a page behind a Back button, so
+  // every "see my publications" affordance lands there. A co-author is still a drill-down.
   root.querySelectorAll("[data-open-publications]").forEach(el => el.onclick = () => {
-    showPublications = true; detailStudyId = null; coauthorName = null; tab = "studies"; render();
+    showPublications = false; detailStudyId = null; coauthorName = null; tab = "research"; render();
   });
   root.querySelectorAll("[data-open-study]").forEach(el => el.onclick = (e) => {
     e.preventDefault(); e.stopPropagation();
@@ -5418,64 +5459,59 @@ function researchWatchHTML(w){
     <p class="rw-note">Sources: PubMed and ClinicalTrials.gov. Trial status changes often.</p>
   </div>`;
 }
-// The Research tab. Two columns on a desktop — the chart and the counts beside the lists, so the
-// shape of his own output sits next to what the field is doing — and one column on a phone with
-// the chart first. Grid rather than flex, so the single-column fallback is one media query.
+// The Research tab. Two columns on a wide screen — your own publication record beside what the
+// field is doing — and one column below 1040px with your record first. Grid rather than flex, so
+// the single-column fallback is one media query.
+//
+// The Research tab is the one place your own publication record lives. It used to be a separate
+// full-screen page reached by a "‹ Back" button, which meant the same person's figures existed in
+// two places and neither was obviously the real one. Everything that page drew is now built here,
+// by pubStatsHTML, and the standalone page survives only for OTHER people's publications — a
+// co-author's record genuinely is a drill-down, so it keeps its Back button.
 function renderResearch() {
   $title.textContent = "Research";
   const w = watchData || {};
-  const dev = w.inDevelopment || [], papers = w.newPapers || [];
-  if (!dev.length && !papers.length) {
-    $main.innerHTML = `<div class="card"><div class="section-title">Research</div>
-      <p class="rw-note">No Research Watch data yet. This page fills itself from watch.json,
-      which is regenerated separately — nothing here is stored in the tracker.</p></div>`;
-    return;
-  }
+  const dev = w.inDevelopment || [], newPapers = w.newPapers || [];
+  const hasWatch = !!(dev.length || newPapers.length);
   const subject = publicationsSubject();
-  const series = pubYearSeries(subject.key);
-  const cites = state.scholar && state.scholar.icite;
+  const stats = pubStatsHTML(subject);
 
-  const side = `
-    <div class="rw-side">
-      <div class="section-title">Your papers per year</div>
-      <div class="card">${rwYearChartSVG(series.yearRow)}
-        <div class="rw-note" style="margin-top:6px">
-          ${series.papers.length} published${series.firstYear ? ` · ${series.firstYear}–${series.lastYear}` : ""}
-        </div>
-      </div>
-      ${cites ? `<div class="card" style="margin-top:10px">
-        <div style="display:flex;gap:14px;flex-wrap:wrap">
-          <div><div style="font-size:22px;font-weight:800;line-height:1.1">${cites.h}</div>
-               <div class="rw-note">h-index</div></div>
-          <div><div style="font-size:22px;font-weight:800;line-height:1.1">${cites.i10}</div>
-               <div class="rw-note">i10</div></div>
-          <div><div style="font-size:22px;font-weight:800;line-height:1.1">${cites.total}</div>
-               <div class="rw-note">citations</div></div>
-        </div>
-        <div class="rw-note" style="margin-top:6px">iCite, as of ${esc(cites.asOf ? fmtDate(cites.asOf) : "")}</div>
-      </div>` : ""}
-    </div>`;
+  const side = `<div class="rw-side">${stats.body}</div>`;
 
-  const main = `
-    <div class="rw-main">
-      <div class="section-title">In development or early phase</div>
-      <div class="rw-list">${dev.map(d => rwItemHTML(d, "trial")).join("")}</div>
-      <div class="section-title">New papers that touch your publications</div>
-      <div class="rw-list">${papers.map(pp => rwItemHTML(pp, "paper")).join("")}</div>
-    </div>`;
+  // The watch half is allowed to be empty without taking the publication figures down with it:
+  // watch.json is regenerated outside the tracker, so a missing file is a normal state, not a fault.
+  const main = hasWatch
+    ? `<div class="rw-main">
+        <div class="section-title">In development or early phase</div>
+        <div class="rw-list">${dev.map(d => rwItemHTML(d, "trial")).join("")}</div>
+        <div class="section-title">New papers that touch your publications</div>
+        <div class="rw-list">${newPapers.map(pp => rwItemHTML(pp, "paper")).join("")}</div>
+      </div>`
+    : `<div class="rw-main">
+        <div class="section-title">Research watch</div>
+        <div class="card"><p class="rw-note">No Research Watch data yet. This half of the page is
+        built from watch.json, which is regenerated separately — nothing in it is stored in the
+        tracker. Your own figures on the left are unaffected.</p></div>
+      </div>`;
 
-  $main.innerHTML = `<div class="rw-grid">${side}${main}</div>${rwTailHTML(w)}`;
+  // Headline numbers across the top, then two columns the whole way down. Nothing breaks out to
+  // full width partway through: a column that widens halfway down the page reads as a mistake.
+  $main.innerHTML = (stats.band || "")
+    + `<div class="rw-grid">${side}${main}</div>`
+    + (hasWatch ? rwTailHTML(w) : "");
+  wirePubStats();
 }
-function renderPublications() {
-  const subject = publicationsSubject();
-  $title.textContent = subject.own ? "Publications" : subject.name;
+
+// Everything the old Publications page drew, as a string, so the Research tab and the co-author
+// drill-down render one definition rather than two that drift. Returns `empty` so each caller can
+// word the nothing-yet case for its own context.
+function pubStatsHTML(subject) {
   const papers = publishedPapers(subject.key);
   if (!papers.length) {
-    $main.innerHTML = `<button class="btn secondary" id="pub-back" style="margin-bottom:10px">‹ Back</button>
-      <div class="card" style="color:var(--text2);line-height:1.5">No published papers recorded yet${subject.own ? "" : " for " + esc(subject.name)}.</div>`;
-    const b = document.getElementById("pub-back");
-    if (b) b.onclick = () => { showPublications = false; tab = "dashboard"; render(); };
-    return;
+    return {
+      empty: true,
+      html: `<div class="card" style="color:var(--text2);line-height:1.5">No published papers recorded yet${subject.own ? "" : " for " + esc(subject.name)}.</div>`,
+    };
   }
   const years = papers.map(x => Number(x.p.year)).filter(Boolean);
   const firstYear = Math.min(...years), lastYear = Math.max(...years);
@@ -5517,113 +5553,114 @@ function renderPublications() {
 
   const pendingCount = (state.studies || []).filter(s => !s.publication).length;
   const metrics = (state.scholar && Array.isArray(state.scholar.points)) ? state.scholar.points.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))) : [];
-  const latest = metrics[metrics.length - 1];
 
-  let html = `<button class="btn secondary" id="pub-back" style="margin-bottom:10px">‹ Back</button>`;
-  if (!subject.own) {
-    html += `<div class="card" style="padding:10px 14px;margin-bottom:10px;font-size:13.5px;line-height:1.5">
-        Showing <b>${esc(subject.name)}</b>'s publications — ${esc(subject.via || "")}.
-      </div>`;
-  }
+  // Grid, not flex-wrap: in the Research tab's side column four flexed tiles break 3-then-1, which
+  // reads as one tile having been added as an afterthought. auto-fit gives 2×2 there and a single
+  // row of four on the full-width page, without either caller knowing which it is.
+  // Three parts, because the Research tab and the standalone page want them arranged differently.
+  //
+  //   band — the headline numbers. Every big figure on the page, in one row across the top: how
+  //          much you've published, with how many people, where, and how often it's been cited.
+  //          They used to be split, with the citation figures stranded at the bottom under their
+  //          own heading, so the page opened on a small number and buried the large ones.
+  //   body — everything that needs reading rather than glancing at. One column, beside the watch
+  //          lists on the Research tab, full width on the standalone page.
+  //
+  // The controls that belonged to the citation figures (Refresh, and the Scholar entry boxes) stay
+  // in the body: they're used a couple of times a year, and putting a form in the headline row
+  // would make the top of the page look like something to fill in.
+  const ic = state.scholar && state.scholar.icite;
+  const scholarPoints = metrics.filter(m => m.source !== "icite");
+  const latestScholar = scholarPoints[scholarPoints.length - 1];
 
-  html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+  let band = `<div class="pub-band">
       ${statTileHTML(papers.length, "papers", firstYear + "–" + lastYear)}
       ${statTileHTML(coauthors.length, "co-authors", "people you've published with")}
       ${statTileHTML(Object.keys(journals).length, "journals")}
       ${statTileHTML(lastA, "senior author", "last-author papers")}
+      ${ic ? `
+      ${statTileHTML(ic.h, "h-index", "iCite, " + fmtDate(ic.asOf))}
+      ${statTileHTML(ic.i10, "i10-index", "papers with 10+")}
+      ${statTileHTML(ic.total.toLocaleString(), "citations", "iCite")}` : ""}
+      ${latestScholar ? `
+      ${statTileHTML(latestScholar.h ?? "—", "h-index", "Scholar, " + fmtDate(latestScholar.date))}
+      ${statTileHTML(latestScholar.citations ?? "—", "citations", "Scholar")}` : ""}
     </div>`;
 
-  html += `<div class="section-title">Papers per year</div>
+  let body = `<div class="section-title">Papers per year</div>
     <div class="card">${pubYearChartHTML(yearRow, maxYear)}
       <div style="font-size:11.5px;color:var(--text2);margin-top:6px">
         ${thisYearIsPartial(yearRow) ? "The lighter bar is this year, still in progress." : "&nbsp;"}
       </div>
     </div>`;
 
-  html += `<div class="section-title">Where you sit on the author list</div><div class="card">
+  body += `<div class="section-title">Where you sit on the author list</div><div class="card">
       ${barRowHTML("First author", firstA, papers.length, "var(--green)")}
       ${barRowHTML("Senior (last) author", lastA, papers.length, "var(--indigo)")}
       ${barRowHTML("Middle author", midA, papers.length, "var(--text2)")}
     </div>`;
 
-  html += `<div class="section-title">What you publish on</div><div class="card">`;
-  topicRows.forEach(([t, n]) => { html += barRowHTML(esc(t), n, maxTopic, "var(--teal)"); });
-  html += `<div style="font-size:11.5px;color:var(--text2);margin-top:8px">A paper can sit under more than one topic.</div></div>`;
+  body += `<div class="section-title">What you publish on</div><div class="card">`;
+  topicRows.forEach(([t, n]) => { body += barRowHTML(esc(t), n, maxTopic, "var(--teal)"); });
+  body += `<div style="font-size:11.5px;color:var(--text2);margin-top:8px">A paper can sit under more than one topic.</div></div>`;
 
-  html += `<div class="section-title">Co-authors</div><div class="card">`;
-  html += searchBoxHTML("coauthor-search", coauthorQuery, "Search " + coauthors.length + " co-authors by name");
+  body += `<div class="section-title">Co-authors</div><div class="card">`;
+  body += searchBoxHTML("coauthor-search", coauthorQuery, "Search " + coauthors.length + " co-authors by name");
   if (coQ) {
-    html += `<div style="font-size:12px;color:var(--text2);margin:6px 0 2px">${coMatches.length} ${coMatches.length === 1 ? "match" : "matches"}</div>`;
+    body += `<div style="font-size:12px;color:var(--text2);margin:6px 0 2px">${coMatches.length} ${coMatches.length === 1 ? "match" : "matches"}</div>`;
   }
   if (!coMatches.length) {
-    html += `<div style="color:var(--text2);font-size:13.5px;padding:6px 0">Nobody by that name. Try a surname.</div>`;
+    body += `<div style="color:var(--text2);font-size:13.5px;padding:6px 0">Nobody by that name. Try a surname.</div>`;
   }
   topCo.forEach(c => {
     const span = c.years.length ? Math.min(...c.years) + "–" + Math.max(...c.years) : "";
-    html += `<div data-coauthor="${esc(c.key)}" style="cursor:pointer">
+    body += `<div data-coauthor="${esc(c.key)}" style="cursor:pointer">
         ${barRowHTML(`<span style="color:var(--blue)">${esc(c.name)}</span>`, c.papers, maxCo, "var(--blue)", span ? ` · ${span}` : "")}
       </div>`;
   });
   if (!coQ && coMatches.length > topCo.length) {
-    html += `<button class="mini-btn" id="co-more" style="margin-top:8px">Show all ${coMatches.length} co-authors</button>`;
+    body += `<button class="mini-btn" id="co-more" style="margin-top:8px">Show all ${coMatches.length} co-authors</button>`;
   } else if (!coQ && coauthorsExpanded && coauthors.length > 15) {
-    html += `<button class="mini-btn" id="co-less" style="margin-top:8px">Show only the top 15</button>`;
+    body += `<button class="mini-btn" id="co-less" style="margin-top:8px">Show only the top 15</button>`;
   }
-  html += `<div style="font-size:11.5px;color:var(--text2);margin-top:6px">Tap a name to see their work with you.</div></div>`;
+  body += `<div style="font-size:11.5px;color:var(--text2);margin-top:6px">Tap a name to see their work with you.</div></div>`;
 
-  html += `<div class="section-title">Journals</div><div class="card">`;
-  journalRows.forEach(([j, n]) => { html += barRowHTML(esc(j), n, maxJournal, "var(--orange)"); });
-  html += `</div>`;
+  body += `<div class="section-title">Journals</div><div class="card">`;
+  journalRows.forEach(([j, n]) => { body += barRowHTML(esc(j), n, maxJournal, "var(--orange)"); });
+  body += `</div>`;
 
-  // Two sources, side by side and never mixed: iCite is computed from these 276 papers and
-  // refreshes itself; Scholar is typed in. They disagree by design, so both are labelled.
-  const ic = state.scholar && state.scholar.icite;
   const topCited = mostCitedPapers(8, subject.key);
-  html += `<div class="section-title">Citations</div><div class="card">`;
-  if (ic) {
-    html += `<div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${statTileHTML(ic.h, "h-index", "NIH iCite")}
-        ${statTileHTML(ic.i10, "i10-index", "papers with 10+")}
-        ${statTileHTML(ic.total.toLocaleString(), "citations", "as of " + fmtDate(ic.asOf))}
-      </div>`;
-  } else {
-    html += `<div style="color:var(--text2);font-size:13.5px;line-height:1.5">
+  if (topCited.length) {
+    const maxC = topCited[0].cites;
+    body += `<div class="section-title">Most cited</div><div class="card">`;
+    topCited.forEach(({ p, study, cites }) => {
+      body += `<div data-open-study="${esc(study.id)}" style="cursor:pointer">
+          ${barRowHTML(`<span style="color:var(--blue)">${esc(p.title.slice(0, 70))}</span>`, cites, maxC, "var(--indigo)", p.year ? ` · ${esc(p.year)}` : "")}
+        </div>`;
+    });
+    body += `</div>`;
+  }
+
+  // Two sources, side by side and never mixed: iCite is computed from these papers and refreshes
+  // itself; Scholar is typed in. They disagree by design, so both are labelled in the band above.
+  body += `<div class="section-title">Citation sources</div><div class="card">`;
+  if (!ic) {
+    body += `<div style="color:var(--text2);font-size:13.5px;line-height:1.5">
         NIH's iCite publishes citation counts for every paper with a PubMed ID. Pull them in and
         your h-index is computed from your own ${papers.length} papers — no typing, and it updates
         whenever you ask it to.
       </div>`;
   }
-  html += `<button class="mini-btn" id="cite-refresh" style="margin-top:10px">${ic ? "Refresh citations" : "Fetch citations from iCite"}</button>
-    <div style="font-size:11.5px;color:var(--text2);margin-top:6px">
+  body += `<button class="mini-btn" id="cite-refresh" style="margin-top:${ic ? "0" : "10px"}">${ic ? "Refresh citations" : "Fetch citations from iCite"}</button>
+    <div style="font-size:11.5px;color:var(--text2);margin:6px 0 10px">
       iCite counts citations from PubMed-indexed work only, so these run lower than Google
       Scholar's. Neither is wrong; they count different things.
-    </div></div>`;
-
-  if (topCited.length) {
-    const maxC = topCited[0].cites;
-    html += `<div class="section-title">Most cited</div><div class="card">`;
-    topCited.forEach(({ p, study, cites }) => {
-      html += `<div data-open-study="${esc(study.id)}" style="cursor:pointer">
-          ${barRowHTML(`<span style="color:var(--blue)">${esc(p.title.slice(0, 70))}</span>`, cites, maxC, "var(--indigo)", p.year ? ` · ${esc(p.year)}` : "")}
-        </div>`;
-    });
-    html += `</div>`;
-  }
-
-  // Google Scholar, by hand.
-  const scholarPoints = metrics.filter(m => m.source !== "icite");
-  const latestScholar = scholarPoints[scholarPoints.length - 1];
-  html += `<div class="section-title">Google Scholar</div><div class="card">`;
-  if (latestScholar) {
-    html += `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
-        ${statTileHTML(latestScholar.h ?? "—", "h-index", "as of " + fmtDate(latestScholar.date))}
-        ${statTileHTML(latestScholar.i10 ?? "—", "i10-index")}
-        ${statTileHTML(latestScholar.citations ?? "—", "citations")}
-      </div>`;
-  } else {
-    html += `<div style="color:var(--text2);font-size:13.5px;line-height:1.5">Scholar blocks automated reading, so these are typed in — a few seconds, a couple of times a year.</div>`;
-  }
-  html += `<div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+    </div>`;
+  body += `<div style="font-size:11.5px;color:var(--text2);margin-bottom:6px">
+      Scholar blocks automated reading, so its figures are typed in — a few seconds, a couple of
+      times a year.
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
       <input id="sch-date" type="date" value="${esc(todayStr())}" style="border:none;background:var(--bg);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
       <input id="sch-h" type="number" min="0" placeholder="h-index" style="width:90px;border:none;background:var(--bg);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
       <input id="sch-i10" type="number" min="0" placeholder="i10" style="width:80px;border:none;background:var(--bg);border-radius:8px;padding:9px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
@@ -5637,19 +5674,23 @@ function renderPublications() {
     const pts = metrics.filter(m => (m.source === "icite") === (src === "icite"));
     if (pts.length < 2) return;
     const maxH = Math.max(...pts.map(m => Number(m.h) || 0));
-    html += `<div class="section-title">h-index over time · ${src === "icite" ? "iCite" : "Scholar"}</div><div class="card">`;
-    pts.forEach(m => { html += barRowHTML(fmtDate(m.date), Number(m.h) || 0, maxH, src === "icite" ? "var(--indigo)" : "var(--teal)"); });
-    html += `</div>`;
+    body += `<div class="section-title">h-index over time · ${src === "icite" ? "iCite" : "Scholar"}</div><div class="card">`;
+    pts.forEach(m => { body += barRowHTML(fmtDate(m.date), Number(m.h) || 0, maxH, src === "icite" ? "var(--indigo)" : "var(--teal)"); });
+    body += `</div>`;
   });
 
-  html += `<div class="section-title">Still in progress</div><div class="card">
+  body += `<div class="section-title">Still in progress</div><div class="card">
       <div style="font-size:13.5px;line-height:1.5">${pendingCount} ${pendingCount === 1 ? "study is" : "studies are"} not yet published. Open a co-author to see which of them that person is on.</div>
     </div>`;
 
-  $main.innerHTML = html;
-  document.getElementById("pub-back").onclick = () => { showPublications = false; tab = "dashboard"; render(); };
+  return { empty: false, band, body, html: band + body };
+}
+
+// Handlers for whatever pubStatsHTML just wrote. Every lookup is guarded: the blocks are optional,
+// and an absent button must not take the rest of the page down with it.
+function wirePubStats() {
   $main.querySelectorAll("[data-coauthor]").forEach(el => el.onclick = () => {
-    coauthorName = el.dataset.coauthor; render();
+    coauthorName = el.dataset.coauthor; showPublications = true; tab = "studies"; render();
   });
   bindSearchBox("coauthor-search", (v) => { coauthorQuery = v; });
   const moreBtn = document.getElementById("co-more");
@@ -5673,6 +5714,28 @@ function renderPublications() {
     render();
     toast("Recorded — it'll chart once there's more than one reading");
   };
+}
+
+// Only reached for somebody else's record now — a co-author's, or the lab's main author when the
+// signed-in person has no papers of their own. Your own figures live on the Research tab.
+function renderPublications() {
+  const subject = publicationsSubject();
+  $title.textContent = subject.own ? "Publications" : subject.name;
+  const stats = pubStatsHTML(subject);
+
+  let html = `<button class="btn secondary" id="pub-back" style="margin-bottom:10px">‹ Back</button>`;
+  if (!subject.own) {
+    html += `<div class="card" style="padding:10px 14px;margin-bottom:10px;font-size:13.5px;line-height:1.5">
+        Showing <b>${esc(subject.name)}</b>'s publications — ${esc(subject.via || "")}.
+      </div>`;
+  }
+  html += stats.html;
+
+  $main.innerHTML = html;
+  document.getElementById("pub-back").onclick = () => {
+    showPublications = false; coauthorName = null; tab = "research"; render();
+  };
+  if (!stats.empty) wirePubStats();
 }
 
 // One co-author: what they've published with Adam, and what they're on that hasn't published yet.

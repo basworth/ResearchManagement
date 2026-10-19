@@ -13,7 +13,10 @@ const A = (fore, last) => ({ fore, last, initials: fore[0] });
 // Counts chosen to pin the off-by-one that h-index invites: 30, 12, 9, 3, 1 gives h = 3.
 // Four papers have at least 3 citations, which tempts you towards 4 — but h = 4 would need four
 // papers with at least FOUR citations, and the fourth has exactly 3.
-const CITES = { p1: 30, p2: 12, p3: 9, p4: 3, p5: 1 };
+// p6 has zero, so the "only cited papers appear in Most cited" filter is genuinely exercised.
+// Until 19 Oct 2026 the lowest count here was 1, and the assertion that an uncited paper was
+// excluded passed only because the slice it searched happened to be empty.
+const CITES = { p1: 30, p2: 12, p3: 9, p4: 3, p5: 1, p6: 0 };
 const paper = (id, title, year) => ({
   id, kind: "study", updated_at: now, workspace: "sports-yanke",
   data: { id, title, nickname: "", phase: "Published", design: "Retrospective (Non-Consented)",
@@ -30,6 +33,7 @@ const items = [
   paper("p3", "Third paper about the patella", "2021"),
   paper("p4", "Fourth paper about the shoulder", "2023"),
   paper("p5", "Newest paper about the ACL", "2026"),
+  paper("p6", "Uncited paper about the hip", "2026"),
   { id: "00000000-0000-0000-0000-000000000001", kind: "meta", updated_at: now, workspace: "sports-yanke",
     data: { id: "00000000-0000-0000-0000-000000000001", names: ["Adam Yanke"], degrees: {} } }
 ];
@@ -84,18 +88,24 @@ const text = () => doc.getElementById("main").textContent.replace(/\s+/g, " ");
   check("h-index computed from the real counts", ic.h === 3, ic);
   check("i10 counts papers with ten or more", ic.i10 === 2, ic.i10);
   check("total citations summed", ic.total === 55, ic.total);
-  check("...across every paper", ic.papers === 5, ic.papers);
+  check("...across every paper", ic.papers === 6, ic.papers);
   check("stored in one row, not on each study",
     window.eval("state.studies.filter(s => s.publication && s.publication.citations != null).length") === 0);
 
   console.log("\n-- Shown on the page --");
   const t = text();
   check("the h-index appears", /h-index/.test(t) && /3/.test(t));
-  check("labelled as iCite", /NIH iCite/.test(t), t.slice(0, 400));
+  // The sublabel moved from "NIH iCite" to "iCite, <date>" when the figures became headline
+  // tiles. Still asserting attribution sits WITH the number, not merely somewhere on the page:
+  // an unattributed h-index beside a Scholar one would be the actual bug.
+  check("labelled as iCite", /h-index\s*iCite/.test(t), t.slice(0, 400));
   check("most cited papers are listed, highest first",
     t.indexOf("Most cited paper about cartilage") < t.indexOf("Second paper about meniscus"), t.slice(t.indexOf("Most cited"), t.indexOf("Most cited") + 200));
+  const mostCited = t.slice(t.indexOf("Most cited"), t.indexOf("Citation sources"));
+  check("the Most cited section is not empty", mostCited.length > 40, mostCited.length);
+  check("a paper with one citation is still listed", mostCited.includes("Newest paper about the ACL"));
   check("an uncited paper is left out of Most cited",
-    !t.slice(t.indexOf("Most cited"), t.indexOf("Google Scholar")).includes("Newest paper about the ACL"));
+    !mostCited.includes("Uncited paper about the hip"), mostCited.slice(0, 400));
 
   console.log("\n-- A reading is recorded for the chart --");
   const pts = JSON.parse(window.eval("JSON.stringify(state.scholar.points)"));
