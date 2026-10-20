@@ -2313,6 +2313,9 @@ async function pullAll() {
     await loadAppAdmins();
     await loadDivisions();
     await loadSupportGrants();
+    // Now that myWorkspace is known, make sure the research feed on screen is this lab's and not
+    // the default one fetched at startup. No-ops when they already match.
+    fetchResearchWatch();
     migrate();
     saveLocal();
     render();
@@ -10553,12 +10556,42 @@ async function fetchDeadlineFeed() {
 // Fetched the same way as the deadline feed, and just as optional. A missing or malformed file
 // leaves watchData null, which the view renders as an empty state — it must never take the
 // Publications view down with it, because that view is the one people actually came for.
+// ONE FILE PER LAB. It used to be a single global watch.json, which meant every lab saw the feed
+// generated for sports-yanke: Kern Singh signed into a brand-new spine lab and was shown
+// osteochondral allograft and meniscus papers under the heading "New papers that touch YOUR
+// publications". Not a crash — confidently wrong, about somebody else's field, as the first thing
+// he saw. Worse than an empty page.
+//
+// So the filename carries the lab, and there is no fallback to the global file for anyone else.
+// A lab with no file yet shows no watch section at all, which is honest.
+function watchFileFor(ws) {
+  // sports-yanke keeps reading watch.json because that is where its file already lives and the
+  // generator still writes there. New labs get the suffixed name from the start.
+  return (!ws || ws === FIRST_WORKSPACE) ? "./watch.json" : "./watch-" + ws + ".json";
+}
+// Which lab the loaded file belongs to, so a refetch after sign-in knows whether it is stale.
+// At startup myWorkspace is still the default — the real one only arrives with the first pull —
+// so without this every lab would fetch sports-yanke's file once and keep it.
+let watchDataFor = null;
 async function fetchResearchWatch() {
+  const ws = myWorkspace;
+  if (watchDataFor === ws) return;   // already have this lab's file
+  watchDataFor = ws;
+  watchData = null;                  // drop another lab's content before asking for ours
   try {
-    const res = await fetch("./watch.json?t=" + Date.now(), { cache: "no-store" });
+    const res = await fetch(watchFileFor(ws) + "?t=" + Date.now(), { cache: "no-store" });
+    // A 404 is the normal state for a lab nobody has generated a feed for yet. Leaving watchData
+    // null is correct: the tab renders the lab's own publication figures and says the watch half
+    // is empty, rather than borrowing another lab's.
     if (!res.ok) return;
     const data = await res.json();
     if (data && typeof data === "object") {
+      // Belt and braces: if a file ever does carry a lab, refuse it when it isn't ours. Cheap
+      // insurance against a generator writing to the wrong name.
+      if (data.workspace && data.workspace !== ws) {
+        console.warn("watch file is for", data.workspace, "not", ws, "— ignoring");
+        return;
+      }
       watchData = data;
       if (tab === "research") render();   // already looking at it when the file landed
     }
