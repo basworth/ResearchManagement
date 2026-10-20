@@ -50,6 +50,29 @@ const clean = (a: unknown): string[] =>
 // Quote anything with a space so PubMed treats it as a phrase rather than an AND of words.
 const phrase = (s: string) => (s.includes(" ") ? `"${s}"` : s);
 
+// PubMed's author index is "Yanke AB", not "Adam Yanke". Searching the human form returns
+// exactly nothing — "Adam Yanke"[Author] gave 0 results where Yanke AB[Author] gave 258 — and
+// zero results looks indistinguishable from a quiet week, which is how this would have shipped
+// unnoticed. Configs store the name people actually know, so the translation happens here.
+//
+// Both forms are emitted: somebody who types "Yanke AB" directly should still work, and the
+// institution filter AND-ed alongside keeps a bare surname+initial from collecting strangers.
+function authorTerms(name: string): string[] {
+  const n = String(name || "").trim();
+  if (!n) return [];
+  const out = new Set<string>([`${phrase(n)}[Author]`]);
+  const parts = n.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    const last = parts[parts.length - 1];
+    const initials = parts.slice(0, -1).map((w) => w[0]).join("").toUpperCase();
+    // "Yanke AB" and "Yanke A" — PubMed indexes both the full initials and the first alone,
+    // and which one a given record carries depends on how the journal supplied it.
+    out.add(`${phrase(last + " " + initials)}[Author]`);
+    if (initials.length > 1) out.add(`${phrase(last + " " + initials[0])}[Author]`);
+  }
+  return [...out];
+}
+
 const daysAgo = (n: number) => {
   const d = new Date(Date.now() - n * 86400e3);
   const p = (x: number) => String(x).padStart(2, "0");
@@ -91,7 +114,7 @@ function pubmedQueries(cfg: Cfg, windowDays: number) {
     ...notKws.map((k) => `NOT ${phrase(k)}[Title/Abstract]`),
   ].join(" ");
 
-  const ownParts = authors.map((a) => `${phrase(a)}[Author]`).join(" OR ");
+  const ownParts = authors.flatMap(authorTerms).join(" OR ");
   // The institution is ANDed, not ORed: it is a filter against the wrong person with the same
   // surname, which is the single most common way these feeds go wrong.
   const own = authors.length
