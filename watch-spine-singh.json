@@ -1,0 +1,129 @@
+{
+  "schema": 1,
+  "workspace": "spine-singh",
+  "generated": "2026-10-20",
+  "window": "2026-04 to 2026-10",
+  "reviewed": false,
+  "inDevelopment": [
+    {
+      "id": "NCT07668466",
+      "kind": "Phase I/II first-in-human",
+      "meta": "Not yet recruiting · n=60 · single site · start Jul 2026 · primary completion Aug 2028",
+      "title": "Intradiscal rhGDF-6 for lumbar disc degeneration: safety, tolerability and preliminary efficacy",
+      "frame": "Cartago Biotech. Open-label, single administration, high- and low-dose arms. A growth-factor injection aimed at the disc itself rather than at decompression or fusion.",
+      "forWork": "If intradiscal biologics reach the clinic, the comparator will be the outcomes you already measure. Your PROM and MCID infrastructure across ACDF and lumbar decompression is exactly the benchmark a trial like this needs, and nobody can build that retrospectively.",
+      "short": "Intradiscal growth factor for disc degeneration, n=60 first-in-human. Your PROM thresholds would be the benchmark."
+    },
+    {
+      "id": "NCT07858643",
+      "kind": "Phase I/II",
+      "meta": "Recruiting · n=25 · 2 sites · started Apr 2026 · primary completion Oct 2027",
+      "title": "LDGraft in single-level lumbar interbody fusion",
+      "frame": "Locate Bio. A bone graft substitute in single-level lumbar interbody fusion, small and early.",
+      "forWork": "Graft material is the variable your cost analysis did not isolate. A single-level fusion cohort with graft cost and outcome together would extend that paper's method from approach to implant.",
+      "short": "LDGraft in single-level lumbar fusion, n=25. Graft cost is the variable your cost paper didn't isolate."
+    },
+    {
+      "id": "NCT07688265",
+      "kind": "Prospective observational",
+      "meta": "Not yet recruiting · n=90 · start Jun 2026 · primary completion May 2027",
+      "title": "Effect of obesity phenotype on intra-abdominal pressure, intraoperative bleeding and perioperative complications in major lumbar spinal surgery",
+      "frame": "Marmara University. Measures intra-abdominal pressure via bladder catheter and relates obesity phenotype to bleeding and complications.",
+      "forWork": "This is the mechanism your obesity work observes from the outcome side. Your two-level CDR study found comparable PROM trajectories in obese patients; this asks what is happening intraoperatively. A phenotype variable — not just BMI — may be what distinguishes the patients who do differ.",
+      "short": "Obesity phenotype vs intraoperative pressure and bleeding. The mechanism behind your BMI outcome work."
+    },
+    {
+      "id": "NCT07139938",
+      "kind": "Multicentre interventional",
+      "meta": "Recruiting · n=165 · 3 sites · started Oct 2025 · primary completion Oct 2026",
+      "title": "Spontaneous correction of sagittal imbalance after isolated decompression without corrective fusion for lumbar spinal stenosis",
+      "frame": "N.N. Priorov Centre, Moscow. Tests whether sagittal imbalance corrects itself after decompression alone, without adding fusion.",
+      "forWork": "Directly relevant to decompression-only decision-making. Your workers' compensation decompression cohort already tracks ODI and VAS over two years; adding sagittal parameters to it would answer the same question in a US population with far better PROM capture.",
+      "short": "Does sagittal imbalance self-correct after decompression alone? n=165. Your decompression cohort could answer it too."
+    },
+    {
+      "id": "NCT07245940",
+      "kind": "Retrospective chart review",
+      "meta": "Not yet recruiting · n=300 · start Jan 2026 · primary completion Jun 2026",
+      "title": "Safety of cervical spine fusion with NMP graft material",
+      "frame": "Red Rock Regeneration. Natural Matrix Protein fibres in cervical interbody fusion, safety only.",
+      "forWork": "A chart review of 300 with safety endpoints and no PROMs. Your ACDF database carries the patient-reported side this is missing, which makes it the obvious partner for anyone wanting to know whether a graft changes how patients actually feel.",
+      "short": "NMP graft in cervical fusion, n=300, safety only. Your ACDF PROMs are what it lacks."
+    }
+  ],
+  "newPapers": [
+    {
+      "pmid": "42862313",
+      "doi": "10.1007/s00586-026-10423-3",
+      "verdict": "extends",
+      "meta": "Eur Spine J · Oct 2026 · Verna, Hughes et al. (Hospital for Special Surgery)",
+      "title": "Preoperative disability is independently associated with postoperative care intensity following anterior cervical discectomy and fusion",
+      "frame": "333 patients, 299 analysed. A composite care-intensity score from length of stay, delayed extubation and stepdown admission. Preoperative NDI was independently associated with greater care intensity (IRR 1.11 per 10 points, P=.018), as were number of levels fused (IRR 1.54 per level) and age. Patient expectations and PHQ-8 were not.",
+      "versus": "Extends rather than contradicts. Your ACDF MCID-failure paper found preoperative VAS-neck and foraminal stenosis predicted early MCID failure, with better preoperative physical function and mental health protective. They find baseline disability predicts in-hospital resource use as well as patient-reported recovery — the same preoperative variable reaching a different outcome.",
+      "refs": [
+        { "pmid": "40767778", "label": "your ACDF MCID failure 2025" },
+        { "pmid": "40882532", "label": "your WC disability 2025" }
+      ],
+      "forWork": "Your lumbar decompression work already shows severe baseline ODI predicts greater improvement, not worse. Pairing that with their finding would address the live question for outpatient ACDF pathways: does high preoperative disability argue against same-day surgery, or for it? You have the PROM depth to answer that and they do not report MCID.",
+      "short": "Baseline NDI predicts in-hospital care intensity after ACDF, not just PROMs — extends your MCID-failure work."
+    },
+    {
+      "pmid": "42854257",
+      "doi": "10.3171/2026.4.SPINE2688",
+      "verdict": "consistent",
+      "meta": "J Neurosurg Spine · Oct 2026 · Tu, Wu et al. (Taipei Veterans General)",
+      "title": "Hypermobile cervical disc arthroplasty: clinical and radiological outcomes at minimum 2-year follow-up",
+      "frame": "114 single-level C5-6 ProDisc-C patients, minimum 24 months. 28.9% were hypermobile (ROM ≥15°, mean 17.8°). Both groups improved significantly on VAS neck, VAS arm, NDI and mJOA with no difference at final follow-up. Heterotopic ossification 12.1% vs 19.6% (P=.331), adjacent segment degeneration 3.0% vs 12.3% (P=.127). No device failure.",
+      "versus": "Consistent in shape with your CDR findings — a patient characteristic that looks as though it ought to matter, and does not. Your two-level CDR study found obesity did not change PROM trajectory or MCID achievement; your ASA paper found higher ASA class did not predict worse outcomes. Three different variables, same answer.",
+      "refs": [
+        { "pmid": "42652811", "label": "your obesity + two-level CDR 2026" },
+        { "pmid": "42312637", "label": "your ASA + CDR 2026" }
+      ],
+      "forWork": "They have segmental ROM and no MCID; you have MCID and, in a two-level series, a question they did not ask. A two-level CDR cohort stratified by postoperative ROM would be genuinely new — their data is single-level C5-6 only, and their adjacent-segment signal (3.0% vs 12.3%) is underpowered rather than absent.",
+      "short": "Hypermobility after CDA didn't change outcomes — the same 'variable that shouldn't matter' pattern as your obesity and ASA papers."
+    },
+    {
+      "pmid": "42823358",
+      "doi": "10.14444/8959",
+      "verdict": "similar",
+      "meta": "Int J Spine Surg · Oct 2026 · Patwardhan, Zigler et al. (Hines VA / Loyola / Texas Back)",
+      "title": "Likelihood of achieving physiological mobility after cervical disc arthroplasty: motion restoration versus motion preservation",
+      "frame": "Secondary analysis of 131 levels from the M6-C trial. Splits the question in two: restoring physiological ROM (5-16°) to segments that were hypo- or hypermobile beforehand (71%, 30/42), versus preserving it where it already was (82%, 73/89). Combined likelihood 79%.",
+      "versus": "Different measure, same clinical decision. Your CDR papers predict who does well from patient factors — BMI, ASA class. This predicts what the implant will do mechanically from the preoperative ROM. The two together are what a patient is actually asking.",
+      "refs": [
+        { "pmid": "42652811", "label": "your obesity + two-level CDR 2026" }
+      ],
+      "forWork": "Worth noting this group is local — Hines VA and Loyola, Maywood. Their framing of restoration versus preservation is a clean way to report motion, and your single-surgeon two-level series could apply it to a level count they have no data on.",
+      "short": "Splits CDA motion into restoration vs preservation; 79% achieve physiological ROM. Local group, Hines VA."
+    },
+    {
+      "pmid": "42781841",
+      "doi": "10.1111/os.70438",
+      "verdict": "different",
+      "meta": "Orthop Surg · Sep 2026 · Zhao, Wang et al. (West China Hospital)",
+      "title": "Effect of keeping the Caspar retractor during Prestige LP cervical disc implantation on intra- and postoperative outcomes",
+      "frame": "55 patients. Keeping the retractor in during endplate preparation and implantation reduced Cobb-angle fluctuation (P=.001), fluoroscopy exposures (P=.044) and implantation time (P=.017), and allowed larger prostheses (P<.001) — against the manufacturer's own instruction to relax or remove it. More functional spinal unit height loss at 6 months (P=.002); subsidence and heterotopic ossification unchanged.",
+      "versus": "A different kind of finding from yours: a technical modification with resource consequences rather than a patient-factor analysis. But fluoroscopy count and operative time are inputs to exactly the cost model you built for endoscopic versus tubular versus open discectomy.",
+      "refs": [
+        { "pmid": "41886510", "label": "your comparative cost analysis 2026" }
+      ],
+      "forWork": "Your cost paper priced approaches. This prices a step within an approach. Extending that method to CDR technique variables — retractor handling, fluoroscopy count, implantation time — would be a natural second paper, and you already have the costing framework and the single-surgeon volume to do it.",
+      "short": "Keeping the Caspar retractor cut fluoroscopy and implantation time, against the manufacturer's instruction."
+    }
+  ],
+  "alsoNoted": [
+    {
+      "pmid": "41584315",
+      "text": "Your own group's meta-analysis of metagenomic next-generation sequencing versus culture in native pyogenic spinal infections (1,227 patients, 12 studies) reported pooled sensitivity 89.7% and diagnostic yield 69-90% against 27-45% for culture. Listed here because it is the most citable thing in your recent output for anyone searching culture-negative spinal infection, and it has no comparator paper yet in this window."
+    },
+    {
+      "pmid": "41693705",
+      "text": "Power-drill fluoroscopy-controlled freehand pedicle screws matched navigation for accuracy (97.8% vs 93.5%, P=.02) with a third of the radiation, in a propensity-matched cohort from St. Gallen that you co-authored. Radiation dose as an outcome sits alongside your cost work as the other under-reported cost of technique choice."
+    }
+  ],
+  "meetingAbstracts": {
+    "items": [],
+    "note": "No meeting abstracts verified for this round. This first file was assembled by hand from PubMed and ClinicalTrials.gov, so the conference literature has not been swept. Once the weekly process is running it will cover AANS/CNS Spine Summit, ISASS and NASS.",
+    "leadUrl": ""
+  }
+}
