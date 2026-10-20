@@ -1150,6 +1150,37 @@ function metaRowId(ws) {
   const w = String(ws || "").trim() || FIRST_WORKSPACE;
   return w === FIRST_WORKSPACE ? ROSTER_ID : derivedRowId("meta:" + w);
 }
+// What this lab's research feed should look for. One row per lab, stamped with that lab, so the
+// isolation already built covers it — a PI configures their own and sees nobody else's.
+//
+// Stored rather than inferred on purpose. We could guess the author name from the profile and the
+// keywords from the study titles, and the guess would be wrong in the ways that matter: a surgeon
+// with a common surname needs an institution to disambiguate, and the topics somebody wants to
+// READ about are not the topics they have already published on.
+function watchConfigRowId(ws) { return derivedRowId("watchConfig:" + (ws || FIRST_WORKSPACE)); }
+function blankWatchConfig(ws) {
+  return {
+    id: watchConfigRowId(ws),
+    workspace: ws || FIRST_WORKSPACE,
+    // Whose work to track. Several, because a lab is not always one name.
+    authors: [],
+    // The disambiguator. "Singh K" alone returns a great deal of somebody else; the PubMed import
+    // has already been bitten by this once, pulling in 17 papers belonging to a veterinarian.
+    institution: "",
+    // Names that are NOT this person, learned the hard way rather than guessed.
+    excludeAuthors: [],
+    // What to search for beyond the author's own output — the field, not the back-catalogue.
+    keywords: [],
+    excludeKeywords: [],
+    // Societies whose meeting abstracts are worth sweeping.
+    societies: [],
+    enabled: true,
+    lastRunAt: "",
+  };
+}
+function watchConfig() {
+  return state.watchConfig || blankWatchConfig(myWorkspace);
+}
 function derivedRowId(seed) {
   const s = String(seed || "");
   let h1 = 0x811c9dc5, h2 = 0x01000193, h3 = 0x9e3779b9, h4 = 0x85ebca6b;
@@ -1186,7 +1217,7 @@ function setFieldSub(field, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [] };
+let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [], watchConfig: null };
 // Which tab you land on.
 //
 // Research is the first thing you see each day: it's the page you read rather than edit, and the
@@ -2288,6 +2319,11 @@ async function pullAll() {
     state.matchHints = rows.filter(r => r.kind === "matchHint").map(r => r.data);
     const sch = rows.find(r => r.kind === "scholar");
     if (sch) state.scholar = sch.data;
+    // This lab's research-feed settings. Matched on the derived row id so that a person in two
+    // labs picks up the right one rather than whichever arrived first.
+    const wcRow = rows.find(r => r.kind === "watchConfig" && r.id === watchConfigRowId(ws))
+               || rows.find(r => r.kind === "watchConfig");
+    state.watchConfig = wcRow ? wcRow.data : null;
     setMatchHints(state.matchHints);
   setMeetings(state.meetings);
     const meta = rows.find(r => r.kind === "meta" && r.id === metaRowId(ws))
@@ -2650,6 +2686,7 @@ function applyRealtimeRow(kind, id, data, updatedAt, ws) {
     return;
   }
   if (kind === "scholar") { state.scholar = data; saveLocal(); render(); return; }
+  if (kind === "watchConfig") { state.watchConfig = data; saveLocal(); render(); return; }
   const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "mtgTag" ? state.mtgTags : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : kind === "filterSet" ? state.filterSets : kind === "suggestion" ? state.suggestions : kind === "matchHint" ? state.matchHints : null;
   if (!arr) return;
   // Match on the payload's own id, not the row id: for userPref the two differ (see
@@ -5618,9 +5655,13 @@ function renderResearch() {
       </div>`
     : `<div class="rw-main">
         <div class="section-title">Research watch</div>
-        <div class="card"><p class="rw-note">No Research Watch data yet. This half of the page is
-        built from watch.json, which is regenerated separately — nothing in it is stored in the
-        tracker. Your own figures on the left are unaffected.</p></div>
+        <div class="card"><p class="rw-note">No Research Watch data for your lab yet.
+        ${(watchConfig().authors || []).length
+          ? `Your feed settings are saved — the next refresh will fill this in.`
+          : `Tell it what to look for in <b>Settings → My research feed</b>: whose work to follow,
+             which topics, which societies. Until then this stays empty rather than showing you
+             another lab's field.`}
+        Your own figures on the left are unaffected either way.</p></div>
       </div>`;
 
   // Headline numbers across the top, then two columns the whole way down. Nothing breaks out to
@@ -8880,6 +8921,13 @@ function renderSettings() {
     </div>
     <button class="btn secondary" id="settings-help" style="width:auto;padding:8px 14px;flex:none">Open</button>
   </div>
+  <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px;margin-top:10px">
+    <div style="flex:1;min-width:0">
+      <div style="font-size:15px;font-weight:600">My research feed</div>
+      <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-top:2px">What the Research tab looks for each week — whose work, which topics, which societies.</div>
+    </div>
+    <button class="btn secondary" id="settings-watch" style="width:auto;padding:8px 14px;flex:none">Open</button>
+  </div>
   ${isAdmin() ? `
   <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px;margin-top:10px">
     <div style="flex:1;min-width:0">
@@ -9265,6 +9313,8 @@ function renderSettings() {
   document.getElementById("settings-help").onclick = () => openHelpSheet();
   const supportBtn = document.getElementById("settings-support");
   if (supportBtn) supportBtn.onclick = () => openSupportSheet();
+  const watchBtn = document.getElementById("settings-watch");
+  if (watchBtn) watchBtn.onclick = () => openWatchSettingsSheet();
   const teamBtn = document.getElementById("settings-team");
   if (teamBtn) teamBtn.onclick = () => openResearchTeamSheet();
   const divBtn = document.getElementById("settings-divisions");
@@ -10827,6 +10877,82 @@ async function openSectionsSheet() {
       if (error) throw error;
       await redo(name + " created — add labs to it, then name a section admin");
     } catch (e) { fail(e); }
+  };
+}
+// What this lab's research feed looks for. A PI configures their own — Adam has no business
+// choosing Singh's spine keywords, and Singh should not have to ask.
+//
+// Everything is a comma-separated list because that is what people actually type, and because a
+// chips-and-tags widget would be three times the code for no benefit at this size. Each field
+// says what it is FOR rather than what it is, since "institution" on its own doesn't explain why
+// it matters.
+async function openWatchSettingsSheet() {
+  const cfg = watchConfig();
+  const lines = (a) => (Array.isArray(a) ? a : []).join(", ");
+  const box = (id, label, value, placeholder, help) => `
+    <div style="margin-bottom:12px">
+      <label for="${id}" style="font-size:12px;color:var(--text2);display:block;margin-bottom:4px">${label}</label>
+      <input id="${id}" value="${esc(value)}" placeholder="${esc(placeholder)}"
+        style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+      <div style="font-size:12px;color:var(--text2);line-height:1.45;margin-top:5px">${help}</div>
+    </div>`;
+
+  openSheet("My research feed", `
+    <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin:2px 2px 14px 2px">
+      What the Research tab goes looking for each week. These settings are yours and apply to your
+      lab only.
+    </div>
+    <div class="card">
+      ${box("wc-authors", "Whose work to follow", lines(cfg.authors), "Kern Singh, Arash Sayari",
+        "Full names, comma-separated. Usually just you, but add anyone whose output you want tracked alongside yours.")}
+      ${box("wc-institution", "Institution", cfg.institution, "Rush University Medical Center",
+        "This is what stops a common surname pulling in a stranger. The publication import once collected 17 papers belonging to a veterinarian with a similar name &mdash; this is the field that prevents that.")}
+      ${box("wc-exclude-authors", "Definitely not you", lines(cfg.excludeAuthors), "K Singh (Auburn)",
+        "Anyone who keeps turning up by mistake. Leave empty until it happens.")}
+      ${box("wc-keywords", "Topics to watch", lines(cfg.keywords), "cervical disc replacement, lumbar decompression, MCID",
+        "The field you want to read about &mdash; not a list of what you have already published. These are what finds new work from other groups.")}
+      ${box("wc-exclude-keywords", "Topics to skip", lines(cfg.excludeKeywords), "case report, YouTube",
+        "Anything that keeps appearing and is never useful.")}
+      ${box("wc-societies", "Societies worth sweeping", lines(cfg.societies), "AANS/CNS, ISASS, NASS",
+        "Whose meeting abstracts to look through. Unpublished data is always labelled as such.")}
+      <div class="frow" style="gap:12px;cursor:pointer;padding:8px 0" id="wc-enabled-row">
+        <input type="checkbox" id="wc-enabled" ${cfg.enabled === false ? "" : "checked"} style="flex:0;width:20px;height:20px">
+        <label for="wc-enabled" style="flex:1;font-size:14px">Keep this feed updated</label>
+      </div>
+      <div style="font-size:12px;color:var(--text2);line-height:1.45">
+        Untick to stop refreshing it. Nothing already in the feed is removed.
+      </div>
+    </div>
+    ${cfg.lastRunAt ? `<div style="font-size:12px;color:var(--text2);margin:10px 2px 0">Last refreshed ${esc(fmtDate(String(cfg.lastRunAt).slice(0, 10)))}.</div>`
+      : `<div style="font-size:12px;color:var(--text2);line-height:1.5;margin:10px 2px 0">
+           This feed hasn't been generated from these settings yet. Until the weekly process is
+           running, the Research tab shows whatever was last published for your lab.
+         </div>`}`,
+    () => {
+      const split = (id) => (document.getElementById(id).value || "")
+        .split(",").map(x => x.trim()).filter(Boolean);
+      const next = Object.assign({}, cfg, {
+        id: watchConfigRowId(myWorkspace),
+        workspace: myWorkspace,
+        authors: split("wc-authors"),
+        institution: (document.getElementById("wc-institution").value || "").trim(),
+        excludeAuthors: split("wc-exclude-authors"),
+        keywords: split("wc-keywords"),
+        excludeKeywords: split("wc-exclude-keywords"),
+        societies: split("wc-societies"),
+        enabled: !!document.getElementById("wc-enabled").checked,
+      });
+      state.watchConfig = next;
+      saveLocal();
+      pushItem("watchConfig", next, next.id);
+      render();
+      toastAction("Research feed settings saved", "Change them", () => openWatchSettingsSheet());
+      return true;
+    });
+  const row = document.getElementById("wc-enabled-row");
+  if (row) row.onclick = (e) => {
+    const b = document.getElementById("wc-enabled");
+    if (e.target !== b) b.checked = !b.checked;
   };
 }
 // A PI's direct research team. Will and TJ work for Adam: they need to see everything of his,

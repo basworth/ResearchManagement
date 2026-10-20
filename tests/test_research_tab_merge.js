@@ -200,7 +200,7 @@ const BLOCKS = [
   check("the tab still renders", noWatch.length > 500, noWatch.length);
   BLOCKS.forEach(([name, re]) =>
     check("  " + name + " survives a missing watch file", re.test(noWatch)));
-  check("...and it says the watch half is empty", /No Research Watch data yet/.test(noWatch));
+  check("...and it says the watch half is empty", /No Research Watch data for your lab yet/.test(noWatch));
 
   console.log("\n-- An empty watch object behaves the same way --");
   ev('watchData = {}; tab = "research"; render();');

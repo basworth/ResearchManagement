@@ -108,7 +108,7 @@ const SPINE = { schema: 1, generated: "2026-10-20", workspace: "spine-singh",
     win.eval('tab = "research"; render();');
     const out = win.document.getElementById("main").innerHTML;
     check("the tab still renders", out.length > 200, out.length);
-    check("...and says the watch half is empty", /No Research Watch data yet/.test(out));
+    check("...and says the watch half is empty", /No Research Watch data for your lab yet/.test(out));
     check("...and shows no cartilage anywhere", !/Cartilage trial/.test(out));
     win.close();
   }

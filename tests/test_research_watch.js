@@ -210,8 +210,11 @@ function check(name, cond, detail) {
   console.log("\n-- A missing file leaves an empty tab, not a broken one --");
   ev("watchData = null; tab = 'research'; render();");
   await wait(250);
-  check("the tab says there's nothing yet",
-    /No Research Watch data yet/.test(w.document.querySelector("#main").textContent));
+  // Wording changed on 20 Oct 2026 when the feed became per-lab: the empty state now names the
+  // lab, because "no data yet" was previously a lie — there WAS data, it just belonged to
+  // somebody else's field and was being shown to everyone.
+  check("the tab says there's nothing yet for this lab",
+    /No Research Watch data for your lab yet/.test(w.document.querySelector("#main").textContent));
   check("...and the other tabs still work",
     (function(){ w.document.querySelector('button[data-tab="studies"]').click(); return true; })());
   await wait(250);
