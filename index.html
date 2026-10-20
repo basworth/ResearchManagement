@@ -1181,6 +1181,56 @@ function blankWatchConfig(ws) {
 function watchConfig() {
   return state.watchConfig || blankWatchConfig(myWorkspace);
 }
+// What this person wants more and less of. Per USER, not per lab: two people in one lab read for
+// different reasons, and Adam's "never show me this again" should not silence it for his RAs.
+//
+// Deliberately NOT model training. These become explicit instructions on the next run — "more of
+// this, less of that" — which works from the very first vote instead of the thousandth, and can
+// be read back and explained when somebody asks why they are seeing something. If this ever
+// outgrows prompting, these same rows are exactly what fine-tuning would need, so nothing is
+// wasted by starting here.
+function watchVoteRowId(userId, ws) {
+  return derivedRowId("watchVote:" + (ws || FIRST_WORKSPACE) + ":" + String(userId || ""));
+}
+function blankWatchVotes(userId, ws) {
+  return { id: watchVoteRowId(userId, ws), userId: String(userId || ""), workspace: ws || FIRST_WORKSPACE,
+           up: [], down: [], notes: {} };
+}
+function myWatchVotes() {
+  if (!currentUser) return blankWatchVotes("", myWorkspace);
+  return state.watchVotes || blankWatchVotes(currentUser.id, myWorkspace);
+}
+// `key` is the PMID or NCT id — stable across regenerations, which is the whole point: a vote on
+// a paper should still count next week when the feed is rebuilt.
+function voteOnWatchItem(key, dir) {
+  if (!currentUser) return;
+  const v = JSON.parse(JSON.stringify(myWatchVotes()));
+  v.id = watchVoteRowId(currentUser.id, myWorkspace);
+  v.userId = currentUser.id;
+  v.workspace = myWorkspace;
+  v.up = (v.up || []).filter(x => x !== key);
+  v.down = (v.down || []).filter(x => x !== key);
+  // Voting the same way twice clears it, so a mis-tap is undone by repeating it rather than by
+  // hunting for an undo.
+  const was = (myWatchVotes().up || []).includes(key) ? "up"
+            : (myWatchVotes().down || []).includes(key) ? "down" : "";
+  const next = was === dir ? "" : dir;
+  if (next === "up") v.up.push(key);
+  if (next === "down") v.down.push(key);
+  state.watchVotes = v;
+  saveLocal();
+  pushItem("watchVote", v, v.id);
+  render();
+  toast(next === "up" ? "More like this next time"
+      : next === "down" ? "Less like this next time"
+      : "Vote cleared");
+}
+function watchVoteFor(key) {
+  const v = myWatchVotes();
+  if ((v.up || []).includes(key)) return "up";
+  if ((v.down || []).includes(key)) return "down";
+  return "";
+}
 function derivedRowId(seed) {
   const s = String(seed || "");
   let h1 = 0x811c9dc5, h2 = 0x01000193, h3 = 0x9e3779b9, h4 = 0x85ebca6b;
@@ -1217,7 +1267,7 @@ function setFieldSub(field, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [], watchConfig: null };
+let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [], watchConfig: null, watchVotes: null };
 // Which tab you land on.
 //
 // Research is the first thing you see each day: it's the page you read rather than edit, and the
@@ -2324,6 +2374,18 @@ async function pullAll() {
     const wcRow = rows.find(r => r.kind === "watchConfig" && r.id === watchConfigRowId(ws))
                || rows.find(r => r.kind === "watchConfig");
     state.watchConfig = wcRow ? wcRow.data : null;
+    // The generated feed, written by the research-watch function. Preferred over the static
+    // watch-<lab>.json: a regenerated feed should appear on the next pull, not on the next
+    // deploy. The file stays as the fallback for labs whose feed was assembled by hand.
+    const wfRow = rows.find(r => r.kind === "watchFeed" && r.id === watchConfigRowId(ws))
+               || rows.find(r => r.kind === "watchFeed");
+    if (wfRow && wfRow.data) { watchData = wfRow.data; watchDataFor = ws; }
+    // My own votes for this lab. Matched on the derived id so somebody in two labs keeps the
+    // two sets apart rather than carrying spine preferences into a sports feed.
+    const wvRow = currentUser
+      ? rows.find(r => r.kind === "watchVote" && r.id === watchVoteRowId(currentUser.id, ws))
+      : null;
+    state.watchVotes = wvRow ? wvRow.data : null;
     setMatchHints(state.matchHints);
   setMeetings(state.meetings);
     const meta = rows.find(r => r.kind === "meta" && r.id === metaRowId(ws))
@@ -2687,6 +2749,12 @@ function applyRealtimeRow(kind, id, data, updatedAt, ws) {
   }
   if (kind === "scholar") { state.scholar = data; saveLocal(); render(); return; }
   if (kind === "watchConfig") { state.watchConfig = data; saveLocal(); render(); return; }
+  if (kind === "watchFeed") { watchData = data; watchDataFor = myWorkspace; render(); return; }
+  if (kind === "watchVote") {
+    // Only mine. Another person's votes arriving over realtime must not replace my own.
+    if (currentUser && data && data.userId === currentUser.id) { state.watchVotes = data; saveLocal(); render(); }
+    return;
+  }
   const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "mtgTag" ? state.mtgTags : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : kind === "filterSet" ? state.filterSets : kind === "suggestion" ? state.suggestions : kind === "matchHint" ? state.matchHints : null;
   if (!arr) return;
   // Match on the payload's own id, not the row id: for userPref the two differ (see
@@ -5549,6 +5617,22 @@ function rwShort(item) {
 function rwDetailRow(label, value) {
   return value ? `<div class="rw-row"><b>${rwEsc(label)}</b><span>${rwEsc(value)}</span></div>` : "";
 }
+// Two buttons, inside the expanded body rather than on the collapsed row: voting on something
+// you have not read is noise, and the whole point of these votes is that they mean something.
+// The key is the PMID or NCT id, so a vote survives the feed being regenerated next week.
+function rwVoteHTML(key) {
+  if (!key) return "";
+  const v = watchVoteFor(key);
+  const btn = (dir, label, title) => `
+    <button type="button" class="mini-btn rw-vote" data-rw-vote="${rwEsc(dir)}" data-rw-key="${rwEsc(key)}"
+      title="${rwEsc(title)}"
+      style="margin:0;${v === dir ? "background:var(--teal);color:#fff;border-color:var(--teal)" : ""}">${label}</button>`;
+  return `<div class="rw-row"><b>Useful?</b><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      ${btn("up", "More like this", "Ask for more of this next time")}
+      ${btn("down", "Less like this", "Ask for less of this next time")}
+      <span class="rw-note">${v ? "Saved — tap again to undo." : "Shapes what next week's list looks like."}</span>
+    </span></div>`;
+}
 function rwItemHTML(it, kind) {
   const isPaper = kind === "paper";
   const badge = isPaper
@@ -5571,6 +5655,7 @@ function rwItemHTML(it, kind) {
         ${rwDetailRow("Frame", it.frame)}
         ${isPaper && it.versus ? `<div class="rw-row"><b>vs yours</b><span>${rwEsc(it.versus)}${refs ? `<br><span class="rw-note">${refs}</span>` : ""}</span></div>` : ""}
         ${it.forWork ? `<div class="rw-row dir"><b>For your work</b><span>${rwEsc(it.forWork)}</span></div>` : ""}
+        ${rwVoteHTML(isPaper ? it.pmid : it.id)}
       </div>
     </details>`;
 }
@@ -5670,6 +5755,11 @@ function renderResearch() {
     + `<div class="rw-grid">${side}${main}</div>`
     + (hasWatch ? rwTailHTML(w) : "");
   if (!stats.empty) wirePubStats();
+  // Inside <details>, so clicking must not also toggle the row shut under the person's finger.
+  $main.querySelectorAll("[data-rw-vote]").forEach(b => b.onclick = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    voteOnWatchItem(b.dataset.rwKey, b.dataset.rwVote);
+  });
 }
 
 // Everything the old Publications page drew, as a string, so the Research tab and the co-author
@@ -10923,6 +11013,10 @@ async function openWatchSettingsSheet() {
         Untick to stop refreshing it. Nothing already in the feed is removed.
       </div>
     </div>
+    <div class="card" style="margin-top:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="mini-btn" id="wc-run" style="margin:0">Refresh my feed now</button>
+      <span class="rw-note" style="flex:1;min-width:160px">Searches PubMed and ClinicalTrials.gov with the settings above. Takes a few seconds; save first if you've changed anything.</span>
+    </div>
     ${cfg.lastRunAt ? `<div style="font-size:12px;color:var(--text2);margin:10px 2px 0">Last refreshed ${esc(fmtDate(String(cfg.lastRunAt).slice(0, 10)))}.</div>`
       : `<div style="font-size:12px;color:var(--text2);line-height:1.5;margin:10px 2px 0">
            This feed hasn't been generated from these settings yet. Until the weekly process is
@@ -10953,6 +11047,41 @@ async function openWatchSettingsSheet() {
   if (row) row.onclick = (e) => {
     const b = document.getElementById("wc-enabled");
     if (e.target !== b) b.checked = !b.checked;
+  };
+  const run = document.getElementById("wc-run");
+  if (run) run.onclick = async () => {
+    if (!sb) { toast("Connect Team Sync first"); return; }
+    const c = watchConfig();
+    if (!(c.authors || []).length && !(c.keywords || []).length) {
+      toast("Add a name or a topic first — there's nothing to search for yet");
+      return;
+    }
+    run.disabled = true; run.textContent = "Searching…";
+    try {
+      const { data: sess } = await sb.auth.getSession();
+      const token = sess && sess.session && sess.session.access_token;
+      if (!token) throw new Error("your session expired — sign out and back in");
+      const res = await fetch(SUPABASE_URL + "/functions/v1/research-watch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+        body: JSON.stringify({ workspace: myWorkspace }),
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok || out.error) throw new Error(out.error || ("Failed (" + res.status + ")"));
+      const r = (out.results || [])[0] || {};
+      if (r.error) throw new Error(r.error);
+      // Says what it found, not just that it worked — "done" is useless when the answer is zero.
+      toast(typeof r.papersOut === "number"
+        ? `${r.papersOut} paper${r.papersOut === 1 ? "" : "s"} and ${r.trialsOut} trial${r.trialsOut === 1 ? "" : "s"}${r.framed ? "" : " — summaries unreviewed, no model key set"}`
+        : "Feed refreshed");
+      await pullAll();
+      render();
+    } catch (e) {
+      toast("Couldn't refresh — " + ((e && e.message) || "try again"));
+    } finally {
+      const b = document.getElementById("wc-run");
+      if (b) { b.disabled = false; b.textContent = "Refresh my feed now"; }
+    }
   };
 }
 // A PI's direct research team. Will and TJ work for Adam: they need to see everything of his,

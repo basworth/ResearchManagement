@@ -64,6 +64,14 @@ const ALLOWED = [
     why: "the deadline catalogue is shared across every lab by design",
     requires: null,
   },
+  {
+    fn: "research-watch",
+    match: 'eq("kind", "watchConfig")',
+    why: "it is a scheduled job over every lab: it reads each lab's own feed settings in order "
+       + "to run them. watchConfig holds search terms, not people's studies — and every read of "
+       + "actual lab data inside the run IS scoped, which is asserted separately below.",
+    requires: null,
+  },
 ];
 
 const SENSITIVE = ["study", "task", "profile", "matchHint", "suggestion"];
@@ -73,7 +81,7 @@ console.log("\n-- Every bulk read of people's data is scoped to one lab --");
 // Named rather than counted, so adding a function is a deliberate edit here instead of a number
 // going up. A scan that silently skips a new function is worse than no scan.
 const EXPECTED = ["admin-requests", "feedback-alert", "import-publications", "ingest-email",
-                  "invite-user", "request-update", "stage-alerts", "task-emails"];
+                  "invite-user", "request-update", "research-watch", "stage-alerts", "task-emails"];
 const fns = fs.readdirSync(DIR).filter((d) => fs.existsSync(path.join(DIR, d, "index.ts"))).sort();
 check("every known function is scanned, and no unknown one is skipped",
   JSON.stringify(fns) === JSON.stringify(EXPECTED), { found: fns, expected: EXPECTED });
@@ -141,6 +149,31 @@ check("stage-alerts is scheduler-only too", /x-cron-secret/.test(stageAlertsSrc)
 check("...and an unset secret leaves it open rather than silently stopping the mail",
   /if \(!CRON_SECRET\) return true;/.test(taskEmails)
   && /CRON_SECRET && req\.headers\.get\("x-cron-secret"\)/.test(stageAlertsSrc));
+
+console.log("\n-- research-watch touches one lab at a time, even though it loops over all of them --");
+{
+  const fn = fs.readFileSync(path.join(DIR, "research-watch", "index.ts"), "utf8");
+  // It runs under the service role, which bypasses RLS entirely. Every read of a lab's own data
+  // therefore has to carry its own filter, and every write has to carry its stamp.
+  check("it says out loud that the service role bypasses RLS",
+    /SERVICE ROLE BYPASSES RLS/.test(fn));
+  check("votes are read for one lab", /from\("items"\)[\s\S]{0,160}eq\("kind", "watchVote"\)[\s\S]{0,80}eq\("workspace", ws\)/.test(fn));
+  check("the previous feed is read for one lab",
+    /eq\("kind", "watchFeed"\)[\s\S]{0,120}eq\("workspace", cfg\.workspace\)/.test(fn));
+  check("the feed it writes is stamped with that lab",
+    /kind: "watchFeed"[\s\S]{0,200}workspace: cfg\.workspace/.test(fn));
+  check("the config it writes back is stamped too",
+    /kind: "watchConfig"[\s\S]{0,200}workspace: cfg\.workspace/.test(fn));
+  check("a caller can narrow it to their own lab", /c\.workspace === only/.test(fn));
+  check("a disabled lab is skipped", /c\.enabled !== false/.test(fn));
+  check("one lab's failure doesn't stop the rest", /results\.push\(\{ workspace: cfg\.workspace, error/.test(fn));
+  // The guard that makes a fabricated citation impossible rather than unlikely.
+  check("only retrieved ids survive framing",
+    /byPmid\.has\(String\(f\?\.pmid\)\)/.test(fn) && /byNct\.has\(String\(f\?\.id\)\)/.test(fn));
+  check("the model is told never to introduce an id", /Never introduce another/.test(fn));
+  check("a missing model key degrades rather than breaks", /if \(!ANTHROPIC_KEY\) return null/.test(fn));
+  check("the feed records whether a model touched it", /framed: !!framed/.test(fn));
+}
 
 console.log("\n-- request-update refuses a study in another lab --");
 const reqUpdate = fs.readFileSync(path.join(DIR, "request-update", "index.ts"), "utf8");
