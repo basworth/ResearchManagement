@@ -1956,13 +1956,17 @@ function detectAuthLinkError() {
 }
 function authLinkErrorMessage(e) {
   const c = (e && e.code || "").toLowerCase();
+  // Both messages end with the same fallback, because the code CAN also be too old: it lasts 24
+  // hours. Without saying this, somebody who opens the email the following week is told to use a
+  // code that will not work either, and has no idea what to do next.
+  const andIfStale = " If the code doesn't work either, it's gone stale — tap \"Forgot password?\" and a fresh one arrives straight away.";
   if (c === "otp_expired" || c.indexOf("expired") >= 0) {
-    return "That link was already opened, most likely by Rush's email scanner before it reached you. Use the code in the same email instead — tap \"I already have a code\" below.";
+    return "That link was already opened, most likely by Rush's email scanner before it reached you. Use the code in the same email instead — tap \"I already have a code\" below." + andIfStale;
   }
   if (c === "access_denied") {
-    return "That link is no longer valid — something opened it first. Use the code in the same email instead.";
+    return "That link is no longer valid — something opened it first. Use the code in the same email instead." + andIfStale;
   }
-  return (e && e.description) || "That link didn't work. Use the code in the same email instead.";
+  return ((e && e.description) || "That link didn't work. Use the code in the same email instead.") + andIfStale;
 }
 let authLinkType = detectAuthLinkType();
 let authLinkError = detectAuthLinkError();
@@ -8785,8 +8789,15 @@ async function loadPendingInvites() {
     box.innerHTML = list.map(u => {
       const days = u.invitedAt ? Math.floor((Date.now() - new Date(u.invitedAt).getTime()) / 86400000) : null;
       const age = days === null ? "" : days <= 0 ? "invited today" : days === 1 ? "invited yesterday" : `invited ${days} days ago`;
-      // A code lasts an hour, so anything older than that needs a fresh one rather than a nudge.
-      const codeStale = !u.codeSentAt || (Date.now() - new Date(u.codeSentAt).getTime()) > 3600e3;
+      // A code lasts 24 hours (MAILER_OTP_EXP in Supabase Auth, raised from one hour on
+      // 19 Oct 2026). An hour was long enough for nobody: Brian Cole's invite read "invited
+      // today · their code has expired" within the same evening, and several of the stuck
+      // invites in this list were probably never usable by the time they were opened.
+      //
+      // If that setting is ever changed again, change this with it — they are two copies of one
+      // number and only this one is visible to anybody.
+      const CODE_LIFETIME_MS = 86400e3;
+      const codeStale = !u.codeSentAt || (Date.now() - new Date(u.codeSentAt).getTime()) > CODE_LIFETIME_MS;
       // The useful recommendation: an invite that's never been accepted, sitting next to an
       // account that has, for what looks like the same person. That's Carla with an open rush.edu
       // invite and a live rushortho.com login — the reason to bin the invite rather than chase it.
