@@ -83,18 +83,31 @@ const phrase = (s: string) => (s.includes(" ") ? `"${s}"` : s);
 //
 // Both forms are emitted: somebody who types "Yanke AB" directly should still work, and the
 // institution filter AND-ed alongside keeps a bare surname+initial from collecting strangers.
+// AUTHOR TERMS ARE NEVER QUOTED. This is the whole bug, and it is not obvious:
+//
+//   Cole B[Author]     -> 556 papers (PubMed expands the initial: Cole BJ, Cole BR, …)
+//   "Cole B"[Author]   ->  23 papers (exact string only)
+//
+// phrase() wraps anything containing a space, so every author term was being quoted, which
+// switched off the expansion PubMed does on author initials. Adam's own feed had been reporting
+// own:3 for someone with 258 papers, and Brian Cole's came out at 6. It looked like a thin
+// publication record rather than a broken query — the same shape of failure as the AND NOT bug
+// below, and measured the same way.
+//
+// Unquoted is safe here: a field tag binds the whole term, so `Cole B[Author]` and
+// `Brian Cole[Author]` both parse correctly (PubMed normalises the latter to `cole, brian`).
 function authorTerms(name: string): string[] {
   const n = String(name || "").trim();
   if (!n) return [];
-  const out = new Set<string>([`${phrase(n)}[Author]`]);
+  const out = new Set<string>([`${n}[Author]`]);
   const parts = n.split(/\s+/).filter(Boolean);
   if (parts.length >= 2) {
     const last = parts[parts.length - 1];
     const initials = parts.slice(0, -1).map((w) => w[0]).join("").toUpperCase();
     // "Yanke AB" and "Yanke A" — PubMed indexes both the full initials and the first alone,
     // and which one a given record carries depends on how the journal supplied it.
-    out.add(`${phrase(last + " " + initials)}[Author]`);
-    if (initials.length > 1) out.add(`${phrase(last + " " + initials[0])}[Author]`);
+    out.add(`${last} ${initials}[Author]`);
+    if (initials.length > 1) out.add(`${last} ${initials[0]}[Author]`);
   }
   return [...out];
 }

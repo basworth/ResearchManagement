@@ -195,6 +195,16 @@ function boot(items) {
     check("the reason that line cannot move is written down",
       /citations that look perfect and aren't/.test(fn));
     check("exploring stores nothing", !/explore[\s\S]{0,2000}db\.from\("items"\)\.upsert/.test(fn));
+    // Author terms must NOT be quoted. Measured against PubMed, Brian Cole + Rush affiliation:
+    //   Cole B[Author]   -> 556      "Cole B"[Author] -> 23
+    // phrase() quotes anything with a space, which switched off PubMed's expansion of author
+    // initials (Cole B -> Cole BJ). Adam's feed reported own:3 for 258 papers; Cole's reported 6.
+    check("author terms are never quoted",
+      /out = new Set<string>\(\[`\$\{n\}\[Author\]`\]\)/.test(fn)
+      && /out\.add\(`\$\{last\} \$\{initials\}\[Author\]`\)/.test(fn)
+      && !/phrase\(last/.test(fn) && !/phrase\(n\)\[Author\]/.test(fn));
+    check("...and the measured difference is recorded",
+      /556 papers/.test(fn) && /23 papers/.test(fn));
     check("the lab's learned exclusions still apply",
       /const notClause = notKws\.map\(\(k\) => `NOT \$\{phrase\(k\)\}\[Title\/Abstract\]`\)/.test(fn));
     // THE ONE THAT MATTERED MOST. PubMed parses "A AND NOT (B)" by dropping the NOT and keeping
