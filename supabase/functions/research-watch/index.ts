@@ -259,8 +259,15 @@ async function trialSearch(cfg: Cfg, max: number) {
 // The model never receives a question it could answer by inventing a citation. It is handed the
 // candidates and asked only to explain and order them, and its output is matched back to the
 // supplied ids — anything it returns that was not in the input is dropped rather than trusted.
+//
+// WHY IT REPORTS WHY IT FAILED: `framed: false` used to be the only signal, and it means at least
+// four different things — no key set, key set but not yet picked up by a running instance, key
+// rejected, account out of credit. Chasing the wrong one of those costs an afternoon, so the
+// reason now travels back with the result instead of being swallowed by the catch.
+let lastFrameError = "";
 async function frame(cfg: Cfg, own: any[], papers: any[], trials: any[], prefs: Prefs) {
-  if (!ANTHROPIC_KEY) return null;
+  lastFrameError = "";
+  if (!ANTHROPIC_KEY) { lastFrameError = "no ANTHROPIC_API_KEY in this instance's environment"; return null; }
   const body = {
     model: "claude-sonnet-5-5",
     max_tokens: 4000,
@@ -306,13 +313,21 @@ Rules:
       },
       body: JSON.stringify(body),
     });
-    if (!r.ok) return null;
+    if (!r.ok) {
+      // The body carries the actual cause — invalid key, credit balance too low, rate limit.
+      // Truncated because it is a diagnostic, not a payload, and it is returned to an admin.
+      const detail = await r.text().catch(() => "");
+      lastFrameError = `model API ${r.status}: ${detail.slice(0, 300)}`;
+      return null;
+    }
     const out = await r.json();
     const text = (out?.content ?? []).map((c: any) => c?.text ?? "").join("");
     const m = text.match(/\{[\s\S]*\}/);
-    return m ? JSON.parse(m[0]) : null;
-  } catch (_e) {
+    if (!m) { lastFrameError = "model replied without the JSON block the prompt asks for"; return null; }
+    return JSON.parse(m[0]);
+  } catch (e) {
     // A framing failure must not cost the retrieval. The feed ships unframed.
+    lastFrameError = "framing threw: " + String((e as Error)?.message || e).slice(0, 200);
     return null;
   }
 }
@@ -471,7 +486,8 @@ async function runOne(db: any, cfg: Cfg, windowDays: number) {
 
   return {
     workspace: cfg.workspace, own: own.length, candidates: papers.length,
-    trials: trials.length, framed: !!framed, feedRowId, stored: true,
+    trials: trials.length, framed: !!framed, frameError: lastFrameError || undefined,
+    feedRowId, stored: true,
     papersOut: feed.newPapers.length, trialsOut: feed.inDevelopment.length,
   };
 }
