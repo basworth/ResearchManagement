@@ -65,6 +65,15 @@ const ALLOWED = [
     requires: null,
   },
   {
+    fn: "announce",
+    match: 'eq("kind", "profile")',
+    why: "an app admin's audience is legitimately every lab, so the read cannot be filtered in "
+       + "SQL. It selects the workspace column and groups in code, and the audience a LAB admin "
+       + "asks for is clamped to their own workspace on the server before this runs — the request "
+       + "does not get to choose who a message reaches.",
+    requires: "const audience = isAppAdmin",
+  },
+  {
     fn: "research-watch",
     match: 'eq("kind", "watchConfig")',
     why: "it is a scheduled job over every lab: it reads each lab's own feed settings in order "
@@ -80,8 +89,9 @@ console.log("\n-- Every bulk read of people's data is scoped to one lab --");
 
 // Named rather than counted, so adding a function is a deliberate edit here instead of a number
 // going up. A scan that silently skips a new function is worse than no scan.
-const EXPECTED = ["admin-requests", "feedback-alert", "import-publications", "ingest-email",
-                  "invite-user", "request-update", "research-watch", "stage-alerts", "task-emails"];
+const EXPECTED = ["admin-requests", "announce", "feedback-alert", "import-publications",
+                  "ingest-email", "invite-user", "request-update", "research-watch", "stage-alerts",
+                  "task-emails"];
 const fns = fs.readdirSync(DIR).filter((d) => fs.existsSync(path.join(DIR, d, "index.ts"))).sort();
 check("every known function is scanned, and no unknown one is skipped",
   JSON.stringify(fns) === JSON.stringify(EXPECTED), { found: fns, expected: EXPECTED });

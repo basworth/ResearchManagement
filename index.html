@@ -3484,6 +3484,24 @@ function fmtSize(n) {
   if (!n) return "";
   return n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
 }
+// "25 minutes ago" rather than a timestamp. Used where the question is "has this just happened?"
+// — a duplicate announcement, say — which a clock time makes you do arithmetic to answer.
+function fmtWhen(iso) {
+  if (!iso) return "at some point";
+  const t = new Date(iso).getTime();
+  if (!isFinite(t)) return "at some point";
+  const mins = Math.round((Date.now() - t) / 60000);
+  if (mins < 1) return "just now";
+  if (mins === 1) return "a minute ago";
+  if (mins < 60) return `${mins} minutes ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs === 1) return "an hour ago";
+  if (hrs < 24) return `${hrs} hours ago`;
+  const days = Math.round(hrs / 24);
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days} days ago`;
+  return "on " + fmtDate(iso.slice(0, 10));
+}
 async function downloadDoc(dc) {
   let content = localStorage.getItem("rt-file-" + dc.id);
   if (!content && sb) {
@@ -4965,7 +4983,6 @@ function openAddDocSheet(s, opts) {
       const listEl = sh.querySelector("#doc-staged");
       const spillEl = sh.querySelector("#doc-spill");
       const descNote = sh.querySelector("#doc-desc-note");
-      const fmtSize = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
       const paint = () => {
         const uploading = how.value === "upload";
         sh.querySelector("#doc-link-row").style.display = uploading ? "none" : "";
@@ -9067,6 +9084,47 @@ function confirmDuplicateInvite(email, similar, say, input) {
       }
     }, null, { saveLabel: "Send it anyway" });
 }
+// What has been announced before. Worth having on screen for the same reason the invite list is:
+// without it, "did anyone tell them?" is answered from memory.
+async function loadAnnouncements() {
+  const box = document.getElementById("ann-history");
+  if (!box) return;
+  if (!sb) { box.innerHTML = `<div style="color:var(--text2);font-size:14px;padding:6px 0">Connect Team Sync to see what's been sent.</div>`; return; }
+  try {
+    const { data: sess } = await sb.auth.getSession();
+    const tok = sess && sess.session && sess.session.access_token;
+    if (!tok) { box.innerHTML = `<div style="color:var(--text2);font-size:14px;padding:6px 0">Sign in again to see what's been sent.</div>`; return; }
+    const res = await fetch(SUPABASE_URL + "/functions/v1/announce", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
+      body: JSON.stringify({ action: "history" })
+    });
+    const out = await res.json().catch(() => ({}));
+    if (res.status === 404 || /unknown action/i.test(out.error || "")) {
+      box.innerHTML = `<div style="color:var(--text2);font-size:14px;padding:6px 0">The server hasn't picked up announcements yet — this fills in once the update lands.</div>`;
+      return;
+    }
+    if (!res.ok || out.error) throw new Error(out.error || ("Failed (" + res.status + ")"));
+    const list = out.history || [];
+    if (!list.length) {
+      box.innerHTML = `<div style="color:var(--text2);font-size:14px;padding:6px 0">Nothing sent yet.</div>`;
+      return;
+    }
+    box.innerHTML = list.map(a => `
+      <div class="task-row" style="padding:8px 0">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(a.subject || "(no subject)")}</div>
+          <div style="font-size:12px;color:var(--text2)">
+            ${esc(fmtWhen(a.sentAt))}${a.by ? ` · ${esc(a.by)}` : ""} ·
+            ${a.audience === "all" ? "everybody" : esc(a.audience)} ·
+            ${a.delivered} delivered${a.failed ? `, <span style="color:var(--orange)">${a.failed} failed</span>` : ""}
+          </div>
+        </div>
+      </div>`).join("");
+  } catch (e) {
+    box.innerHTML = `<div style="color:var(--red);font-size:13.5px;padding:6px 0">Couldn't load what's been sent — ${esc(e.message || "unknown error")}</div>`;
+  }
+}
 // Invited-but-never-signed-in accounts. Has to come from the server: no profile row exists until
 // someone logs in, so from the browser these accounts are invisible.
 async function loadPendingInvites() {
@@ -9386,6 +9444,44 @@ function renderSettings() {
   </div>
   <div id="pending-invites" class="card" style="padding:6px 14px"><div style="color:var(--text2);font-size:14px">Checking…</div></div>
 
+  <!-- Announcements. Until now this was Adam pasting into Gmail, which left no record of what was
+       said, no idea who it reached, and the address list re-gathered by hand every time. -->
+  <div class="section-title">Send an Announcement</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
+    One note to everybody, sent from here and kept. Each person gets their own copy, so nobody sees
+    anyone else's address. ${isAppAdmin()
+      ? "You can send to every lab or to one."
+      : `This goes to ${esc(myWorkspace)} only.`}
+    People who were invited but have never signed in aren't included — they have no address on
+    file here yet, and they'd be reading about features they've not seen.
+  </div>
+  <div class="card">
+    ${isAppAdmin() ? `
+    <div class="frow" style="padding:0"><label for="ann-audience">Who</label>
+      <select id="ann-audience" style="flex:1">
+        <option value="all">Everybody, every lab</option>
+        ${labsIAmIn().map(w => `<option value="${esc(w)}">${esc(w)} only</option>`).join("")}
+      </select>
+    </div>` : ""}
+    <div class="fld" style="margin-top:${isAppAdmin() ? "10" : "0"}px"><label for="ann-subject">Subject</label>
+      <input id="ann-subject" placeholder="e.g. Buttons that weren't working are fixed" autocomplete="off"
+        style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+    </div>
+    <div class="fld" style="margin-top:10px"><label for="ann-body">The note</label>
+      <textarea id="ann-body" rows="9" placeholder="Write it as you'd say it. Leave a blank line between paragraphs. A line starting with - becomes a bullet."
+        style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;resize:vertical"></textarea>
+    </div>
+    <div id="ann-who" style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:2px 2px 0 2px">Checking who this would reach…</div>
+    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+      <button class="btn secondary" id="ann-preview" style="flex:none">Preview it</button>
+      <button id="ann-send" style="flex:none;border:none;background:var(--blue);color:#fff;border-radius:8px;padding:10px 18px;font-weight:700;font-size:15px;cursor:pointer;font-family:inherit">Send</button>
+    </div>
+    <div id="ann-msg" style="font-size:13px;line-height:1.45;margin-top:8px"></div>
+  </div>
+
+  <div class="section-title">Announcements Sent</div>
+  <div id="ann-history" class="card" style="padding:6px 14px"><div style="color:var(--text2);font-size:14px">Checking…</div></div>
+
   ${(() => {
     // Only worth a section when there's something in it — an empty "Linked Accounts" heading on
     // every visit is just noise.
@@ -9670,6 +9766,144 @@ function renderSettings() {
     toast(`Forgot the rule for “${key}” — records already merged are unchanged`);
   });
 
+  // ---------- Announcements ----------
+  // Note the headers: Content-Type and Authorization, nothing else. Every function call in this
+  // app uses exactly those two, which is why none of them were affected by the CORS gap found on
+  // 21 Oct 2026 — that only bit callers using supabase-js's functions.invoke(), which adds apikey
+  // and x-client-info of its own. Keep it this way: a header added here needs the matching entry
+  // in every function's Access-Control-Allow-Headers or the call dies with no status code at all.
+  async function callAnnounceFn(payload) {
+    if (!sb) throw new Error("Not connected — try again in a moment.");
+    const { data: sess } = await sb.auth.getSession();
+    const tok = sess && sess.session && sess.session.access_token;
+    if (!tok) throw new Error("Your session expired — sign out and back in.");
+    const res = await fetch(SUPABASE_URL + "/functions/v1/announce", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
+      body: JSON.stringify(payload)
+    });
+    const out = await res.json().catch(() => ({}));
+    if (res.status === 404) throw new Error("the server hasn't picked up announcements yet — it'll start working once the update lands.");
+    // 409 is the "you already sent this" answer, which the caller handles rather than treats as a
+    // failure, so it is returned intact instead of thrown.
+    if (res.status === 409) return Object.assign({ duplicate: true }, out);
+    if (!res.ok || out.error) throw new Error(out.error || ("Failed (" + res.status + ")"));
+    return out;
+  }
+  const annSubject = document.getElementById("ann-subject");
+  const annBody = document.getElementById("ann-body");
+  const annAudience = document.getElementById("ann-audience");
+  const annWho = document.getElementById("ann-who");
+  const annSend = document.getElementById("ann-send");
+  if (annSubject && annBody && annSend) {
+    const annMsg = document.getElementById("ann-msg");
+    const say = (t, c) => { if (annMsg) { annMsg.textContent = t; annMsg.style.color = c || "var(--text2)"; } };
+    const audienceNow = () => (annAudience ? annAudience.value : myWorkspace);
+    // The recipient count is read from the server, not guessed from the profiles this device
+    // happens to hold — a device that hasn't synced would quietly under-report who it reaches,
+    // which is the worst possible thing to be wrong about on a Send button.
+    const refreshWho = async () => {
+      if (!annWho) return;
+      annWho.textContent = "Checking who this would reach…";
+      try {
+        const out = await callAnnounceFn({ action: "preview", audience: audienceNow(),
+          subject: (annSubject.value || "").trim(), body: (annBody.value || "").trim() });
+        const n = out.count || 0;
+        const labs = (out.labs || []).join(", ");
+        annWho.innerHTML = n
+          ? `Goes to <b>${n} ${n === 1 ? "person" : "people"}</b>${labs ? ` across ${esc(labs)}` : ""}.`
+            + (out.alreadySent ? ` <span style="color:var(--orange)">An identical note went out ${esc(fmtWhen(out.alreadySent.sentAt))} — you'll be asked to confirm.</span>` : "")
+          : `<span style="color:var(--orange)">Nobody in that audience has an address on file yet.</span>`;
+      } catch (e) {
+        annWho.textContent = "Couldn't check the recipients — " + (e.message || "unknown error");
+      }
+    };
+    if (annAudience) annAudience.onchange = refreshWho;
+    refreshWho();
+
+    const preview = document.getElementById("ann-preview");
+    if (preview) preview.onclick = () => {
+      const subject = (annSubject.value || "").trim();
+      const text = (annBody.value || "").trim();
+      if (!subject && !text) { say("Write it first, then preview.", "var(--orange)"); return; }
+      // Rendered the same way the function renders it: blank line is a paragraph, "- " is a
+      // bullet. A preview built by different rules would be a preview of nothing.
+      const blocks = text.replace(/\r\n/g, "\n").split(/\n{2,}/).map(b => {
+        const lines = b.split("\n").filter(l => l.trim() !== "");
+        if (!lines.length) return "";
+        if (lines.every(l => /^\s*[-*]\s+/.test(l))) {
+          return `<ul style="margin:0 0 12px 0;padding-left:20px">${lines.map(l => `<li style="margin:0 0 5px 0">${esc(l.replace(/^\s*[-*]\s+/, ""))}</li>`).join("")}</ul>`;
+        }
+        return `<p style="margin:0 0 12px 0">${lines.map(l => esc(l)).join("<br>")}</p>`;
+      }).join("");
+      openSheet("Preview", `
+        <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+          This is what lands in their inbox. Each person gets their own copy — nobody sees anyone
+          else's address.
+        </div>
+        <div class="card">
+          <div style="font-size:12px;color:var(--text2)">Subject</div>
+          <div style="font-size:15px;font-weight:700;margin-bottom:12px">${esc(subject) || "<span style='opacity:.5'>(no subject yet)</span>"}</div>
+          <div style="font-size:14.5px;line-height:1.55">${blocks || "<span style='opacity:.5'>(nothing written yet)</span>"}</div>
+        </div>`,
+        () => true, null, { saveLabel: "Close", cancelLabel: "Back" });
+    };
+
+    const doSend = async (confirm) => {
+      const subject = (annSubject.value || "").trim();
+      const text = (annBody.value || "").trim();
+      if (!subject) { say("Give it a subject — it's the only part some people read.", "var(--orange)"); return; }
+      if (!text) { say("The note is empty.", "var(--orange)"); return; }
+      annSend.disabled = true; annSend.textContent = "Sending…"; say("", "");
+      try {
+        const out = await callAnnounceFn({ action: "send", audience: audienceNow(), subject, body: text, confirm: !!confirm });
+        if (out.duplicate) {
+          // Nearly always a double-click or a retry after a timeout that actually worked. Asked
+          // rather than refused, because sometimes you really do mean to send it again.
+          openSheet("Send it again?", `
+            <div class="card" style="font-size:13.5px;line-height:1.55">
+              That exact note already went out ${esc(fmtWhen((out.alreadySent || {}).sentAt))}${(out.alreadySent || {}).by ? ` by ${esc(out.alreadySent.by)}` : ""}.
+              Everybody in this audience has it already.
+            </div>
+            <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+              Sending again means a second copy in every inbox. Usually this message means a click
+              landed twice, or the first attempt looked like it failed when it hadn't.
+            </div>`,
+            () => { doSend(true); return true; }, null, { saveLabel: "Send it again", cancelLabel: "Don't" });
+          say("Already sent — see the question above.", "var(--orange)");
+          return;
+        }
+        say(out.message || "Sent.", (out.failed && out.failed.length) ? "var(--orange)" : "var(--green)");
+        toast(out.message || "Announcement sent");
+        if (out.failed && out.failed.length) {
+          // Named, not counted. A bounce you can see is a bounce somebody can chase.
+          say(`${out.message}. Didn't reach: ${out.failed.map(f => f.email).join(", ")}`, "var(--orange)");
+        } else {
+          annSubject.value = ""; annBody.value = "";
+        }
+        loadAnnouncements();
+      } catch (e) {
+        say(e.message || "Could not send it.", "var(--red)");
+        toast("Announcement failed — " + (e.message || "unknown error"));
+      } finally {
+        annSend.disabled = false; annSend.textContent = "Send";
+      }
+    };
+    annSend.onclick = () => {
+      const n = (annWho && /Goes to/.test(annWho.textContent)) ? annWho.textContent : "";
+      // One confirmation, because the thing being spent is other people's attention and it cannot
+      // be taken back once it has gone.
+      openSheet("Send this to everybody?", `
+        <div class="card" style="font-size:13.5px;line-height:1.55">
+          ${esc(n || "This goes out now.")} There is no unsend.
+        </div>
+        <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+          Use <b>Preview it</b> first if you haven't — it shows exactly what lands in their inbox.
+        </div>`,
+        () => { doSend(false); return true; }, null, { saveLabel: "Send it", cancelLabel: "Not yet" });
+    };
+  }
+
   // ---------- Admin access requests ----------
   async function callAdminFn(payload) {
     const { data: sess } = await sb.auth.getSession();
@@ -9878,6 +10112,7 @@ function renderSettings() {
       }, null, { saveLabel: "Send" });
   }
   loadPendingInvites();
+  loadAnnouncements();
   $main.querySelectorAll("[data-unlink]").forEach(b => b.onclick = () => {
     const sp = profileFor(b.dataset.unlink);
     if (!sp) return;
