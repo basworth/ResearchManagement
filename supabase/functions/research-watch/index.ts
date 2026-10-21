@@ -270,7 +270,12 @@ async function frame(cfg: Cfg, own: any[], papers: any[], trials: any[], prefs: 
   if (!ANTHROPIC_KEY) { lastFrameError = "no ANTHROPIC_API_KEY in this instance's environment"; return null; }
   const body = {
     model: "claude-sonnet-5-5",
-    max_tokens: 4000,
+    // 4000 was not enough and failed in the most confusing possible way. Twenty-five papers and
+    // twelve trials, each needing `short`, `forWork` and `versus` written out, runs well past it —
+    // so the reply stopped mid-array and the JSON parse blew up at "position 8507", which reads
+    // like the model returned garbage rather than like it was cut off. See the stop_reason check
+    // below, which now names truncation for what it is.
+    max_tokens: 16000,
     messages: [{
       role: "user",
       content:
@@ -321,10 +326,26 @@ Rules:
       return null;
     }
     const out = await r.json();
+    // Checked BEFORE parsing. A truncated reply is still valid-looking text that fails to parse
+    // halfway through, and "unexpected token at position 8507" sends you looking at the model's
+    // output when the actual problem is the ceiling you set on it.
+    if (out?.stop_reason === "max_tokens") {
+      lastFrameError = `model reply hit the ${body.max_tokens}-token ceiling and was cut off mid-JSON `
+        + `— raise max_tokens or send fewer candidates`;
+      return null;
+    }
     const text = (out?.content ?? []).map((c: any) => c?.text ?? "").join("");
     const m = text.match(/\{[\s\S]*\}/);
     if (!m) { lastFrameError = "model replied without the JSON block the prompt asks for"; return null; }
-    return JSON.parse(m[0]);
+    try {
+      return JSON.parse(m[0]);
+    } catch (pe) {
+      // Reported with the length and the failure point, because the two causes — truncation and
+      // genuinely malformed output — look identical from the message alone.
+      lastFrameError = `model JSON would not parse (${m[0].length} chars, stop_reason=${out?.stop_reason}): `
+        + String((pe as Error)?.message || pe).slice(0, 160);
+      return null;
+    }
   } catch (e) {
     // A framing failure must not cost the retrieval. The feed ships unframed.
     lastFrameError = "framing threw: " + String((e as Error)?.message || e).slice(0, 200);
