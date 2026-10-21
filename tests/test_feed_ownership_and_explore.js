@@ -195,13 +195,28 @@ function boot(items) {
     check("the reason that line cannot move is written down",
       /citations that look perfect and aren't/.test(fn));
     check("exploring stores nothing", !/explore[\s\S]{0,2000}db\.from\("items"\)\.upsert/.test(fn));
-    check("the lab's learned exclusions still apply", /if \(notKws\.length\) parts\.push/.test(fn));
+    check("the lab's learned exclusions still apply",
+      /const notClause = notKws\.map\(\(k\) => `NOT \$\{phrase\(k\)\}\[Title\/Abstract\]`\)/.test(fn));
+    // THE ONE THAT MATTERED MOST. PubMed parses "A AND NOT (B)" by dropping the NOT and keeping
+    // the AND, so an exclusion list silently becomes a REQUIREMENT list. Measured, not assumed:
+    // "bone marrow aspirate concentrate knee osteoarthritis" over one year returns 40 papers; with
+    // "AND NOT (YouTube OR case report)" it returned 2, and the query_translation showed
+    // `AND ("YouTube"[All Fields] OR "case report"[All Fields])`. With the binary form, 38.
+    // Comments have to quote the broken form to explain it, so this reads CODE lines only.
+    const codeOnly = fn.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join("\n");
+    check("exclusions use the binary NOT, never AND NOT",
+      !/AND NOT/.test(codeOnly) && /\$\{notClause \? " " \+ notClause : ""\}/.test(fn),
+      (codeOnly.match(/.{0,40}AND NOT.{0,40}/) || [])[0]);
+    check("...and the measurement is recorded, so nobody 'tidies' it back",
+      /2 results wrong, 38 right/.test(fn));
     // The first live run returned 2 papers for "bone marrow aspirate concentrate knee
     // osteoarthritis" over a whole year, because the whole string was phrase()-wrapped and PubMed
     // hunted for that exact phrase. A thin result set reads as "the field is quiet", which is the
     // worst possible way for a search box to be wrong.
-    check("the typed query is NOT wrapped in quotes", /const parts = \[`\(\$\{q\}\)`\]/.test(fn));
-    check("...and why is written down", /reads as "the literature is thin"/.test(fn));
+    check("the typed query is NOT wrapped in quotes",
+      /const term = `\(\$\{q\}\)/.test(fn) && !/phrase\(q\)/.test(fn));
+    check("...and why both of these bit is written down",
+      /IS NOT AN EXCLUSION/.test(fn) && /2 results wrong, 38 right/.test(fn));
     check("...but the institution filter does not, so other groups' work shows up",
       /The institution is NOT applied/.test(fn));
 

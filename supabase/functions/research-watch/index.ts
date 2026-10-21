@@ -551,14 +551,21 @@ async function explore(cfg: Cfg, query: string, windowDays: number, max: number)
   // The lab's own exclusions still apply — they were learned the hard way and are as true of a
   // typed search as of a scheduled one. The institution is NOT applied: the point of exploring is
   // to see what other groups are doing.
-  // NOT phrase()-wrapped. Wrapping the whole typed string in quotes makes PubMed hunt for that
-  // exact phrase: "bone marrow aspirate concentrate knee osteoarthritis" returned 2 papers in a
-  // year, which reads as "the literature is thin" when it actually means "your query was wrong".
-  // Passed through as typed, so PubMed's own term mapping applies — the same thing that happens
-  // when you type into the PubMed box. Anyone who wants an exact phrase can type the quotes.
-  const parts = [`(${q})`];
-  if (notKws.length) parts.push(`NOT (${notKws.map(phrase).join(" OR ")})`);
-  const term = parts.join(" AND ");
+  // TWO THINGS HERE THAT BOTH BIT, measured against PubMed rather than assumed:
+  //
+  // 1. The typed string is NOT phrase()-wrapped. Quoting the whole thing makes PubMed hunt for
+  //    that exact phrase. Passed through as typed, PubMed's own term mapping applies — the same
+  //    thing that happens when you type into the PubMed box.
+  //
+  // 2. `AND NOT (…)` IS NOT AN EXCLUSION. PubMed parses it by dropping the NOT and keeping the
+  //    AND, so "AND NOT (YouTube OR case report)" silently became "AND (YouTube OR case report)"
+  //    — it REQUIRED the very things it was meant to remove. "bone marrow aspirate concentrate
+  //    knee osteoarthritis" over a year: 40 papers exist, this returned 2. The correct form is
+  //    the binary `A NOT B`, space-joined and field-tagged, which is what pubmedQueries above has
+  //    always used — so the weekly feed was never affected, only this box, for the hour it
+  //    existed. Verified against PubMed both ways: 2 results wrong, 38 right.
+  const notClause = notKws.map((k) => `NOT ${phrase(k)}[Title/Abstract]`).join(" ");
+  const term = `(${q})${notClause ? " " + notClause : ""}`;
   const ids = await pubmedSearch(term, windowDays, Math.min(40, max * 3));
   const papers = (await pubmedSummaries(ids)).map(summaryToPaper);
   const trials = await trialSearch(Object.assign({}, cfg, { keywords: [q] }), Math.min(8, max));
