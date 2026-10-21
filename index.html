@@ -1180,7 +1180,38 @@ function blankWatchConfig(ws) {
     societies: [],
     enabled: true,
     lastRunAt: "",
+    // WHO MAY TUNE THE FEED. Everyone in the lab reads it; only these people steer it.
+    //
+    // Adam, 21 Oct 2026: "don't show the option to train to the people that work in the lab …
+    // This should sit in the lab PI's lap." Before this, the buttons were on every row for
+    // everyone, votes were stored per person and POOLED at the next run — so an RA's thumbs-down
+    // was already changing what the PI saw, and nobody could have known.
+    //
+    // Lab admin is deliberately NOT the gate: Will and TJ are lab admins of sports-yanke, and
+    // this is not a thing they should hold. It is one named owner, who may delegate.
+    ownerId: "",
+    tuners: [],
   };
+}
+// Reading the feed is for the whole lab; steering it is not. The owner is the PI; `tuners` are
+// whoever they have chosen to delegate to in Settings. An app admin is NOT included — being able
+// to administer the system is not the same as deciding what a PI's reading list should contain.
+function feedOwnerId(cfg) {
+  return String((cfg || {}).ownerId || "");
+}
+function canTuneFeed(cfg) {
+  if (!currentUser) return false;
+  const c = cfg || state.watchConfig || null;
+  // No config at all is the same case as an unclaimed one: there is nobody named yet, so the
+  // lab's admin holds it until somebody is. Returning false here instead locked a lab out of the
+  // feed it had just started using.
+  if (!c) return !!isAdmin();
+  const owner = feedOwnerId(c);
+  // An unclaimed feed falls to the lab's admin, so a new lab is not locked out of its own
+  // settings before anyone has been named — claiming it is what writes ownerId.
+  if (!owner) return !!isAdmin();
+  if (currentUser.id === owner) return true;
+  return (Array.isArray(c.tuners) ? c.tuners : []).map(String).includes(String(currentUser.id));
 }
 function watchConfig() {
   return state.watchConfig || blankWatchConfig(myWorkspace);
@@ -1206,8 +1237,93 @@ function myWatchVotes() {
 }
 // `key` is the PMID or NCT id — stable across regenerations, which is the whole point: a vote on
 // a paper should still count next week when the feed is rebuilt.
+// ---------- Kept ideas ----------
+// One row per lab, not per person: "worth pursuing" is a lab decision, and two people keeping the
+// same paper should not produce two entries. Stored with the framing that was on screen at the
+// time, because the whole point is that it outlives the feed it came from.
+function watchKeepRowId(ws) { return derivedRowId("watchKeep:" + (ws || FIRST_WORKSPACE)); }
+function keptResearch() { return Array.isArray(state.watchKeeps) ? state.watchKeeps : []; }
+function keptResearchKeys() { return keptResearch().map(k => String(k.key || "")); }
+function findShownResearchItem(key) {
+  const pools = [
+    ((exploreState.result || {}).papers) || [], ((exploreState.result || {}).trials) || [],
+    ((watchData || {}).newPapers) || [], ((watchData || {}).inDevelopment) || [],
+  ];
+  for (const arr of pools) {
+    const hit = arr.find(x => String(x.pmid || x.id || "") === String(key));
+    if (hit) return hit;
+  }
+  return null;
+}
+function keepResearchItem(key) {
+  if (!currentUser) return;
+  if (blockOfflineEdit("Keeping an idea")) return;
+  const list = keptResearch().slice();
+  const at = list.findIndex(k => String(k.key) === String(key));
+  if (at >= 0) {
+    // Removing is a correction, not a deletion of anything anyone will miss — the paper itself is
+    // untouched and still a PubMed link away. Same tap undoes it, as everywhere else here.
+    const gone = list.splice(at, 1)[0];
+    saveKeptResearch(list);
+    toast(`Removed "${String(gone.title || key).slice(0, 40)}" from kept ideas`);
+    return;
+  }
+  const it = findShownResearchItem(key);
+  if (!it) { toast("Couldn't find that one on screen — reload and try again"); return; }
+  list.unshift({
+    key: String(key),
+    kind: it.pmid ? "paper" : "trial",
+    pmid: it.pmid || "", nct: it.pmid ? "" : (it.id || ""),
+    title: it.title || "", meta: it.meta || "",
+    short: it.short || "", forWork: it.forWork || "", frame: it.frame || "",
+    keptBy: me(), keptAt: todayStr(),
+  });
+  saveKeptResearch(list);
+  toast(`Kept for the lab — see "kept ideas" at the top of Research`);
+}
+function saveKeptResearch(list) {
+  const id = watchKeepRowId(myWorkspace);
+  state.watchKeeps = list;
+  saveLocal();
+  pushItem("watchKeep", { id, workspace: myWorkspace, items: list }, id);
+  render();
+}
+function openKeptIdeasSheet() {
+  const list = keptResearch();
+  openSheet(`Kept ideas (${list.length})`, `
+    <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+      Papers and trials anyone in the lab marked as worth pursuing. These survive the weekly
+      rebuild — the feed itself only covers the last 30 days, so without this a paper you wanted
+      to act on would quietly disappear.
+    </div>
+    ${list.length ? list.map(k => `
+      <div class="card" style="padding:10px 14px">
+        <div style="font-size:14.5px;font-weight:600;line-height:1.35">${esc(k.title || k.key)}</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:2px">
+          ${esc(k.meta || "")}${k.meta ? " · " : ""}kept by ${esc(k.keptBy || "")}${k.keptAt ? " on " + esc(fmtDate(k.keptAt)) : ""}
+        </div>
+        ${k.short ? `<div style="font-size:13.5px;line-height:1.5;margin-top:6px">${esc(k.short)}</div>` : ""}
+        ${k.forWork ? `<div style="font-size:13px;color:var(--text2);line-height:1.5;margin-top:4px"><b>For your work:</b> ${esc(k.forWork)}</div>` : ""}
+        <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
+          ${k.pmid ? `<a href="https://pubmed.ncbi.nlm.nih.gov/${esc(k.pmid)}/" target="_blank" rel="noopener" style="color:var(--blue);font-size:13px;font-weight:700;text-decoration:none">PubMed ↗</a>` : ""}
+          ${k.nct ? `<a href="https://clinicaltrials.gov/study/${esc(k.nct)}" target="_blank" rel="noopener" style="color:var(--blue);font-size:13px;font-weight:700;text-decoration:none">ClinicalTrials ↗</a>` : ""}
+          <button type="button" data-kept-drop="${esc(k.key)}" style="border:none;background:none;color:var(--text2);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:0">Remove</button>
+        </div>
+      </div>`).join("")
+      : `<div class="card"><div style="color:var(--text2);font-size:14px">Nothing kept yet. Open any result and press <b>Keep this</b>.</div></div>`}`,
+    () => true,
+    (sh) => sh.querySelectorAll("[data-kept-drop]").forEach(b => b.onclick = () => {
+      keepResearchItem(b.dataset.keptDrop);
+      closeSheet();
+    }),
+    { saveLabel: "Close", cancelLabel: "Back" });
+}
 function voteOnWatchItem(key, dir) {
   if (!currentUser) return;
+  // Checked here as well as at render time. Hiding a button is a courtesy, not a control — this
+  // is the function a stale page or a console would reach, and a vote written by the wrong person
+  // would be pooled into the PI's next run with nothing to show where it came from.
+  if (!canTuneFeed()) { toast("Only the lab's PI can change what the feed looks for"); return; }
   const v = JSON.parse(JSON.stringify(myWatchVotes()));
   v.id = watchVoteRowId(currentUser.id, myWorkspace);
   v.userId = currentUser.id;
@@ -1271,7 +1387,7 @@ function setFieldSub(field, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [], watchConfig: null, watchVotes: null };
+let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [], watchConfig: null, watchVotes: null, watchKeeps: [] };
 // Which tab you land on.
 //
 // Research is the first thing you see each day: it's the page you read rather than edit, and the
@@ -2390,6 +2506,10 @@ async function pullAll() {
       ? rows.find(r => r.kind === "watchVote" && r.id === watchVoteRowId(currentUser.id, ws))
       : null;
     state.watchVotes = wvRow ? wvRow.data : null;
+    // Kept ideas are the lab's, not one person's — one row, everyone sees the same list.
+    const wkRow = rows.find(r => r.kind === "watchKeep" && r.id === watchKeepRowId(ws))
+               || rows.find(r => r.kind === "watchKeep" && r.workspace === ws);
+    state.watchKeeps = (wkRow && Array.isArray(wkRow.data && wkRow.data.items)) ? wkRow.data.items : [];
     setMatchHints(state.matchHints);
   setMeetings(state.meetings);
     const meta = rows.find(r => r.kind === "meta" && r.id === metaRowId(ws))
@@ -2762,6 +2882,15 @@ function applyRealtimeRow(kind, id, data, updatedAt, ws) {
   if (kind === "watchVote") {
     // Only mine. Another person's votes arriving over realtime must not replace my own.
     if (currentUser && data && data.userId === currentUser.id) { state.watchVotes = data; saveLocal(); render(); }
+    return;
+  }
+  if (kind === "watchKeep") {
+    // Shared by the whole lab, so a colleague keeping something should appear here without a
+    // reload — but only this lab's, for the same reason as the feed above.
+    if (!ws || ws === myWorkspace) {
+      state.watchKeeps = Array.isArray(data && data.items) ? data.items : [];
+      saveLocal(); render();
+    }
     return;
   }
   const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "mtgTag" ? state.mtgTags : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : kind === "filterSet" ? state.filterSets : kind === "suggestion" ? state.suggestions : kind === "matchHint" ? state.matchHints : null;
@@ -5781,6 +5910,11 @@ function rwDetailRow(label, value) {
 // The key is the PMID or NCT id, so a vote survives the feed being regenerated next week.
 function rwVoteHTML(key) {
   if (!key) return "";
+  // The whole lab READS the feed; only the owner and their delegates STEER it. Hidden rather than
+  // disabled, because a greyed-out control invites people to ask why they can't have it — and
+  // this is a deliberate division of responsibility, not a permission anyone is missing out on.
+  // The server ignores votes from anyone else too; see readPrefs in research-watch.
+  if (!canTuneFeed()) return "";
   const v = watchVoteFor(key);
   const btn = (dir, label, title) => `
     <button type="button" class="mini-btn rw-vote" data-rw-vote="${rwEsc(dir)}" data-rw-key="${rwEsc(key)}"
@@ -5814,9 +5948,25 @@ function rwItemHTML(it, kind) {
         ${rwDetailRow("Frame", it.frame)}
         ${isPaper && it.versus ? `<div class="rw-row"><b>vs yours</b><span>${rwEsc(it.versus)}${refs ? `<br><span class="rw-note">${refs}</span>` : ""}</span></div>` : ""}
         ${it.forWork ? `<div class="rw-row dir"><b>For your work</b><span>${rwEsc(it.forWork)}</span></div>` : ""}
+        ${rwKeepHTML(it, isPaper)}
         ${rwVoteHTML(isPaper ? it.pmid : it.id)}
       </div>
     </details>`;
+}
+// Keep is the answer to "how do we manage when studies have been reviewed and categorized?".
+// Liking something never removed it and disliking it was the only way to make it go away, so the
+// only vocabulary available was approval — and anything you decided to act on vanished with the
+// rest when the 30-day window moved. Keep is for the whole lab, separate from the PI's tuning:
+// anyone can say "this one is worth pursuing" and have it survive the next rebuild.
+function rwKeepHTML(it, isPaper) {
+  const key = String((isPaper ? it.pmid : it.id) || "");
+  if (!key) return "";
+  const already = keptResearchKeys().includes(key);
+  return `<div class="rw-row"><b>Worth pursuing?</b><span style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button type="button" class="mini-btn" data-rw-keep="${rwEsc(key)}" style="margin:0;${already ? "background:var(--blue);color:#fff;border-color:var(--blue)" : ""}">
+        ${already ? "Kept" : "Keep this"}</button>
+      <span class="rw-note">${already ? "Saved for the lab — tap again to remove." : "Saves it for the lab, so it outlives this week's list."}</span>
+    </span></div>`;
 }
 // The tail that sits under both lists: provenance, the unpublished-data flag, and the footnotes.
 function rwTailHTML(w) {
@@ -5911,6 +6061,7 @@ function renderResearch() {
   // Headline numbers across the top, then two columns the whole way down. Nothing breaks out to
   // full width partway through: a column that widens halfway down the page reads as a mistake.
   $main.innerHTML = (stats.band || "")
+    + exploreBoxHTML()
     + `<div class="rw-grid">${side}${main}</div>`
     + (hasWatch ? rwTailHTML(w) : "");
   if (!stats.empty) wirePubStats();
@@ -5918,6 +6069,112 @@ function renderResearch() {
   $main.querySelectorAll("[data-rw-vote]").forEach(b => b.onclick = (e) => {
     e.preventDefault(); e.stopPropagation();
     voteOnWatchItem(b.dataset.rwKey, b.dataset.rwVote);
+  });
+  wireExploreBox();
+}
+// ---------- Explore: ask now, answer now ----------
+//
+// The list below this box is the weekly digest — what arrived while you weren't looking. This is
+// the other question: what should I work on next. It is open to the whole lab, because searching
+// the literature is not a privilege, and nothing it does touches anyone else's feed: nothing is
+// stored unless somebody presses Keep.
+//
+// Retrieval still belongs to PubMed. The typed words become a PubMed query, PubMed says what
+// exists, and the model only explains and ranks what came back — see the note on `explore` in
+// research-watch for why that line is not negotiable.
+let exploreState = { query: "", busy: false, result: null, error: "", windowDays: 180 };
+function exploreBoxHTML() {
+  const r = exploreState.result;
+  const kept = (state.watchKeeps || []).length;
+  return `
+  <div class="card" id="rw-explore" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap">
+      <div style="font-size:12px;color:var(--text2);font-weight:600;letter-spacing:.02em">LOOK FOR SOMETHING NOW</div>
+      ${kept ? `<button type="button" id="rw-kept-btn" style="border:none;background:none;color:var(--blue);font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;padding:0">
+        ${kept} kept idea${kept === 1 ? "" : "s"} →</button>` : ""}
+    </div>
+    <div style="font-size:13px;color:var(--text2);line-height:1.5;margin:6px 2px 10px 2px">
+      Type a question and get an answer now, rather than waiting for the weekly list. PubMed decides
+      what exists; this only explains and ranks what it returns, so every result is a real paper.
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <input id="rw-q" placeholder="e.g. bone marrow aspirate concentrate for knee OA" autocomplete="off"
+        value="${esc(exploreState.query)}"
+        style="flex:1;min-width:220px;border:none;background:var(--bg);border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+      <select id="rw-window" style="flex:0 0 auto">
+        ${[[90, "3 months"], [180, "6 months"], [365, "1 year"], [1095, "3 years"]].map(([d, l]) =>
+          `<option value="${d}"${exploreState.windowDays === d ? " selected" : ""}>${l}</option>`).join("")}
+      </select>
+      <button id="rw-go" style="flex:0 0 auto;border:none;background:var(--blue);color:#fff;border-radius:8px;padding:10px 18px;font-weight:700;font-size:15px;cursor:pointer;font-family:inherit">
+        ${exploreState.busy ? "Looking…" : "Look"}</button>
+    </div>
+    ${exploreState.error ? `<div style="font-size:13px;color:var(--red);margin-top:8px">${esc(exploreState.error)}</div>` : ""}
+    ${exploreState.busy ? `<div class="rw-note" style="margin-top:10px">Searching PubMed and ClinicalTrials, then writing it up — about ten seconds.</div>` : ""}
+    ${r ? exploreResultHTML(r) : ""}
+  </div>`;
+}
+function exploreResultHTML(r) {
+  const papers = r.papers || [], trials = r.trials || [];
+  if (!papers.length && !trials.length) {
+    return `<div class="rw-note" style="margin-top:10px">${esc(r.note || "Nothing found for that.")}</div>`;
+  }
+  return `
+    <div style="border-top:0.5px solid var(--line);margin-top:12px;padding-top:10px">
+      <div class="rw-note" style="margin-bottom:8px">
+        ${r.found || papers.length} found for <b>${esc(r.query || "")}</b>, last ${r.windowDays} days.
+        ${r.framed ? "" : "Summaries are the papers' own abstracts — the writing step didn't run."}
+      </div>
+      ${trials.length ? `<div class="section-title" style="margin-top:4px">Trials</div>
+        <div class="rw-list">${trials.map(t => rwItemHTML(t, "trial")).join("")}</div>` : ""}
+      ${papers.length ? `<div class="section-title">Papers</div>
+        <div class="rw-list">${papers.map(p => rwItemHTML(p, "paper")).join("")}</div>` : ""}
+    </div>`;
+}
+function wireExploreBox() {
+  const input = document.getElementById("rw-q");
+  const go = document.getElementById("rw-go");
+  const win = document.getElementById("rw-window");
+  if (!input || !go) return;
+  const run = async () => {
+    const q = (input.value || "").trim();
+    if (!q) { toast("Type what you're looking for"); return; }
+    if (!sb) { toast("Looking things up needs Team Sync connected"); return; }
+    exploreState.query = q;
+    exploreState.windowDays = Number(win && win.value) || 180;
+    exploreState.busy = true; exploreState.error = ""; render();
+    try {
+      const { data: sess } = await sb.auth.getSession();
+      const tok = sess && sess.session && sess.session.access_token;
+      if (!tok) throw new Error("Your session expired — sign out and back in.");
+      const res = await fetch(SUPABASE_URL + "/functions/v1/research-watch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
+        body: JSON.stringify({ action: "explore", workspace: myWorkspace, query: q, windowDays: exploreState.windowDays })
+      });
+      const out = await res.json().catch(() => ({}));
+      if (!res.ok || out.error) throw new Error(out.error || ("Failed (" + res.status + ")"));
+      exploreState.result = out;
+      const n = (out.papers || []).length + (out.trials || []).length;
+      toast(n ? `${n} result${n === 1 ? "" : "s"} for "${q}"` : `Nothing found for "${q}"`);
+    } catch (e) {
+      // Named, because "it didn't work" on a search box sends people to the wrong conclusion —
+      // usually that the literature holds nothing, when in fact the call failed.
+      exploreState.error = e.message || "That search didn't run.";
+      toast("Search failed — " + (e.message || "unknown error"));
+    } finally {
+      exploreState.busy = false; render();
+      const again = document.getElementById("rw-q");
+      if (again) { again.focus(); again.setSelectionRange(again.value.length, again.value.length); }
+    }
+  };
+  go.onclick = run;
+  input.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); run(); } };
+  const keptBtn = document.getElementById("rw-kept-btn");
+  if (keptBtn) keptBtn.onclick = () => openKeptIdeasSheet();
+  // Keep buttons on whatever is currently shown, digest or search results alike.
+  $main.querySelectorAll("[data-rw-keep]").forEach(b => b.onclick = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    keepResearchItem(b.dataset.rwKeep);
   });
 }
 
@@ -9243,6 +9500,16 @@ function renderSettings() {
     </div>
     <button class="btn secondary" id="settings-watch" style="width:auto;padding:8px 14px;flex:none">Open</button>
   </div>
+  ${canTuneFeed() ? `
+  <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px;margin-top:10px">
+    <div style="flex:1;min-width:0">
+      <div style="font-size:15px;font-weight:600">Who can steer the feed</div>
+      <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-top:2px">
+        Everyone in your lab reads the feed and can search it. Only you, and anyone you name here,
+        can tell it to show more or less of something.</div>
+    </div>
+    <button class="btn secondary" id="settings-tuners" style="width:auto;padding:8px 14px;flex:none">Open</button>
+  </div>` : ""}
   ${isAdmin() ? `
   <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px;margin-top:10px">
     <div style="flex:1;min-width:0">
@@ -9668,6 +9935,8 @@ function renderSettings() {
   if (supportBtn) supportBtn.onclick = () => openSupportSheet();
   const watchBtn = document.getElementById("settings-watch");
   if (watchBtn) watchBtn.onclick = () => openWatchSettingsSheet();
+  const tunersBtn = document.getElementById("settings-tuners");
+  if (tunersBtn) tunersBtn.onclick = () => openFeedTunersSheet();
   const teamBtn = document.getElementById("settings-team");
   if (teamBtn) teamBtn.onclick = () => openResearchTeamSheet();
   const divBtn = document.getElementById("settings-divisions");
@@ -11445,6 +11714,91 @@ async function openWatchSettingsSheet() {
       toastAction("Research feed settings saved", "Change them", () => openWatchSettingsSheet());
       return true;
     });
+  wireWatchEnabledRow();
+}
+// Who may steer the feed. The PI holds it; they may hand it to whoever actually reads the
+// literature for them. Deliberately NOT tied to lab admin — Will and TJ administer Adam's lab and
+// should not inherit the dial with it.
+function openFeedTunersSheet() {
+  const cfg = watchConfig();
+  const owner = feedOwnerId(cfg);
+  const members = activeProfiles()
+    .filter(p => String(p.workspace || "") === String(myWorkspace))
+    .filter(p => String(p.id) !== String(owner))
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+  const tuners = (Array.isArray(cfg.tuners) ? cfg.tuners : []).map(String);
+  const ownerName = owner
+    ? ((profileFor(owner) || {}).name || "somebody no longer on the system")
+    : "";
+  openSheet("Who can steer the feed", `
+    <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+      Everyone in ${esc(myWorkspace)} reads the feed and can use <b>Look for something now</b>.
+      Steering it — "more like this", "less like this" — changes what the weekly list contains for
+      the whole lab, so it sits with you.
+    </div>
+    <div class="card">
+      <div style="font-size:12px;color:var(--text2);font-weight:600">FEED OWNER</div>
+      <div style="font-size:15px;font-weight:600;margin-top:2px">${owner ? esc(ownerName) : "Nobody yet — you hold it as lab admin"}</div>
+      ${owner ? "" : `<div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin-top:6px">
+        Claim it and the buttons appear for you alone. Until somebody claims it, any lab admin can
+        steer the feed.</div>
+        <button class="btn secondary" id="ft-claim" style="margin-top:8px">Claim it for me</button>`}
+    </div>
+    <div class="section-title">Also allowed to steer</div>
+    ${members.length ? `<div class="card" style="padding:6px 14px">
+      ${members.map(p => `
+        <div class="frow" style="gap:12px;cursor:pointer;padding:8px 0" data-ft-row="${esc(p.id)}">
+          <input type="checkbox" data-ft="${esc(p.id)}" ${tuners.includes(String(p.id)) ? "checked" : ""}
+            style="flex:0;width:20px;height:20px">
+          <label style="flex:1;font-size:14.5px">${esc(p.name || p.email)}
+            <span style="color:var(--text2);font-size:12px">${esc(p.position || "")}</span></label>
+        </div>`).join("")}
+    </div>`
+      : `<div class="card"><div style="color:var(--text2);font-size:14px">Nobody else has signed in to this lab yet.</div></div>`}
+    <div class="card" style="font-size:12px;color:var(--text2);line-height:1.5">
+      Votes already cast by anyone not on this list stop counting as soon as you save — they are
+      not deleted, just no longer pooled into the next run.
+    </div>`,
+    () => {
+      const picked = [...document.querySelectorAll("[data-ft]")]
+        .filter(b => b.checked).map(b => b.dataset.ft);
+      const next = Object.assign({}, watchConfig(), {
+        id: watchConfigRowId(myWorkspace),
+        workspace: myWorkspace,
+        ownerId: feedOwnerId(watchConfig()) || (currentUser ? currentUser.id : ""),
+        tuners: picked,
+      });
+      state.watchConfig = next;
+      saveLocal();
+      pushItem("watchConfig", next, next.id);
+      render();
+      toast(picked.length
+        ? `You and ${picked.length} other${picked.length === 1 ? "" : "s"} can steer the feed`
+        : "Only you can steer the feed");
+      return true;
+    },
+    (sh) => {
+      sh.querySelectorAll("[data-ft-row]").forEach(r => r.onclick = (e) => {
+        const b = r.querySelector("[data-ft]");
+        if (e.target !== b) b.checked = !b.checked;
+      });
+      const claim = sh.querySelector("#ft-claim");
+      if (claim) claim.onclick = () => {
+        const next = Object.assign({}, watchConfig(), {
+          id: watchConfigRowId(myWorkspace), workspace: myWorkspace,
+          ownerId: currentUser ? currentUser.id : "",
+        });
+        state.watchConfig = next;
+        saveLocal();
+        pushItem("watchConfig", next, next.id);
+        closeSheet();
+        render();
+        toastAction("You own this lab's feed now", "Add others", () => openFeedTunersSheet());
+      };
+    },
+    { saveLabel: "Save" });
+}
+function wireWatchEnabledRow() {
   const row = document.getElementById("wc-enabled-row");
   if (row) row.onclick = (e) => {
     const b = document.getElementById("wc-enabled");

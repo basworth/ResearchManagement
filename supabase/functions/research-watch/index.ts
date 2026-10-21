@@ -425,13 +425,25 @@ function buildFeed(cfg: Cfg, own: any[], papers: any[], trials: any[], framed: a
 // item voted down by one person and up by another is left alone rather than silently suppressed —
 // a PI's dislike should not decide what their RA gets to see.
 type Prefs = { likedTitles: string[]; dislikedTitles: string[]; downKeys: Set<string> };
-async function readPrefs(db: any, ws: string, priorFeed: any): Promise<Prefs> {
+async function readPrefs(db: any, ws: string, priorFeed: any, cfg: Cfg): Promise<Prefs> {
   const empty: Prefs = { likedTitles: [], dislikedTitles: [], downKeys: new Set() };
   try {
     const { data } = await db.from("items").select("data").eq("kind", "watchVote").eq("workspace", ws);
     if (!data?.length) return empty;
+    // ONLY THE OWNER AND THEIR DELEGATES COUNT. Everyone in the lab reads the feed; steering it
+    // sits with the PI, who may delegate in Settings. Enforced here and not only in the browser,
+    // because rows written before this existed are still in the table — an RA's thumbs-down from
+    // last week must stop counting the moment this ships, without anyone having to clean up.
+    //
+    // An unclaimed feed (no ownerId yet) counts every vote, which is the old behaviour: a lab
+    // that has not named an owner should not silently lose the preferences it has already set.
+    const owner = String((cfg as any).ownerId || "");
+    const allowed = owner
+      ? new Set<string>([owner, ...clean((cfg as any).tuners)])
+      : null;
     const up = new Map<string, number>(), down = new Map<string, number>();
     for (const row of data) {
+      if (allowed && !allowed.has(String(row?.data?.userId || ""))) continue;
       for (const k of clean(row?.data?.up)) up.set(k, (up.get(k) ?? 0) + 1);
       for (const k of clean(row?.data?.down)) down.set(k, (down.get(k) ?? 0) + 1);
     }
@@ -478,7 +490,7 @@ async function runOne(db: any, cfg: Cfg, windowDays: number) {
   const { data: priorRows } = await db.from("items").select("data")
     .eq("kind", "watchFeed").eq("workspace", cfg.workspace).limit(1);
   const prior = priorRows?.[0]?.data ?? null;
-  const prefs = await readPrefs(db, cfg.workspace, prior);
+  const prefs = await readPrefs(db, cfg.workspace, prior, cfg);
 
   // Anything the whole lab voted down is dropped before framing, so it is not merely ranked
   // lower — somebody said they did not want to see it again.
@@ -513,6 +525,52 @@ async function runOne(db: any, cfg: Cfg, windowDays: number) {
   };
 }
 
+// ---------- explore: the same pipeline, asked a question, answered now ----------
+//
+// Adam, 21 Oct 2026: "I would rather have it be a live interactive experience when someone wants
+// to spend time in that area looking for new things to research and brainstorm."
+//
+// The weekly digest answers "what happened while I wasn't looking". This answers "what should I
+// work on next", which needs a different shape: you ask, it answers in seconds, you ask again.
+//
+// WHAT DOES NOT CHANGE, and must never: the model is still never asked what exists. The typed
+// query goes to PubMed, PubMed says what was published, and the model only explains and ranks
+// what came back. `buildFeed`'s id filter still drops anything the model names that retrieval
+// did not return. Asking a model for papers produces citations that look perfect and aren't,
+// which in a tool whose whole job is telling you what has been published is the one failure
+// worse than having no tool.
+//
+// Open to the whole lab, unlike tuning. Searching the literature is not a privilege, and a
+// resident hunting for a project is the point of this. Nothing is stored unless somebody keeps
+// it, so exploring cannot move anyone else's feed.
+async function explore(cfg: Cfg, query: string, windowDays: number, max: number) {
+  const kws = clean(cfg.keywords);
+  const inst = String(cfg.institution || "").trim();
+  const notKws = clean(cfg.excludeKeywords);
+  const q = query.trim();
+  // The lab's own exclusions still apply — they were learned the hard way and are as true of a
+  // typed search as of a scheduled one. The institution is NOT applied: the point of exploring is
+  // to see what other groups are doing.
+  const parts = [`(${phrase(q)})`];
+  if (notKws.length) parts.push(`NOT (${notKws.map(phrase).join(" OR ")})`);
+  const term = parts.join(" AND ");
+  const ids = await pubmedSearch(term, windowDays, Math.min(40, max * 3));
+  const papers = (await pubmedSummaries(ids)).map(summaryToPaper);
+  const trials = await trialSearch(Object.assign({}, cfg, { keywords: [q] }), Math.min(8, max));
+  if (!papers.length && !trials.length) {
+    return { ok: true, query: q, windowDays, papers: [], trials: [],
+             note: `Nothing published in the last ${windowDays} days matches that. Try fewer words, or widen the window.` };
+  }
+  const framed = await frame(cfg, [], papers.slice(0, max), trials, { likedTitles: kws, dislikedTitles: [], downKeys: new Set() });
+  const feed = buildFeed(cfg, [], papers.slice(0, max), trials, framed);
+  return {
+    ok: true, query: q, windowDays,
+    framed: !!framed, frameError: lastFrameError || undefined,
+    papers: feed.newPapers, trials: feed.inDevelopment,
+    found: papers.length,
+  };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   try {
@@ -520,6 +578,24 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const only = typeof body?.workspace === "string" ? body.workspace.trim() : "";
     const windowDays = Number(body?.windowDays) > 0 ? Number(body.windowDays) : 30;
+
+    if (String(body?.action || "") === "explore") {
+      const query = String(body?.query ?? "").trim();
+      if (!query) return json({ error: "Type something to look for" }, 400);
+      if (query.length > 200) return json({ error: "That's too long for a search" }, 400);
+      if (!only) return json({ error: "No lab given" }, 400);
+      const { data: one, error: oneErr } = await db.from("items").select("id, data, workspace")
+        .eq("kind", "watchConfig").eq("workspace", only).limit(1);
+      if (oneErr) throw oneErr;
+      // A lab with no config can still explore — it just has no exclusions to apply yet.
+      const cfg: Cfg = one?.[0]
+        ? Object.assign({}, (one[0] as any).data, { id: (one[0] as any).id, workspace: only })
+        : ({ id: "", workspace: only, authors: [], keywords: [], excludeKeywords: [] } as any);
+      // A tighter window than the digest by default: exploring is about what is current, and a
+      // year of results buries the recent work. Overridable per search.
+      const w = Number(body?.windowDays) > 0 ? Number(body.windowDays) : 180;
+      return json(await explore(cfg, query, w, 8));
+    }
 
     // SERVICE ROLE BYPASSES RLS. Every read below is filtered by workspace in code, because the
     // database will not do it for us here — the same rule as every other function in this project.

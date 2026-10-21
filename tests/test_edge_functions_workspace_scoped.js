@@ -181,7 +181,13 @@ console.log("\n-- research-watch touches one lab at a time, even though it loops
   check("only retrieved ids survive framing",
     /byPmid\.has\(String\(f\?\.pmid\)\)/.test(fn) && /byNct\.has\(String\(f\?\.id\)\)/.test(fn));
   check("the model is told never to introduce an id", /Never introduce another/.test(fn));
-  check("a missing model key degrades rather than breaks", /if \(!ANTHROPIC_KEY\) return null/.test(fn));
+  // Behaviour, not the exact line: it must still return null (the feed ships unframed) rather
+  // than throwing, AND it must now say which of the four causes it was — "no key" reads the same
+  // as "key rejected" otherwise, and chasing the wrong one of those costs an afternoon.
+  check("a missing model key degrades rather than breaks",
+    /if \(!ANTHROPIC_KEY\) \{[^}]*return null; \}/.test(fn));
+  check("...and says it was the key, not something else",
+    /no ANTHROPIC_API_KEY in this instance's environment/.test(fn));
   check("the feed records whether a model touched it", /framed: !!framed/.test(fn));
 }
 
