@@ -551,7 +551,12 @@ async function explore(cfg: Cfg, query: string, windowDays: number, max: number)
   // The lab's own exclusions still apply — they were learned the hard way and are as true of a
   // typed search as of a scheduled one. The institution is NOT applied: the point of exploring is
   // to see what other groups are doing.
-  const parts = [`(${phrase(q)})`];
+  // NOT phrase()-wrapped. Wrapping the whole typed string in quotes makes PubMed hunt for that
+  // exact phrase: "bone marrow aspirate concentrate knee osteoarthritis" returned 2 papers in a
+  // year, which reads as "the literature is thin" when it actually means "your query was wrong".
+  // Passed through as typed, so PubMed's own term mapping applies — the same thing that happens
+  // when you type into the PubMed box. Anyone who wants an exact phrase can type the quotes.
+  const parts = [`(${q})`];
   if (notKws.length) parts.push(`NOT (${notKws.map(phrase).join(" OR ")})`);
   const term = parts.join(" AND ");
   const ids = await pubmedSearch(term, windowDays, Math.min(40, max * 3));

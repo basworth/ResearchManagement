@@ -196,6 +196,12 @@ function boot(items) {
       /citations that look perfect and aren't/.test(fn));
     check("exploring stores nothing", !/explore[\s\S]{0,2000}db\.from\("items"\)\.upsert/.test(fn));
     check("the lab's learned exclusions still apply", /if \(notKws\.length\) parts\.push/.test(fn));
+    // The first live run returned 2 papers for "bone marrow aspirate concentrate knee
+    // osteoarthritis" over a whole year, because the whole string was phrase()-wrapped and PubMed
+    // hunted for that exact phrase. A thin result set reads as "the field is quiet", which is the
+    // worst possible way for a search box to be wrong.
+    check("the typed query is NOT wrapped in quotes", /const parts = \[`\(\$\{q\}\)`\]/.test(fn));
+    check("...and why is written down", /reads as "the literature is thin"/.test(fn));
     check("...but the institution filter does not, so other groups' work shows up",
       /The institution is NOT applied/.test(fn));
 
