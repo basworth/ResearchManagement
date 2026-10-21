@@ -4821,82 +4821,215 @@ function docEntryRowHTML(e, opts) {
 // Only the document types this study actually holds are shown. Listing all seven slots meant
 // most studies displayed six empty boxes, and the one real document was lost among them. The
 // empty ones are not gone — "Add a document" offers every type, so nothing became unreachable.
+// The whole section is a drop target, not just the individual slots. Dropping onto a named slot
+// already worked, but that is only useful once you know which slot a file belongs in — and when a
+// study has no documents yet there are no slots on screen at all, so there was nowhere to aim.
+// Dropping anywhere in here now opens the classify sheet with the files already attached, which
+// is the order Adam asked for: drop first, answer the questions second.
 function workingDocsBodyHTML(s) {
   const all = DOC_SLOTS.map(sl => sl.key).concat(["other"]);
   const filled = all.filter(k => slotEntries(s, k).length > 0);
+  const open = `<div id="docs-dropzone" data-docs-drop="1" style="border-radius:10px;transition:background .12s,box-shadow .12s;padding:2px">`;
   if (!filled.length) {
-    return `
+    return open + `
       <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin:0 2px 10px 2px">
-        No documents yet. Add a link or drop a file in — abstracts, the protocol, the data
-        spreadsheet, whatever this study runs on.
+        No documents yet. <b>Drag files anywhere into this box</b> and you'll be asked what they
+        are — abstracts, the protocol, the data spreadsheet, whatever this study runs on. Or add
+        a link instead.
       </div>
-      <button type="button" id="doc-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:10px 16px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">＋ Add a document</button>`;
+      <button type="button" id="doc-add" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:10px 16px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">＋ Add documents</button>
+    </div>`;
   }
-  return `
+  return open + `
     <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:0 2px 10px 2px">
-      Every document takes a <b>link or an uploaded file</b>, whichever you have, and you can drop
-      a file straight onto one. Adding a newer version keeps the old one — nothing is replaced away.
+      Every document takes a <b>link or an uploaded file</b>. Drop files onto a named document to
+      file them straight there, or anywhere else in this box to be asked what they are. Adding a
+      newer version keeps the old one — nothing is replaced away.
     </div>
     ${filled.map(k => docSlotHTML(s, k)).join("")}
-    <button type="button" id="doc-add" style="border:none;background:var(--bg);color:var(--text);border-radius:8px;padding:10px 16px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit;margin-top:4px">＋ Add a document</button>`;
+    <button type="button" id="doc-add" style="border:none;background:var(--bg);color:var(--text);border-radius:8px;padding:10px 16px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit;margin-top:4px">＋ Add documents</button>
+  </div>`;
 }
-// One sheet for "what kind, and link or file". The type list is the same DOC_SLOTS every study
+// One sheet for "what kind, and link or files". The type list is the same DOC_SLOTS every study
 // has always had — this only changes when you're asked to choose, not what you can choose.
-function openAddDocSheet(s) {
+//
+// THREE THINGS THIS FIXES, all reported 21 Oct 2026:
+//
+//   1. Add was unreachable without clicking Choose File. The only staged file lived inside the
+//      <input type=file>, so a file dropped on the sheet went nowhere and Add refused. Staging now
+//      lives in a plain array that both the picker and a drop write into, so the button works
+//      whichever way the file arrived.
+//   2. The sheet itself refused drops. It is now the drop target it always looked like.
+//   3. One file per visit. Several files that belong together — three figures, a protocol and its
+//      appendix — had to be added one at a time, each re-answering the same two questions. The
+//      picker takes `multiple`, a drop takes everything dropped, and one description applies to
+//      the lot.
+//
+// `store` is passed in because storeUploadedFile is scoped to the render closure, not global.
+// Calling it from here by name worked only because every caller happened to sit inside that same
+// closure, which is the sort of thing that breaks the first time somebody adds a caller elsewhere.
+function openAddDocSheet(s, opts) {
+  opts = opts || {};
+  const store = opts.store || (typeof storeUploadedFile === "function" ? storeUploadedFile : null);
   const types = DOC_SLOTS.concat([OTHER_SLOT]);
-  openSheet("Add a document", `
+  // Staged files. Replaces reading .files[0] off the input at save time.
+  let staged = (opts.files || []).slice();
+  // A dropped file usually says what it is in its own name, so the type starts on the best guess
+  // rather than on whatever happens to be first in the list. It is a <select>, so a wrong guess
+  // costs one click — but guessDocSlot only answers when it is confident, and shrugs to "other".
+  const guessed = staged.length ? guessDocSlot({ name: staged[0].name, label: "" }) : "";
+  const startKey = types.some(t => t.key === guessed) ? guessed : types[0].key;
+  const startHow = staged.length ? "upload" : "link";
+  openSheet(staged.length ? (staged.length === 1 ? "Add this file" : `Add these ${staged.length} files`) : "Add documents", `
     <div class="frow"><label>Type</label>
       <select id="doc-type" style="flex:1">
-        ${types.map(t => `<option value="${esc(t.key)}">${esc(t.label)}</option>`).join("")}
+        ${types.map(t => `<option value="${esc(t.key)}"${t.key === startKey ? " selected" : ""}>${esc(t.label)}</option>`).join("")}
       </select>
     </div>
     <div class="frow" style="margin-top:10px"><label>Add as</label>
       <select id="doc-how" style="flex:1">
-        <option value="link">A link</option>
-        <option value="upload">An uploaded file</option>
+        <option value="link"${startHow === "link" ? " selected" : ""}>A link</option>
+        <option value="upload"${startHow === "upload" ? " selected" : ""}>Uploaded file${staged.length === 1 ? "" : "s"}</option>
       </select>
     </div>
     <div id="doc-link-row" style="margin-top:10px">
       <input id="doc-link" placeholder="Paste the link…" autocapitalize="off" autocorrect="off"
         style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
     </div>
-    <div id="doc-file-row" style="margin-top:10px;display:none">
-      <input type="file" id="doc-file" style="font-size:14px">
-      <div style="font-size:12px;color:var(--text2);margin-top:6px">You can also drop a file straight onto a document once it's listed.</div>
-    </div>`,
+    <div id="doc-file-row" style="margin-top:10px">
+      <div id="doc-drop" style="border:2px dashed var(--bg);border-radius:10px;padding:16px 14px;text-align:center;cursor:pointer;transition:background .12s,border-color .12s">
+        <div style="font-size:14px;font-weight:700;color:var(--text)">Drop files here</div>
+        <div style="font-size:12.5px;color:var(--text2);margin-top:4px">or <span style="color:var(--blue);font-weight:700">choose from your computer</span> — several at once is fine</div>
+      </div>
+      <input type="file" id="doc-file" multiple style="display:none">
+      <div id="doc-staged" style="margin-top:8px"></div>
+    </div>
+    <div class="fld" style="margin-top:10px"><label for="doc-desc">Description <span style="font-weight:400;color:var(--text2)">(optional)</span></label>
+      <input id="doc-desc" placeholder="What is this? e.g. Figures for JBJS resubmission"
+        style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
+      <div id="doc-desc-note" style="font-size:12px;color:var(--text2);margin-top:6px;line-height:1.5"></div>
+    </div>
+    <div id="doc-spill" style="font-size:12.5px;color:var(--text2);margin-top:10px;line-height:1.5;display:none"></div>`,
     () => {
       const key = document.getElementById("doc-type").value;
       const how = document.getElementById("doc-how").value;
+      const desc = (document.getElementById("doc-desc").value || "").trim();
       if (how === "link") {
         const url = (document.getElementById("doc-link").value || "").trim();
-        if (!url) { toast("Paste a link, or switch to uploading a file"); return false; }
-        addSlotEntry(s, key, { id: uid(), kind: "link", url, label: "", by: me(), date: todayStr() });
+        if (!url) { toast("Paste a link, or switch to uploading files"); return false; }
+        addSlotEntry(s, key, { id: uid(), kind: "link", url, label: desc, by: me(), date: todayStr() });
         render();
         toast(`Added to ${slotLabel(key)}`);
         return true;
       }
-      const f = document.getElementById("doc-file").files[0];
-      if (!f) { toast("Choose a file first"); return false; }
-      // The upload is slow enough to need its own closing — the sheet stays put until the file
-      // is actually stored, so a failure is seen rather than hidden behind a closed sheet.
-      storeUploadedFile(f).then(entry => {
-        if (!entry) return;                       // storeUploadedFile has already said why
-        addSlotEntry(s, key, entry);
+      if (!staged.length) { toast("Drop a file in, or choose one — then Add"); return false; }
+      if (!store) { toast("Can't upload from here — reopen the study and try again"); return false; }
+      // Where each file lands. A single-document slot holds one, so dropping four onto "Working
+      // Abstract" cannot mean four abstracts. Rather than silently keeping one or quietly
+      // versioning three unrelated files behind it, the first goes where you asked and the rest
+      // go to Other Documents, where they are visible and can be re-filed. The sheet says so
+      // before you press Add, not after.
+      const spill = !slotIsMulti(key) && staged.length > 1;
+      const toSlot = spill ? staged.slice(0, 1) : staged;
+      const toOther = spill ? staged.slice(1) : [];
+      // The upload is slow enough to need its own closing — the sheet stays put until the files
+      // are actually stored, so a failure is seen rather than hidden behind a closed sheet.
+      (async () => {
+        let ok = 0, failed = 0;
+        for (const [files, target] of [[toSlot, key], [toOther, "other"]]) {
+          for (const f of files) {
+            const entry = await store(f);
+            if (!entry) { failed++; continue; }     // store has already said why
+            // One description, every file in this batch — that is what "same instance" means.
+            addSlotEntry(s, target, Object.assign({}, entry, { label: desc }));
+            ok++;
+          }
+        }
+        if (!ok) return;                            // nothing stored, sheet stays open with the reason
         closeSheet();
         render();
-        toast(`Uploaded to ${slotLabel(key)}`);
-      });
+        const where = spill
+          ? `${slotLabel(key)}, the other ${toOther.length} to Other Documents`
+          : slotLabel(key);
+        toast(failed
+          ? `Uploaded ${ok} of ${ok + failed} to ${where} — the rest failed, try them again`
+          : (ok === 1 ? `Uploaded to ${where}` : `Uploaded ${ok} files to ${where}`));
+      })();
       return false;
     },
     (sh) => {
       const how = sh.querySelector("#doc-how");
-      const sync = () => {
-        sh.querySelector("#doc-link-row").style.display = how.value === "link" ? "" : "none";
-        sh.querySelector("#doc-file-row").style.display = how.value === "upload" ? "" : "none";
+      const typeSel = sh.querySelector("#doc-type");
+      const input = sh.querySelector("#doc-file");
+      const dropEl = sh.querySelector("#doc-drop");
+      const listEl = sh.querySelector("#doc-staged");
+      const spillEl = sh.querySelector("#doc-spill");
+      const descNote = sh.querySelector("#doc-desc-note");
+      const fmtSize = (n) => n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+      const paint = () => {
+        const uploading = how.value === "upload";
+        sh.querySelector("#doc-link-row").style.display = uploading ? "none" : "";
+        sh.querySelector("#doc-file-row").style.display = uploading ? "" : "none";
+        listEl.innerHTML = staged.length ? staged.map((f, i) => `
+          <div class="milestone-row" style="gap:8px">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 ${esc(f.name)}</div>
+              <div style="font-size:12px;color:var(--text2)">${esc(fmtSize(f.size))}</div>
+            </div>
+            <button type="button" data-unstage="${i}" title="Remove from this batch"
+              style="flex:none;border:none;background:none;color:var(--text2);font-size:18px;line-height:1;cursor:pointer;font-family:inherit;padding:6px 8px">×</button>
+          </div>`).join("") : "";
+        listEl.querySelectorAll("[data-unstage]").forEach(b => b.onclick = () => {
+          staged.splice(Number(b.dataset.unstage), 1);
+          paint();
+        });
+        const key = typeSel.value;
+        const spill = uploading && !slotIsMulti(key) && staged.length > 1;
+        spillEl.style.display = spill ? "" : "none";
+        if (spill) spillEl.innerHTML = `<b>${esc(slotLabel(key))}</b> holds one document. ${esc(staged[0].name)}
+          will go there and the other ${staged.length - 1} will go to <b>Other Documents</b>, where you can
+          re-file them. Pick a different type if that isn't what you want.`;
+        descNote.textContent = uploading && staged.length > 1
+          ? `This description will be saved on all ${staged.length} files.`
+          : "Shows instead of the filename in the list.";
       };
-      how.addEventListener("change", sync);
-      sync();
-      const l = sh.querySelector("#doc-link"); if (l) l.focus();
+      how.addEventListener("change", paint);
+      typeSel.addEventListener("change", paint);
+      // Both routes write to the same array, which is the whole point of the fix.
+      dropEl.onclick = () => input.click();
+      input.onchange = () => {
+        staged = staged.concat([...input.files]);
+        input.value = "";                           // so the same file can be re-picked after removal
+        how.value = "upload";
+        paint();
+      };
+      const hint = (on) => {
+        dropEl.style.background = on ? "var(--bg)" : "";
+        dropEl.style.borderColor = on ? "var(--blue)" : "var(--bg)";
+      };
+      // The window-level handler cancels the browser's navigate-to-file default; these need their
+      // own preventDefault anyway, or the drop never counts as accepted here.
+      ["dragenter", "dragover"].forEach(ev => dropEl.addEventListener(ev, (e) => {
+        if (!(e.dataTransfer && [...e.dataTransfer.types].includes("Files"))) return;
+        e.preventDefault(); e.stopPropagation();
+        e.dataTransfer.dropEffect = "copy";
+        hint(true);
+      }));
+      dropEl.addEventListener("dragleave", (e) => { if (!dropEl.contains(e.relatedTarget)) hint(false); });
+      dropEl.addEventListener("drop", (e) => {
+        const files = e.dataTransfer && e.dataTransfer.files;
+        if (!files || !files.length) return;
+        e.preventDefault(); e.stopPropagation();
+        hint(false);
+        staged = staged.concat([...files]);
+        how.value = "upload";
+        paint();
+      });
+      paint();
+      // Focus follows what is missing: with files already staged the description is the only thing
+      // left to type, so land there rather than in a link box that is hidden.
+      const focusEl = sh.querySelector(staged.length ? "#doc-desc" : "#doc-link");
+      if (focusEl) focusEl.focus();
     },
     { saveLabel: "Add" });
 }
@@ -6635,10 +6768,35 @@ function renderStudyDetail() {
     });
   });
 
+  // Dropping anywhere in Working Documents that isn't a named slot. The slot handlers above call
+  // stopPropagation, so a drop aimed at one never reaches this — aiming at a slot still files
+  // straight there with no questions asked. Everything else gets asked what it is.
+  $main.querySelectorAll("[data-docs-drop]").forEach(zone => {
+    zone.addEventListener("dragover", (e) => {
+      if (!(e.dataTransfer && [...e.dataTransfer.types].includes("Files"))) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      dropHint(zone, true);
+    });
+    zone.addEventListener("dragleave", (e) => { if (!zone.contains(e.relatedTarget)) dropHint(zone, false); });
+    zone.addEventListener("drop", (e) => {
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || !files.length) return;
+      e.preventDefault();
+      e.stopPropagation();
+      dropHint(zone, false);
+      if (blockOfflineEdit("Uploading a file")) return;
+      // Nothing is stored yet — the sheet asks what these are first, and Cancel means the drop
+      // never happened. That is the order Adam asked for, and it also means a mis-aimed drop
+      // costs a Cancel rather than a misfiled document.
+      openAddDocSheet(s, { files: [...files], store: storeUploadedFile });
+    });
+  });
+
   const docAddBtn = document.getElementById("doc-add");
   if (docAddBtn) docAddBtn.onclick = () => {
     if (blockOfflineEdit("Adding a document")) return;
-    openAddDocSheet(s);
+    openAddDocSheet(s, { store: storeUploadedFile });
   };
 
   const pubCopy = document.getElementById("pub-copy-authors");
