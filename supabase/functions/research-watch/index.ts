@@ -43,6 +43,32 @@ type Cfg = {
   enabled?: boolean; lastRunAt?: string;
 };
 
+// ---------- row ids ----------
+// `items` is PRIMARY KEY (id) — id alone, not (id, kind). Two rows of different kinds sharing an
+// id are ONE row, and the later write wins. The feed used to be written under the config's own id,
+// so every run wrote the feed and then overwrote it with the config a millisecond later: the
+// function reported papersOut: 8 and left nothing behind. The seed must differ per kind.
+//
+// This is a character-for-character port of derivedRowId() in research-tracker.html. The two must
+// agree or the app looks the feed up under an id nothing was written to, so if you change one,
+// change both — test_watch_row_ids.js compares them.
+function derivedRowId(seed: string): string {
+  const s = String(seed || "");
+  let h1 = 0x811c9dc5, h2 = 0x01000193, h3 = 0x9e3779b9, h4 = 0x85ebca6b;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = ((h1 ^ c) * 16777619) >>> 0;
+    h2 = (h2 + c * 2654435761) >>> 0;
+    h3 = ((h3 ^ (c + i)) * 2246822519) >>> 0;
+    h4 = (h4 + (c << (i % 13))) >>> 0;
+  }
+  const hx = (n: number) => ("00000000" + (n >>> 0).toString(16)).slice(-8);
+  const raw = hx(h1) + hx(h2) + hx(h3) + hx(h4);
+  return raw.slice(0, 8) + "-" + raw.slice(8, 12) + "-5" + raw.slice(13, 16) + "-8" +
+    raw.slice(17, 20) + "-" + raw.slice(20, 32);
+}
+const watchFeedRowId = (ws: string) => derivedRowId("watchFeed:" + ws);
+
 // ---------- small helpers ----------
 const clean = (a: unknown): string[] =>
   Array.isArray(a) ? a.map((x) => String(x || "").trim()).filter(Boolean) : [];
@@ -174,13 +200,28 @@ function summaryToPaper(s: any) {
 }
 
 // ---------- ClinicalTrials.gov ----------
+// Two problems with the obvious query, both seen on the first live run, which returned a
+// hyperbaric-oxygen trial for femoral head avascular necrosis to a cartilage surgeon:
+//
+//   1. query.cond treats the terms as CONDITIONS. "osteochondral allograft" is a procedure, not
+//      a disease, so the registry falls back to loose relevance matching and anything vaguely
+//      orthopaedic scores a hit.
+//   2. Unquoted multi-word terms are split, so "meniscal allograft transplantation" matches
+//      trials about transplantation of anything.
+//
+// So: quote every phrase, search the whole record rather than just the condition field, and then
+// — the part that actually does the work — keep only trials whose own text contains one of the
+// terms. The registry's relevance ranking is a suggestion; the post-filter is the rule.
 async function trialSearch(cfg: Cfg, max: number) {
   const kws = clean(cfg.keywords);
   if (!kws.length) return [];
+  const quoted = kws.map((k) => (k.includes(" ") ? `"${k}"` : k)).join(" OR ");
   const p = new URLSearchParams({
-    "query.cond": kws.join(" OR "),
+    "query.term": quoted,
     "filter.overallStatus": "RECRUITING|NOT_YET_RECRUITING",
-    "pageSize": String(max),
+    // Over-fetch, because the post-filter below throws a lot away and `max` is what we want to
+    // END with, not what we want to look at.
+    "pageSize": String(Math.min(200, max * 8)),
     "sort": "StartDate:desc",
   });
   const out = await getJSON(`https://clinicaltrials.gov/api/v2/studies?${p}`);
@@ -200,9 +241,18 @@ async function trialSearch(cfg: Cfg, max: number) {
       phases: (design?.phases ?? []).join("/"),
       studyType: String(design?.studyType || ""),
       sponsor,
+      conditions: (ps?.conditionsModule?.conditions ?? []).join(", "),
       summary: String(ps?.descriptionModule?.briefSummary || "").slice(0, 1200),
     };
-  }).filter((t: any) => t.id);
+  }).filter((t: any) => t.id)
+    // The rule, not the ranking: a trial survives only if one of this lab's terms appears in its
+    // title, its conditions or its summary. Phrases are matched whole — "cartilage restoration"
+    // must appear as those two words together, not as "cartilage" somewhere near "restoration".
+    .filter((t: any) => {
+      const hay = [t.title, t.conditions, t.summary].join(" ").toLowerCase();
+      return kws.some((k) => hay.includes(k.toLowerCase()));
+    })
+    .slice(0, max);
 }
 
 // ---------- framing ----------
@@ -403,20 +453,25 @@ async function runOne(db: any, cfg: Cfg, windowDays: number) {
   const feed = buildFeed(cfg, own, keptPapers, keptTrials, framed);
 
   const nowIso = new Date().toISOString();
-  const feedRowId = cfg.id;  // one feed per config, same derived id — simple and collision-free
-  await db.from("items").upsert({
+  // Its own id, not the config's — see derivedRowId above for what sharing one cost.
+  const feedRowId = watchFeedRowId(cfg.workspace);
+  const feedWrite = await db.from("items").upsert({
     id: feedRowId, kind: "watchFeed", data: Object.assign({ id: feedRowId }, feed),
     updated_at: nowIso, workspace: cfg.workspace,
   });
-  await db.from("items").upsert({
+  const cfgWrite = await db.from("items").upsert({
     id: cfg.id, kind: "watchConfig",
     data: Object.assign({}, cfg, { lastRunAt: nowIso }),
     updated_at: nowIso, workspace: cfg.workspace,
   });
+  // A write that failed must not be reported as a run that worked. The previous version ignored
+  // both results, so a feed that was never stored still came back as ok with eight papers in it.
+  const writeError = feedWrite.error?.message || cfgWrite.error?.message || "";
+  if (writeError) throw new Error("feed built but not stored: " + writeError);
 
   return {
     workspace: cfg.workspace, own: own.length, candidates: papers.length,
-    trials: trials.length, framed: !!framed,
+    trials: trials.length, framed: !!framed, feedRowId, stored: true,
     papersOut: feed.newPapers.length, trialsOut: feed.inDevelopment.length,
   };
 }

@@ -66,10 +66,13 @@ function check(name, cond, detail) {
   const ev = (c) => w.eval(c);
 
   console.log("\n-- The generated feed comes from the database, not a file --");
-  check("pullAll reads watchFeed", /kind === "watchFeed" && r\.id === watchConfigRowId\(ws\)/.test(html));
+  // Keyed on watchFeedRowId, not the config's id — see test_watch_row_ids.js for why sharing one
+  // meant the feed was written and then immediately overwritten by the config.
+  check("pullAll reads watchFeed", /kind === "watchFeed" && r\.id === watchFeedRowId\(ws\)/.test(html));
   check("...and marks it as this lab's, so the file fetch stands down",
     /watchData = wfRow\.data; watchDataFor = ws;/.test(html));
-  check("a realtime feed update lands", /kind === "watchFeed"\) \{ watchData = data/.test(html));
+  check("a realtime feed update lands, for this lab only",
+    /if \(!ws \|\| ws === myWorkspace\) \{ watchData = data; watchDataFor = myWorkspace; render\(\); \}/.test(html));
 
   console.log("\n-- Votes are keyed per person and per lab --");
   const a = ev(`watchVoteRowId("u1", "spine-singh")`);

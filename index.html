@@ -1158,6 +1158,10 @@ function metaRowId(ws) {
 // with a common surname needs an institution to disambiguate, and the topics somebody wants to
 // READ about are not the topics they have already published on.
 function watchConfigRowId(ws) { return derivedRowId("watchConfig:" + (ws || FIRST_WORKSPACE)); }
+// The feed gets its OWN id. `items` is PRIMARY KEY (id), so a feed sharing the config's id is the
+// same row — the research-watch function wrote both and the config landed second, erasing every
+// feed it had just built. Mirrored in supabase/functions/research-watch/index.ts; change both.
+function watchFeedRowId(ws) { return derivedRowId("watchFeed:" + (ws || FIRST_WORKSPACE)); }
 function blankWatchConfig(ws) {
   return {
     id: watchConfigRowId(ws),
@@ -2377,8 +2381,8 @@ async function pullAll() {
     // The generated feed, written by the research-watch function. Preferred over the static
     // watch-<lab>.json: a regenerated feed should appear on the next pull, not on the next
     // deploy. The file stays as the fallback for labs whose feed was assembled by hand.
-    const wfRow = rows.find(r => r.kind === "watchFeed" && r.id === watchConfigRowId(ws))
-               || rows.find(r => r.kind === "watchFeed");
+    const wfRow = rows.find(r => r.kind === "watchFeed" && r.id === watchFeedRowId(ws))
+               || rows.find(r => r.kind === "watchFeed" && r.workspace === ws);
     if (wfRow && wfRow.data) { watchData = wfRow.data; watchDataFor = ws; }
     // My own votes for this lab. Matched on the derived id so somebody in two labs keeps the
     // two sets apart rather than carrying spine preferences into a sports feed.
@@ -2749,7 +2753,12 @@ function applyRealtimeRow(kind, id, data, updatedAt, ws) {
   }
   if (kind === "scholar") { state.scholar = data; saveLocal(); render(); return; }
   if (kind === "watchConfig") { state.watchConfig = data; saveLocal(); render(); return; }
-  if (kind === "watchFeed") { watchData = data; watchDataFor = myWorkspace; render(); return; }
+  if (kind === "watchFeed") {
+    // Only this lab's. Somebody in two labs would otherwise have a spine refresh overwrite the
+    // sports feed they are reading, because realtime delivers every row they are allowed to see.
+    if (!ws || ws === myWorkspace) { watchData = data; watchDataFor = myWorkspace; render(); }
+    return;
+  }
   if (kind === "watchVote") {
     // Only mine. Another person's votes arriving over realtime must not replace my own.
     if (currentUser && data && data.userId === currentUser.id) { state.watchVotes = data; saveLocal(); render(); }
