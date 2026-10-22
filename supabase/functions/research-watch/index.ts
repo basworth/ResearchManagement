@@ -41,6 +41,21 @@ type Cfg = {
   authors: string[]; institution: string; excludeAuthors: string[];
   keywords: string[]; excludeKeywords: string[]; societies: string[];
   enabled?: boolean; lastRunAt?: string;
+  // WHO THIS PERSON IS, confirmed by them rather than guessed from an affiliation string.
+  //
+  // Adam, 22 Oct 2026: "Park was at Michigan, so stuff he did in the past is still going to be
+  // relevant to him and true for others." A single `institution` filter assumes a career spent in
+  // one place. Dan Park's Michigan work vanished from his own feed the moment the Rush filter was
+  // applied — and his own papers are what the framing anchors "how this relates to your work" to,
+  // so the filter was quietly making his digest worse the more of a career he had.
+  //
+  // `ownPmids` is the ground truth: papers the person has ticked as theirs. `institutions` is the
+  // set of affiliations derived from those ticks, used to catch NEW papers as they appear. A name
+  // ticked as not-theirs goes in `notMine` so a disambiguation is made once, not every week.
+  institutions?: string[];
+  ownPmids?: string[];
+  notMine?: string[];
+  identifiedAt?: string;
 };
 
 // ---------- row ids ----------
@@ -154,10 +169,18 @@ function pubmedQueries(cfg: Cfg, windowDays: number) {
   ].join(" ");
 
   const ownParts = authors.flatMap(authorTerms).join(" OR ");
-  // The institution is ANDed, not ORed: it is a filter against the wrong person with the same
-  // surname, which is the single most common way these feeds go wrong.
+  // Affiliation is ANDed, because it is the filter against the wrong person with the same surname
+  // — the single most common way these feeds go wrong. But it is a SET, not one string: a surgeon
+  // who moved institutions is still the author of everything they did before the move, and an
+  // earlier single-institution filter silently deleted Dan Park's Michigan career from his own
+  // feed. Every affiliation the person has confirmed is ORed together.
+  const insts = clean((cfg as any).institutions);
+  const allInsts = insts.length ? insts : (inst ? [inst] : []);
+  const instClause = allInsts.length
+    ? ` AND (${allInsts.map((i) => `${phrase(i)}[Affiliation]`).join(" OR ")})`
+    : "";
   const own = authors.length
-    ? `(${ownParts})${inst ? ` AND ${phrase(inst)}[Affiliation]` : ""} ${notClause}`.trim()
+    ? `(${ownParts})${instClause} ${notClause}`.trim()
     : "";
 
   const field = kws.length
@@ -485,11 +508,19 @@ async function readPrefs(db: any, ws: string, priorFeed: any, cfg: Cfg): Promise
 
 async function runOne(db: any, cfg: Cfg, windowDays: number) {
   const q = pubmedQueries(cfg, windowDays);
-  const ownIds = await pubmedSearch(q.own, 365 * 2, 20);
+  // Confirmed papers come FIRST and are never second-guessed. A search is an estimate of who
+  // somebody is; a tick is them telling you. The search still runs, to catch what has appeared
+  // since they last confirmed, and anything they marked as not-theirs is dropped from both.
+  const confirmed = clean((cfg as any).ownPmids);
+  const notMine = new Set(clean((cfg as any).notMine));
+  const searched = await pubmedSearch(q.own, 365 * 2, 20);
+  const ownIds = [...new Set([...confirmed, ...searched])]
+    .filter((id) => !notMine.has(id))
+    .slice(0, 25);
   const fieldIds = await pubmedSearch(q.field, windowDays, 40);
   // Their own papers must not reappear as "new work that touches your publications".
   const ownSet = new Set(ownIds);
-  const candidateIds = fieldIds.filter((id) => !ownSet.has(id));
+  const candidateIds = fieldIds.filter((id) => !ownSet.has(id) && !notMine.has(id));
 
   const [ownSum, fieldSum] = await Promise.all([
     pubmedSummaries(ownIds),
