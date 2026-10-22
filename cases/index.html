@@ -284,7 +284,12 @@
    • Media stay on the Rush/MOR drive; the case stores only a link to the folder.
    ============================================================================ */
 
-const SUPABASE_URL = "https://wqgiqiqatdmoxpjbzxoj.supabase.co";
+// Data comes through db.studypipeline.com (Supabase custom domain, 22 Oct 2026) because some
+// hospital networks, Rush included, block *.supabase.co. The old host still works.
+const SUPABASE_URL = "https://db.studypipeline.com";
+// supabase-js names the saved session after the URL's host. Pin the old name so changing the
+// host above does not sign everybody out.
+const SUPABASE_AUTH_OPTS = { auth: { storageKey: "sb-wqgiqiqatdmoxpjbzxoj-auth-token" } };
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndxZ2lxaXFhdGRtb3hwamJ6eG9qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM1MDY3MzAsImV4cCI6MjA5OTA4MjczMH0.8e0yLOvtafSBZLJa9AmLX7CKC7_8cBqPyujk2VZKb3E";
 const SUPABASE_LIB_URLS = [
   "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js",
@@ -514,7 +519,7 @@ function show(which) {
 async function boot() {
   try {
     await loadSupabaseLib();
-    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_AUTH_OPTS);
     sb.auth.onAuthStateChange((event, session) => {
       if (event === "SIGNED_OUT") { currentUser = null; show("login"); }
     });
