@@ -10,3 +10,10 @@
 # deep link to a study still lands on that study.
 https://rushsportsresearch.netlify.app/*  https://studypipeline.com/:splat  301!
 http://rushsportsresearch.netlify.app/*   https://studypipeline.com/:splat  301!
+
+# The database, through this address, for networks that block every Supabase host — including
+# db.studypipeline.com, whose CNAME a resolving filter follows to supabase.co. Status 200 makes it
+# a proxy rather than a redirect: Netlify fetches from Supabase server-side, so the browser only
+# ever talks to studypipeline.com. Headers (apikey, Authorization) pass through unchanged. The app
+# uses this only when a probe shows the direct route is blocked; realtime cannot use it.
+/sbp/*  https://wqgiqiqatdmoxpjbzxoj.supabase.co/:splat  200

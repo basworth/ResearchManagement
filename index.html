@@ -1884,8 +1884,36 @@ function migrate() {
 // publish because the database's row-level-security policy requires the `authenticated` role —
 // the anon key alone no longer grants any access, only a signed-in account does.
 // Data comes through db.studypipeline.com (Supabase custom domain, 22 Oct 2026) because some
-// hospital networks, Rush included, block *.supabase.co. The old host still works.
-const SUPABASE_URL = "https://db.studypipeline.com";
+// hospital networks, Rush included, block *.supabase.co.
+//
+// AND, when even that is blocked, through studypipeline.com itself (23 Oct 2026). A filter that
+// resolves the CNAME behind db.studypipeline.com finds supabase.co and blocks it too — seen on
+// Adam's own machine the morning after the custom domain went live, with the site loading fine
+// and every data call failing. The one address such a network demonstrably allows is the one the
+// page came from, so `_redirects` proxies /sbp/* on studypipeline.com to the project, server-side,
+// and the browser never names a Supabase host at all. Chosen once per page load by a quick probe;
+// direct is preferred because the proxy cannot carry realtime (websockets) and adds a hop.
+const SUPABASE_DIRECT_URL = "https://db.studypipeline.com";
+const SUPABASE_PROXY_PATH = "/sbp";
+let SUPABASE_URL = SUPABASE_DIRECT_URL;
+let SUPABASE_ROUTE = "direct";
+async function chooseSupabaseRoute() {
+  // Only where the proxy exists: the deployed site. Tests and file:// copies keep the direct URL.
+  if (typeof location === "undefined" || !/(^|\.)studypipeline\.com$|\.netlify\.app$/.test(location.hostname)) return SUPABASE_ROUTE;
+  if (typeof fetch !== "function") return SUPABASE_ROUTE;
+  const reachable = await Promise.race([
+    // no-cors: we only need to know whether the network lets us reach the host at all. A blocked
+    // host rejects ("Failed to fetch"); a reachable one resolves with an opaque response.
+    fetch(SUPABASE_DIRECT_URL + "/auth/v1/health", { mode: "no-cors", cache: "no-store" }).then(() => true, () => false),
+    new Promise(r => setTimeout(() => r(false), 4000)),
+  ]);
+  if (!reachable) {
+    SUPABASE_URL = location.origin + SUPABASE_PROXY_PATH;
+    SUPABASE_ROUTE = "proxy";
+    console.warn("Supabase host unreachable from this network — using the studypipeline.com proxy");
+  }
+  return SUPABASE_ROUTE;
+}
 // supabase-js names the saved session after the URL's host. Pin the old name so changing the
 // host above does not sign everybody out.
 const SUPABASE_AUTH_OPTS = { auth: { storageKey: "sb-wqgiqiqatdmoxpjbzxoj-auth-token" } };
@@ -2105,6 +2133,7 @@ async function bootApp() {
     await withTimeout(loadSupabaseLib(), 30000, "Loading Team Sync library");
     libLoaded = true;
     if (!sb) {
+      await chooseSupabaseRoute();
       sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_AUTH_OPTS);
       sb.auth.onAuthStateChange((event, session) => {
         if (event === "INITIAL_SESSION") return; // covered by the explicit getSession() below
@@ -2841,6 +2870,9 @@ async function deleteRemote(id) {
 let realtimeConfirmed = false;
 function subscribeRealtime() {
   if (!sb || realtimeChannel) return;
+  // Through the proxy there is no websocket to open (Netlify proxies plain HTTP only), and a
+  // channel that can never connect retries forever. Tab-focus pulls keep things current instead.
+  if (SUPABASE_ROUTE === "proxy") return;
   try {
     realtimeChannel = sb
       .channel("items-sync")

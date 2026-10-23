@@ -25,7 +25,8 @@ for (const f of [app, path.join("cases", "index.html")]) {
   const p = path.join(ROOT, f);
   if (!fs.existsSync(p)) { console.log("  skip", f, "(not present)"); continue; }
   const s = fs.readFileSync(p, "utf8");
-  check(`${f}: data URL is db.studypipeline.com`, /const SUPABASE_URL = "https:\/\/db\.studypipeline\.com";/.test(s));
+  check(`${f}: data URL is db.studypipeline.com`, /const SUPABASE_DIRECT_URL = "https:\/\/db\.studypipeline\.com";/.test(s) && /let SUPABASE_URL = SUPABASE_DIRECT_URL;/.test(s));
+  check(`${f}: the route is chosen before the client exists`, /await chooseSupabaseRoute\(\);\s*\n\s*sb = window\.supabase\.createClient/.test(s));
   check(`${f}: no hard-coded supabase.co host left`, !/https:\/\/[a-z0-9]+\.supabase\.co/.test(s));
   check(`${f}: session key pinned to the original name`, s.includes('storageKey: "sb-wqgiqiqatdmoxpjbzxoj-auth-token"'));
   const calls = s.match(/supabase\.createClient\([^)]*\)/g) || [];
