@@ -112,6 +112,10 @@ function dropOn(el, files) {
     ev(`JSON.stringify(studyById(detailStudyId).docSlots)`));
   check("...under the description that was typed",
     ev(`(slotEntries(studyById(detailStudyId), "abstract")[0] || {}).label`) === "Third pass, ready for Carla");
+  // closeSheet() lets the slide-out animation finish (320 ms) before removing the node, and it is
+  // only called once the upload has resolved, so a fixed 400 ms wait raced the two. Wait for the
+  // sheet to actually leave, up to 2 s, rather than for a guessed time.
+  for (let i = 0; i < 40 && d.getElementById("sheet"); i++) await new Promise(r => setTimeout(r, 50));
   check("...and the sheet closed", !d.getElementById("sheet"));
 
   console.log("\n-- 2. The sheet is itself a drop target --");
