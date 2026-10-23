@@ -41,6 +41,21 @@ type Cfg = {
   authors: string[]; institution: string; excludeAuthors: string[];
   keywords: string[]; excludeKeywords: string[]; societies: string[];
   enabled?: boolean; lastRunAt?: string;
+  // WHO THIS PERSON IS, confirmed by them rather than guessed from an affiliation string.
+  //
+  // Adam, 22 Oct 2026: "Park was at Michigan, so stuff he did in the past is still going to be
+  // relevant to him and true for others." A single `institution` filter assumes a career spent in
+  // one place. Dan Park's Michigan work vanished from his own feed the moment the Rush filter was
+  // applied — and his own papers are what the framing anchors "how this relates to your work" to,
+  // so the filter was quietly making his digest worse the more of a career he had.
+  //
+  // `ownPmids` is the ground truth: papers the person has ticked as theirs. `institutions` is the
+  // set of affiliations derived from those ticks, used to catch NEW papers as they appear. A name
+  // ticked as not-theirs goes in `notMine` so a disambiguation is made once, not every week.
+  institutions?: string[];
+  ownPmids?: string[];
+  notMine?: string[];
+  identifiedAt?: string;
 };
 
 // ---------- row ids ----------
@@ -154,10 +169,18 @@ function pubmedQueries(cfg: Cfg, windowDays: number) {
   ].join(" ");
 
   const ownParts = authors.flatMap(authorTerms).join(" OR ");
-  // The institution is ANDed, not ORed: it is a filter against the wrong person with the same
-  // surname, which is the single most common way these feeds go wrong.
+  // Affiliation is ANDed, because it is the filter against the wrong person with the same surname
+  // — the single most common way these feeds go wrong. But it is a SET, not one string: a surgeon
+  // who moved institutions is still the author of everything they did before the move, and an
+  // earlier single-institution filter silently deleted Dan Park's Michigan career from his own
+  // feed. Every affiliation the person has confirmed is ORed together.
+  const insts = clean((cfg as any).institutions);
+  const allInsts = insts.length ? insts : (inst ? [inst] : []);
+  const instClause = allInsts.length
+    ? ` AND (${allInsts.map((i) => `${phrase(i)}[Affiliation]`).join(" OR ")})`
+    : "";
   const own = authors.length
-    ? `(${ownParts})${inst ? ` AND ${phrase(inst)}[Affiliation]` : ""} ${notClause}`.trim()
+    ? `(${ownParts})${instClause} ${notClause}`.trim()
     : "";
 
   const field = kws.length
@@ -485,11 +508,19 @@ async function readPrefs(db: any, ws: string, priorFeed: any, cfg: Cfg): Promise
 
 async function runOne(db: any, cfg: Cfg, windowDays: number) {
   const q = pubmedQueries(cfg, windowDays);
-  const ownIds = await pubmedSearch(q.own, 365 * 2, 20);
+  // Confirmed papers come FIRST and are never second-guessed. A search is an estimate of who
+  // somebody is; a tick is them telling you. The search still runs, to catch what has appeared
+  // since they last confirmed, and anything they marked as not-theirs is dropped from both.
+  const confirmed = clean((cfg as any).ownPmids);
+  const notMine = new Set(clean((cfg as any).notMine));
+  const searched = await pubmedSearch(q.own, 365 * 2, 20);
+  const ownIds = [...new Set([...confirmed, ...searched])]
+    .filter((id) => !notMine.has(id))
+    .slice(0, 25);
   const fieldIds = await pubmedSearch(q.field, windowDays, 40);
   // Their own papers must not reappear as "new work that touches your publications".
   const ownSet = new Set(ownIds);
-  const candidateIds = fieldIds.filter((id) => !ownSet.has(id));
+  const candidateIds = fieldIds.filter((id) => !ownSet.has(id) && !notMine.has(id));
 
   const [ownSum, fieldSum] = await Promise.all([
     pubmedSummaries(ownIds),
@@ -596,6 +627,140 @@ async function explore(cfg: Cfg, query: string, windowDays: number, max: number)
   };
 }
 
+// ---------- identify: which papers are actually this person's ----------
+//
+// Adam, 22 Oct 2026: "Park was at Michigan, so stuff he did in the past is still going to be
+// relevant." PubMed has no author identifier, so the only way to know which "Park D" is Dan Park
+// is to ask him. This returns his candidate papers grouped by the institution on HIS byline, so he
+// can tick "University of Michigan" and "Rush" as a whole and untick the strangers, instead of
+// reading three hundred titles. Nothing is stored here: the app saves what he ticks into the
+// lab's watchConfig, under the row-level security that already covers it.
+//
+// The search is deliberately loose — NO affiliation filter, because the affiliation is the thing
+// being discovered. For a common name that is thousands of strangers, so past ~400 hits it is
+// narrowed to orthopaedic/spine work plus the lab's own topics, and the response says so.
+const IDENTIFY_FIELD = ["orthop*[Affiliation]", "orthop*[Title/Abstract]", "sports medicine[Affiliation]",
+  "spine[Affiliation]", "neurosurg*[Affiliation]", "cartilage[Title/Abstract]"];
+
+async function esearchAll(term: string, retmax: number): Promise<{ count: number; ids: string[] }> {
+  const base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
+  const p = new URLSearchParams({ db: "pubmed", term, retmode: "json", retmax: String(retmax), sort: "pub_date" });
+  if (NCBI_KEY) p.set("api_key", NCBI_KEY);
+  if (NCBI_EMAIL) p.set("email", NCBI_EMAIL);
+  const out = await getJSON(`${base}/esearch.fcgi?${p}`);
+  const r = out?.esearchresult ?? {};
+  return { count: Number(r.count || 0), ids: (r.idlist ?? []).map(String) };
+}
+
+async function getText(url: string, tries = 3): Promise<string> {
+  let lastErr: unknown = null;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetch(url, { headers: { "User-Agent": "studypipeline-research-watch" } });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return await r.text();
+    } catch (e) { lastErr = e; await new Promise((r) => setTimeout(r, 400 * (i + 1))); }
+  }
+  throw lastErr;
+}
+
+const xmlText = (s: string) => String(s || "")
+  .replace(/<[^>]+>/g, "")
+  .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+  .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+  .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+  .replace(/&amp;/g, "&").replace(/\s+/g, " ").trim();
+const fold = (s: string) => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+// "Department of Orthopaedic Surgery, Rush University Medical Center, Chicago, IL, USA." →
+// "Rush University Medical Center". The organisation, not the department: departments are named
+// the same everywhere, and it is the organisation that tells two Park Ds apart. Exported for tests.
+export function orgFromAffiliation(aff: string): string {
+  const text = String(aff || "").replace(/\S+@\S+/g, "").replace(/electronic address:?/gi, "");
+  const parts = text.split(/[,;]/).map((x) => x.trim().replace(/\.$/, "")).filter(Boolean);
+  const unit = /^(dep(artment|t\.?)|div(ision)?|section|faculty|program|service|unit|laborator|lab\b|center for|centre for)/i;
+  const org = /(universit|hospital|medical cent|health|institut|college|clinic|school of medicine|orthopa?edic|foundation|centre|center|klinik|ospedale|hôpital)/i;
+  const pick = parts.find((p) => org.test(p) && !unit.test(p)) || parts.find((p) => org.test(p)) || parts[1] || parts[0] || "";
+  return pick.replace(/\s+/g, " ").slice(0, 120);
+}
+
+export function parseArticlesFor(xml: string, name: string) {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+  // "Dan Park" → surname park, initial d. "Park D" (index form) → the same.
+  let surname = "", initial = "";
+  if (parts.length >= 2 && /^[A-Z]{1,3}$/.test(parts[parts.length - 1])) {
+    surname = parts.slice(0, -1).join(" "); initial = parts[parts.length - 1][0];
+  } else if (parts.length >= 2) {
+    surname = parts[parts.length - 1]; initial = parts[0][0];
+  } else surname = parts[0] || "";
+  const sn = fold(surname), ini = fold(initial);
+  const out: any[] = [];
+  for (const block of String(xml || "").split(/<PubmedArticle>/).slice(1)) {
+    const pmid = (block.match(/<PMID[^>]*>(\d+)<\/PMID>/) || [])[1] || "";
+    if (!pmid) continue;
+    const title = xmlText((block.match(/<ArticleTitle[^>]*>([\s\S]*?)<\/ArticleTitle>/) || [])[1] || "").replace(/\.$/, "");
+    const journal = xmlText((block.match(/<ISOAbbreviation>([\s\S]*?)<\/ISOAbbreviation>/) || block.match(/<Title>([\s\S]*?)<\/Title>/) || [])[1] || "");
+    const pd = (block.match(/<PubDate>([\s\S]*?)<\/PubDate>/) || [])[1] || "";
+    const year = ((pd.match(/<Year>(\d{4})<\/Year>/) || pd.match(/(\d{4})/) || [])[1]) || "";
+    let affiliation = "", matched = false;
+    for (const a of block.match(/<Author[ >][\s\S]*?<\/Author>/g) || []) {
+      const last = fold(xmlText((a.match(/<LastName>([\s\S]*?)<\/LastName>/) || [])[1] || ""));
+      const inits = fold(xmlText((a.match(/<Initials>([\s\S]*?)<\/Initials>/) || [])[1] || ""))
+        || fold(xmlText((a.match(/<ForeName>([\s\S]*?)<\/ForeName>/) || [])[1] || "")).slice(0, 1);
+      if (last !== sn || (ini && !inits.startsWith(ini))) continue;
+      matched = true;
+      affiliation = xmlText((a.match(/<Affiliation>([\s\S]*?)<\/Affiliation>/) || [])[1] || "");
+      break;
+    }
+    if (!matched) continue;   // the name matched a collective or an investigator list, not a byline
+    out.push({ pmid, title, journal, year, affiliation, org: affiliation ? orgFromAffiliation(affiliation) : "" });
+  }
+  return out;
+}
+
+export function clusterByOrg(papers: any[]) {
+  const groups = new Map<string, any>();
+  for (const p of papers) {
+    const label = p.org || "No affiliation listed";
+    const key = fold(label).replace(/[^a-z0-9]+/g, " ").trim() || "none";
+    if (!groups.has(key)) groups.set(key, { key, org: p.org || "", label, papers: [] });
+    groups.get(key).papers.push(p);
+  }
+  return [...groups.values()]
+    .map((g) => {
+      const ys = g.papers.map((p: any) => Number(p.year)).filter((y: number) => y > 0);
+      return Object.assign(g, { count: g.papers.length, from: ys.length ? Math.min(...ys) : null, to: ys.length ? Math.max(...ys) : null });
+    })
+    // Biggest first, with the no-affiliation bucket last: older records often carry no
+    // affiliation at all, and it is the least informative group to decide on.
+    .sort((a, b) => (a.org ? 0 : 1) - (b.org ? 0 : 1) || b.count - a.count);
+}
+
+async function identify(cfg: Cfg, name: string) {
+  const terms = authorTerms(name);
+  if (!terms.length) return { ok: false, error: "Give a name to look up" };
+  const nameClause = `(${terms.join(" OR ")})`;
+  const loose = await esearchAll(nameClause, 0);
+  let narrowed = false, term = nameClause;
+  if (loose.count > 400) {
+    const kws = clean(cfg.keywords).map((k) => `${phrase(k)}[Title/Abstract]`);
+    term = `${nameClause} AND (${[...IDENTIFY_FIELD, ...kws].join(" OR ")})`;
+    narrowed = true;
+  }
+  const { count, ids } = await esearchAll(term, 400);
+  const base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
+  const papers: any[] = [];
+  for (let i = 0; i < ids.length; i += 200) {
+    const p = new URLSearchParams({ db: "pubmed", id: ids.slice(i, i + 200).join(","), retmode: "xml" });
+    if (NCBI_KEY) p.set("api_key", NCBI_KEY);
+    papers.push(...parseArticlesFor(await getText(`${base}/efetch.fcgi?${p}`), name));
+  }
+  return {
+    ok: true, name, totalWithName: loose.count, matched: count, shown: papers.length, narrowed,
+    clusters: clusterByOrg(papers),
+  };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   try {
@@ -603,6 +768,20 @@ Deno.serve(async (req) => {
     const body = await req.json().catch(() => ({}));
     const only = typeof body?.workspace === "string" ? body.workspace.trim() : "";
     const windowDays = Number(body?.windowDays) > 0 ? Number(body.windowDays) : 30;
+
+    if (String(body?.action || "") === "identify") {
+      const name = String(body?.name ?? "").trim();
+      if (!name) return json({ error: "Give a name to look up" }, 400);
+      if (name.length > 80) return json({ error: "That name is too long" }, 400);
+      if (!only) return json({ error: "No lab given" }, 400);
+      const { data: one } = await db.from("items").select("id, data, workspace")
+        .eq("kind", "watchConfig").eq("workspace", only).limit(1);
+      const cfg: Cfg = one?.[0]
+        ? Object.assign({}, (one[0] as any).data, { id: (one[0] as any).id, workspace: only })
+        : ({ id: "", workspace: only, authors: [], keywords: [] } as any);
+      // Read-only: PubMed in, candidates out. The app writes what the person ticks.
+      return json(await identify(cfg, name));
+    }
 
     if (String(body?.action || "") === "explore") {
       const query = String(body?.query ?? "").trim();

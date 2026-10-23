@@ -6066,6 +6066,7 @@ function renderResearch() {
   // Headline numbers across the top, then two columns the whole way down. Nothing breaks out to
   // full width partway through: a column that widens halfway down the page reads as a mistake.
   $main.innerHTML = (stats.band || "")
+    + confirmPubsNudgeHTML()
     + exploreBoxHTML()
     + `<div class="rw-grid">${side}${main}</div>`
     + (hasWatch ? rwTailHTML(w) : "");
@@ -6076,6 +6077,7 @@ function renderResearch() {
     voteOnWatchItem(b.dataset.rwKey, b.dataset.rwVote);
   });
   wireExploreBox();
+  wireConfirmPubsNudge($main);
 }
 // ---------- Explore: ask now, answer now ----------
 //
@@ -11673,6 +11675,15 @@ async function openWatchSettingsSheet() {
         "Full names, comma-separated. Usually just you, but add anyone whose output you want tracked alongside yours.")}
       ${box("wc-institution", "Institution", cfg.institution, "Rush University Medical Center",
         "This is what stops a common surname pulling in a stranger. The publication import once collected 17 papers belonging to a veterinarian with a similar name &mdash; this is the field that prevents that.")}
+      ${(() => {
+        const c = confirmedPubsSummary(cfg);
+        return `<div style="margin:-2px 0 14px;padding:10px 12px;background:var(--bg);border-radius:8px">
+          <div style="font-size:13.5px;line-height:1.45">${c.n
+            ? `<b>${c.n} paper${c.n === 1 ? "" : "s"} confirmed as yours</b>${c.insts.length ? ` &mdash; also searching ${c.insts.map(esc).join(", ")}` : ""}.`
+            : `<b>Your papers aren't confirmed yet.</b> <span style="color:var(--text2)">One institution can't describe a career; ticking your papers can.</span>`}</div>
+          ${canTuneFeed(cfg) ? `<button class="mini-btn" id="wc-confirm" style="margin:8px 0 0">${c.n ? "Review my papers" : "Confirm my papers"}</button>` : ""}
+        </div>`;
+      })()}
       ${box("wc-exclude-authors", "Definitely not you", lines(cfg.excludeAuthors), "K Singh (Auburn)",
         "Anyone who keeps turning up by mistake. Leave empty until it happens.")}
       ${box("wc-keywords", "Topics to watch", lines(cfg.keywords), "cervical disc replacement, lumbar decompression, MCID",
@@ -11804,6 +11815,8 @@ function openFeedTunersSheet() {
     { saveLabel: "Save" });
 }
 function wireWatchEnabledRow() {
+  const cpBtn = document.getElementById("wc-confirm");
+  if (cpBtn) cpBtn.onclick = () => openConfirmPubsSheet();
   const row = document.getElementById("wc-enabled-row");
   if (row) row.onclick = (e) => {
     const b = document.getElementById("wc-enabled");
@@ -11843,6 +11856,214 @@ function wireWatchEnabledRow() {
       const b = document.getElementById("wc-run");
       if (b) { b.disabled = false; b.textContent = "Refresh my feed now"; }
     }
+  };
+}
+// ---------- Confirm your publications ----------
+//
+// Adam, 22 Oct 2026: "Park was at Michigan, so stuff he did in the past is still going to be
+// relevant." The feed anchors "how this relates to your work" on the person's own papers, and it
+// used to find them with ONE institution filter — which deleted Dan Park's entire Michigan career
+// from his own feed. PubMed has no author identifier, so the only reliable way to know which
+// "Park D" is him is to ask him once.
+//
+// research-watch's `identify` action looks the name up with NO affiliation filter and groups the
+// results by the institution on HIS byline. Here he ticks whole institutions (and can open one to
+// untick a stranger). What is saved, in the lab's watchConfig:
+//   ownPmids     — the papers he ticked; the feed uses these first and never second-guesses them
+//   institutions — the organisations those papers came from, ORed to catch new papers as they
+//                  appear (the single `institution` field is still honoured when this is empty)
+//   notMine      — everything he left unticked, so the same stranger is never offered again
+// Steering-only, like the votes: it changes the whole lab's feed.
+const cpFold = (x) => String(x || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+function confirmedPubsSummary(cfg) {
+  const c = cfg || watchConfig();
+  const n = (Array.isArray(c.ownPmids) ? c.ownPmids : []).length;
+  const insts = Array.isArray(c.institutions) ? c.institutions : [];
+  return { n, insts, at: String(c.identifiedAt || "") };
+}
+async function identifyPublications(name) {
+  if (!sb) throw new Error("connect Team Sync first");
+  const { data: sess } = await sb.auth.getSession();
+  const token = sess && sess.session && sess.session.access_token;
+  if (!token) throw new Error("your session expired — sign out and back in");
+  const res = await fetch(SUPABASE_URL + "/functions/v1/research-watch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Authorization": "Bearer " + token },
+    body: JSON.stringify({ action: "identify", workspace: myWorkspace, name }),
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok || out.error || out.ok === false) throw new Error(out.error || ("lookup failed (" + res.status + ")"));
+  return out;
+}
+// Which papers start ticked. An earlier answer always wins; otherwise a whole group starts ticked
+// only if it is an institution this lab has already named. Everything else starts unticked, so a
+// stranger is never confirmed by somebody pressing Save without reading.
+function cpInitialTicks(cfg, clusters) {
+  const own = new Set((cfg.ownPmids || []).map(String));
+  const notMine = new Set((cfg.notMine || []).map(String));
+  const named = [cfg.institution, ...(cfg.institutions || [])].map(cpFold).filter(Boolean);
+  const ticks = {};
+  clusters.forEach(g => {
+    const org = cpFold(g.org);
+    const groupKnown = !!org && named.some(n => org.includes(n) || n.includes(org));
+    g.papers.forEach(p => {
+      ticks[p.pmid] = own.has(p.pmid) ? true : notMine.has(p.pmid) ? false : groupKnown;
+    });
+  });
+  return ticks;
+}
+// What saving writes. Pure, so the test can check it without a network.
+function cpNextConfig(cfg, clusters, ticks, nowIso) {
+  const shown = new Set();
+  const yearOf = {};
+  clusters.forEach(g => g.papers.forEach(p => { shown.add(p.pmid); yearOf[p.pmid] = Number(p.year) || 0; }));
+  const ticked = [...shown].filter(id => ticks[id]);
+  const unticked = [...shown].filter(id => !ticks[id]);
+  // Confirmations made earlier but not in this lookup (it is capped) are kept, not lost.
+  const keptEarlier = (cfg.ownPmids || []).map(String).filter(id => !shown.has(id));
+  const ownPmids = [...new Set([...ticked.sort((a, b) => (yearOf[b] - yearOf[a]) || (Number(b) - Number(a))), ...keptEarlier])];
+  const notMine = [...new Set([...(cfg.notMine || []).map(String), ...unticked])].filter(id => !ticked.includes(id));
+  const counts = clusters
+    .filter(g => g.org)
+    .map(g => ({ org: g.org, n: g.papers.filter(p => ticks[p.pmid]).length }))
+    .filter(x => x.n > 0)
+    .sort((a, b) => b.n - a.n);
+  const institutions = counts.length ? counts.slice(0, 8).map(x => x.org) : (cfg.institutions || []);
+  return Object.assign({}, cfg, { ownPmids, notMine, institutions, identifiedAt: nowIso });
+}
+function openConfirmPubsSheet(nameArg) {
+  const cfg = watchConfig();
+  if (!canTuneFeed(cfg)) { toast("Only the feed's owner can confirm whose papers these are"); return; }
+  const names = (cfg.authors || []).filter(Boolean);
+  const me0 = currentUser ? ((profileFor(currentUser.id) || {}).name || "") : "";
+  const name = String(nameArg || names[0] || me0 || "").trim();
+  if (!name) {
+    toast("Add your name under Whose work to follow first");
+    openWatchSettingsSheet();
+    return;
+  }
+  let data = null, ticks = {};
+  const picker = names.length > 1
+    ? `<div class="card" style="display:flex;gap:10px;align-items:center">
+         <label for="cp-name" style="font-size:13px;color:var(--text2)">Whose papers</label>
+         <select id="cp-name" style="flex:1">${names.map(n => `<option ${n === name ? "selected" : ""}>${esc(n)}</option>`).join("")}</select>
+       </div>` : "";
+  openSheet("Which papers are yours?", `
+    ${picker}
+    <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
+      PubMed has no way to tell two people with the same name apart, so the feed asks once.
+      Tick every place you have worked &mdash; your papers from there are grouped together &mdash;
+      and open a group to untick anything that isn't you. Your feed uses these as <b>your work</b>,
+      and keeps finding new papers from the places you tick.
+    </div>
+    <div id="cp-body"><div class="card"><p class="rw-note">Looking up everything PubMed has under ${esc(name)}&hellip;</p></div></div>`,
+    () => {
+      if (!data) { toast("Still looking — give it a few seconds"); return false; }
+      const next = cpNextConfig(watchConfig(), data.clusters || [], ticks, new Date().toISOString());
+      next.id = watchConfigRowId(myWorkspace);
+      next.workspace = myWorkspace;
+      state.watchConfig = next;
+      saveLocal();
+      pushItem("watchConfig", next, next.id);
+      render();
+      const k = next.institutions.length;
+      toastAction(`${next.ownPmids.length} paper${next.ownPmids.length === 1 ? "" : "s"} confirmed as yours` +
+        (k ? `, from ${k} institution${k === 1 ? "" : "s"}` : "") + ". Change it any time in Settings → My research feed",
+        "Change", () => openConfirmPubsSheet(name));
+      return true;
+    },
+    async (sh) => {
+      const sel = sh.querySelector("#cp-name");
+      if (sel) sel.onchange = () => openConfirmPubsSheet(sel.value);
+      const body = sh.querySelector("#cp-body");
+      try {
+        data = await identifyPublications(name);
+      } catch (e) {
+        if (body) body.innerHTML = `<div class="card"><p class="rw-note">Couldn't look that up — ${esc((e && e.message) || "try again")}. Nothing has been changed.</p></div>`;
+        return;
+      }
+      if (!document.body.contains(sh)) return;          // closed while we were waiting
+      const clusters = data.clusters || [];
+      if (!clusters.length) {
+        body.innerHTML = `<div class="card"><p class="rw-note">PubMed has nothing under ${esc(name)} as an author. Check the spelling under Whose work to follow, or try the name as it appears on your papers.</p></div>`;
+        data = null;
+        return;
+      }
+      ticks = cpInitialTicks(watchConfig(), clusters);
+      const span = (g) => g.from ? (g.from === g.to ? String(g.from) : `${g.from}–${g.to}`) : "";
+      body.innerHTML = `
+        ${data.narrowed ? `<div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5">
+          ${Number(data.totalWithName).toLocaleString()} papers carry this name across every field, so this shows the
+          orthopaedic and spine ones${(watchConfig().keywords || []).length ? " and those on your topics" : ""}.</div>` : ""}
+        ${clusters.map(g => `
+          <div class="card" style="padding:10px 14px">
+            <div class="frow" style="gap:12px;align-items:flex-start">
+              <input type="checkbox" data-cp-group="${esc(g.key)}" style="flex:0;width:20px;height:20px;margin-top:2px">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:14.5px;font-weight:600">${esc(g.label)}</div>
+                <div style="font-size:12px;color:var(--text2)">${g.count} paper${g.count === 1 ? "" : "s"}${span(g) ? " · " + esc(span(g)) : ""}</div>
+                <details style="margin-top:6px">
+                  <summary style="font-size:12.5px;color:var(--accent);cursor:pointer">Show the papers</summary>
+                  ${g.papers.map(p => `
+                    <label class="frow" style="gap:10px;align-items:flex-start;padding:6px 0;cursor:pointer">
+                      <input type="checkbox" data-cp-pmid="${esc(p.pmid)}" data-cp-in="${esc(g.key)}" ${ticks[p.pmid] ? "checked" : ""} style="flex:0;width:18px;height:18px;margin-top:2px">
+                      <span style="flex:1;font-size:13px;line-height:1.4">${esc(p.title)}
+                        <span style="color:var(--text2);font-size:12px">· ${esc(p.journal)}${p.year ? " " + esc(p.year) : ""}</span></span>
+                    </label>`).join("")}
+                </details>
+              </div>
+            </div>
+          </div>`).join("")}
+        <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:4px 2px 0">
+          Showing ${data.shown} of ${Number(data.matched).toLocaleString()}. Anything you leave unticked is remembered as not yours, so it won't be offered again.
+        </div>`;
+      const syncGroup = (key) => {
+        // Matched on dataset rather than a built selector: keys come from affiliation text, and
+        // a quote or bracket in one must not break the lookup.
+        const boxes = [...body.querySelectorAll("[data-cp-in]")].filter(b => b.dataset.cpIn === key);
+        const on = boxes.filter(b => b.checked).length;
+        const gb = [...body.querySelectorAll("[data-cp-group]")].find(b => b.dataset.cpGroup === key);
+        if (gb) { gb.checked = on === boxes.length && on > 0; gb.indeterminate = on > 0 && on < boxes.length; }
+      };
+      clusters.forEach(g => syncGroup(g.key));
+      body.querySelectorAll("[data-cp-group]").forEach(gb => gb.onchange = () => {
+        [...body.querySelectorAll("[data-cp-in]")].filter(b => b.dataset.cpIn === gb.dataset.cpGroup).forEach(b => {
+          b.checked = gb.checked; ticks[b.dataset.cpPmid] = gb.checked;
+        });
+        gb.indeterminate = false;
+      });
+      body.querySelectorAll("[data-cp-pmid]").forEach(b => b.onchange = () => {
+        ticks[b.dataset.cpPmid] = b.checked;
+        syncGroup(b.dataset.cpIn);
+      });
+    },
+    { saveLabel: "Save" });
+}
+// The first-run nudge on the Research tab. Only for whoever steers the feed, only once there is a
+// name to look up, and "Later" means later — two weeks, per person, not every page load.
+function confirmPubsNudgeHTML() {
+  const cfg = watchConfig();
+  if (!canTuneFeed(cfg) || !(cfg.authors || []).length || cfg.identifiedAt) return "";
+  try {
+    const later = Number(localStorage.getItem("rt-cp-later:" + myWorkspace) || 0);
+    if (later && Date.now() - later < 14 * 86400e3) return "";
+  } catch (_) {}
+  return `<div class="card" id="cp-nudge" style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <div style="flex:1;min-width:220px;font-size:13.5px;line-height:1.5">
+      <b>Which papers are yours?</b> <span style="color:var(--text2)">Confirm them once and the feed stops
+      guessing &mdash; including work from anywhere you were before.</span></div>
+    <button class="btn secondary" id="cp-nudge-go" style="margin:0">Confirm my papers</button>
+    <button class="mini-btn" id="cp-nudge-later" style="margin:0">Later</button>
+  </div>`;
+}
+function wireConfirmPubsNudge(root) {
+  const go = root.querySelector("#cp-nudge-go");
+  if (go) go.onclick = () => openConfirmPubsSheet();
+  const later = root.querySelector("#cp-nudge-later");
+  if (later) later.onclick = () => {
+    try { localStorage.setItem("rt-cp-later:" + myWorkspace, String(Date.now())); } catch (_) {}
+    const n = root.querySelector("#cp-nudge"); if (n) n.remove();
+    toast("Okay — it's in Settings → My research feed whenever you want it");
   };
 }
 // A PI's direct research team. Will and TJ work for Adam: they need to see everything of his,
