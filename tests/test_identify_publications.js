@@ -72,17 +72,18 @@ check("Midwest Orthopaedics at Rush is kept as itself",
 console.log("\n-- only the byline that is this person --");
 const papers = lib.parseArticlesFor(xml, "Dan Park");
 const ids = papers.map(p => p.pmid).sort();
-check("finds every paper with a D. Park on the byline", JSON.stringify(ids) === JSON.stringify(["20000006", "37000003", "38000002", "39000004", "40000007", "41000001"]), ids);
+check("finds every paper by a Dan/Daniel/D. Park", JSON.stringify(ids) === JSON.stringify(["20000006", "37000003", "38000002", "40000007", "41000001"]), ids);
+check("a Park D with a different first name (Do-Young) is not him", !ids.includes("39000004"));
 check("a Park with a different initial is not a match", !ids.includes("39000005"));
 check("the affiliation is Park's own, not the first author's",
   papers.find(p => p.pmid === "41000001").org === "Rush University Medical Center");
 check("entities are decoded in titles", papers.find(p => p.pmid === "41000001").title === "Meniscal root repair & outcomes", papers.find(p => p.pmid === "41000001").title);
 check("numeric entities too", papers.find(p => p.pmid === "40000007").title.startsWith("β-catenin"));
 check("year and journal come through", papers.find(p => p.pmid === "38000002").year === "2021" && papers.find(p => p.pmid === "38000002").journal === "Am J Sports Med");
-check("the index form of the name works the same", lib.parseArticlesFor(xml, "Park D").length === papers.length);
+check("the index form, which has no first name, can't tell Do-Young apart and keeps him for the person to judge", lib.parseArticlesFor(xml, "Park D").length === papers.length + 1);
 
 console.log("\n-- grouped so a career can be ticked in two clicks --");
-const groups = lib.clusterByOrg(papers);
+const groups = lib.clusterByOrg(lib.parseArticlesFor(xml, "Park D"));
 const g = (label) => groups.find(x => x.label === label);
 check("Michigan papers form one group despite different wording", g("University of Michigan") && g("University of Michigan").count === 2, groups.map(x => [x.label, x.count]));
 check("Rush is its own group", g("Rush University Medical Center") && g("Rush University Medical Center").count === 2);

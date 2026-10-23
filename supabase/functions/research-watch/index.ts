@@ -687,13 +687,23 @@ export function orgFromAffiliation(aff: string): string {
 export function parseArticlesFor(xml: string, name: string) {
   const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
   // "Dan Park" → surname park, initial d. "Park D" (index form) → the same.
-  let surname = "", initial = "";
+  let surname = "", initial = "", first = "";
   if (parts.length >= 2 && /^[A-Z]{1,3}$/.test(parts[parts.length - 1])) {
     surname = parts.slice(0, -1).join(" "); initial = parts[parts.length - 1][0];
   } else if (parts.length >= 2) {
-    surname = parts[parts.length - 1]; initial = parts[0][0];
+    surname = parts[parts.length - 1]; initial = parts[0][0]; first = parts[0];
   } else surname = parts[0] || "";
-  const sn = fold(surname), ini = fold(initial);
+  const sn = fold(surname), ini = fold(initial), fn = fold(first).replace(/[^a-z]/g, "");
+  // A first name, when one was given, has to agree with the byline's — "Dan" accepts Daniel and
+  // Dan, and rejects Do-Young and Dong-Hyun, who share "Park D" in the index. Records that carry
+  // only initials (most before ~2002) can't be told apart this way and are kept for the person to
+  // judge. Measured on "Dan Park": 841 candidates, most of them other Park Ds.
+  const firstAgrees = (fore: string) => {
+    if (fn.length < 2) return true;
+    const f = fold(fore).split(/[\s-]+/)[0].replace(/[^a-z]/g, "");
+    if (f.length < 2) return true;
+    return f.startsWith(fn) || fn.startsWith(f);
+  };
   const out: any[] = [];
   for (const block of String(xml || "").split(/<PubmedArticle>/).slice(1)) {
     const pmid = (block.match(/<PMID[^>]*>(\d+)<\/PMID>/) || [])[1] || "";
@@ -708,6 +718,7 @@ export function parseArticlesFor(xml: string, name: string) {
       const inits = fold(xmlText((a.match(/<Initials>([\s\S]*?)<\/Initials>/) || [])[1] || ""))
         || fold(xmlText((a.match(/<ForeName>([\s\S]*?)<\/ForeName>/) || [])[1] || "")).slice(0, 1);
       if (last !== sn || (ini && !inits.startsWith(ini))) continue;
+      if (!firstAgrees(xmlText((a.match(/<ForeName>([\s\S]*?)<\/ForeName>/) || [])[1] || ""))) continue;
       matched = true;
       affiliation = xmlText((a.match(/<Affiliation>([\s\S]*?)<\/Affiliation>/) || [])[1] || "");
       break;
@@ -747,13 +758,23 @@ async function identify(cfg: Cfg, name: string) {
     term = `${nameClause} AND (${[...IDENTIFY_FIELD, ...kws].join(" OR ")})`;
     narrowed = true;
   }
-  const { count, ids } = await esearchAll(term, 400);
+  // Up to 1000, newest first. The first-name check above throws most strangers away AFTER the
+  // fetch, so the fetch has to reach back far enough to find a career that started elsewhere —
+  // 400 reached only to 2022 for "Dan Park" and missed his earlier work entirely.
+  const { count, ids } = await esearchAll(term, 1000);
   const base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils";
+  const batches: string[][] = [];
+  for (let i = 0; i < ids.length; i += 200) batches.push(ids.slice(i, i + 200));
   const papers: any[] = [];
-  for (let i = 0; i < ids.length; i += 200) {
-    const p = new URLSearchParams({ db: "pubmed", id: ids.slice(i, i + 200).join(","), retmode: "xml" });
-    if (NCBI_KEY) p.set("api_key", NCBI_KEY);
-    papers.push(...parseArticlesFor(await getText(`${base}/efetch.fcgi?${p}`), name));
+  // Two requests in flight: NCBI allows three a second without a key, and this keeps well inside
+  // the 26 s a proxied request gets on networks that need the studypipeline.com route.
+  for (let i = 0; i < batches.length; i += 2) {
+    const xmls = await Promise.all(batches.slice(i, i + 2).map((b) => {
+      const p = new URLSearchParams({ db: "pubmed", id: b.join(","), retmode: "xml" });
+      if (NCBI_KEY) p.set("api_key", NCBI_KEY);
+      return getText(`${base}/efetch.fcgi?${p}`);
+    }));
+    for (const x of xmls) papers.push(...parseArticlesFor(x, name));
   }
   return {
     ok: true, name, totalWithName: loose.count, matched: count, shown: papers.length, narrowed,
