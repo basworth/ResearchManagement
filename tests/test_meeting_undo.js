@@ -42,7 +42,8 @@ function meeting(created, extra) {
       { id: "c4", type: "addTask", studyId: "ipfi", study: "Integrative PFI", label: "Task", from: "", to: "Segment controls", evidence: "this week",
         undo: { kind: "taskShelve", taskId: "t-new" } },
     ],
-    notApplied: [{ text: "Check the clinical scout sequence", why: "no study" }],
+    notApplied: [{ text: "Check the clinical scout sequence", why: "no study" },
+      { text: "Task: Excel subject tracker", why: "held — only 30% sure", evidence: "maybe a spreadsheet", study: "MDAKP", studyId: "mdakp", confidence: 0.3 }],
     text: "transcript with [patient removed]",
   }, extra || {}) };
 }
@@ -76,6 +77,11 @@ const base = (m) => [
   check("...on that meeting's card", !!card);
   check("the card shows before → after, by study", card && /MDAKP/.test(card.textContent) && /7 →/.test(card.textContent) && /Integrative PFI/i.test(card.textContent));
   check("...and what wasn't applied", card && /scout sequence/.test(card.textContent));
+  check("a held item sits under its own study with what was heard", card && (() => {
+    const t = card.textContent.replace(/\s+/g, " ");
+    const m = t.indexOf("MDAKP"), i = t.indexOf("INTEGRATIVE PFI"), x = t.indexOf("Excel subject tracker"), n = t.indexOf("NO STUDY MATCHED");
+    return m >= 0 && x > m && x < i && /Heard: “maybe a spreadsheet”/.test(t) && n > i && t.indexOf("scout sequence") > n;
+  })(), card && card.textContent.replace(/\s+/g, " ").slice(0, 600));
 
   console.log("\n-- Undo one change --");
   d.querySelector('[data-mtg-undo="mtg1"][data-mtg-change="c1"]').click(); await wait(100);

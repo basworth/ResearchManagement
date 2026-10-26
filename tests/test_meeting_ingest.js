@@ -61,7 +61,7 @@ const out = M.applyMeeting({
     { type: "abstract", studyId: "comp", meeting: "AANA 2026", status: "Submitted", evidence: "already there", confidence: 0.9 },
     { type: "newStudy", title: "Version, torsion and knee rotation vs bone shape", pi: "Adam Yanke", team: ["Jacob Ackerman"], evidence: "that could be its own paper", confidence: 0.75 },
     { type: "enrollment", studyId: "made-up-id", enrolled: 4, evidence: "?", confidence: 0.9 },
-    { type: "phase", studyId: "comp", phase: "Submitted", evidence: "maybe", confidence: 0.4 },
+    { type: "phase", studyId: "comp", phase: "Submitted", evidence: "maybe", confidence: 0.2 },
     { type: "addNote", studyId: "pub", note: "Johannes may want to collaborate", evidence: "ran into Johannes", confidence: 0.8 },
     { type: "title", studyId: "pub", title: "Retitled", evidence: "", confidence: 0.9 },
   ],
@@ -78,7 +78,7 @@ check("a task is created for the study, assigned on the roster", out.newTasks.le
 check("a new abstract is added; one already recorded is not repeated", st("comp").abstracts.length === 2 && out.notApplied.some(x => /already recorded/.test(x.why)));
 check("a new study starts as a Concept, flagged as from a meeting", out.newStudies.length === 1 && out.newStudies[0].phase === "Concept" && out.newStudies[0].fromMeeting);
 check("a study id the lab doesn't have is refused", out.notApplied.some(x => /couldn't tell which study/.test(x.why)) && !JSON.stringify(out.applied).includes("made-up-id"));
-check("an unsure item is reported, not applied", st("comp").phase === "Manuscript" && out.notApplied.some(x => /not sure/.test(x.why)));
+check("an unsure item is reported, not applied", st("comp").phase === "Manuscript" && out.notApplied.some(x => /held — only 20% sure/.test(x.why)));
 check("a published study takes a note but nothing else", st("pub").title === "Old paper" && (st("pub").noteEntries || []).length === 1);
 check("things with no home are passed through for a person", out.notApplied.some(x => /scout sequence/.test(x.text)));
 
@@ -95,8 +95,13 @@ check("a meeting stays up front for two days", M.MEETING_UNDO_HOURS === 48);
 console.log("\n-- The reply --");
 const mail = M.summaryEmail({ applied: out.applied, notApplied: out.notApplied, undoUntil: "2026-10-28T15:00:00Z", link: "https://studypipeline.com/?update=x", subject: "s", by: "Adam Yanke" });
 check("groups by study and shows before → after", /MDAKP/.test(mail.text) && /Enrolled: 7 → 13/.test(mail.text));
-check("lists what wasn't applied, for a person", /Not applied/.test(mail.text) && /scout sequence/.test(mail.text));
-check("links to review and undo, and says until when", /\?update=x/.test(mail.html) && /until/.test(mail.html) && /still undo/.test(mail.html));
+check("held items sit under their own study, with the words behind them", (() => {
+  const blk = mail.text.split("\n\n").find(b => /^COMPOSITE|^COMP/i.test(b) || b.includes("Phase: Submitted")) || "";
+  return /○ Phase: Submitted — held — only 20% sure/.test(blk) && /Heard: "maybe"/.test(blk) && /✓ /.test(blk);
+})(), mail.text);
+check("items with no study come last", /NO STUDY MATCHED[\s\S]*scout sequence/.test(mail.text) && mail.text.lastIndexOf("NO STUDY MATCHED") > mail.text.lastIndexOf("NEW STUDIES"));
+check("each applied item shows what was heard", /✓ Team: added Morgan[^\n]*\n +Heard: "you got to add Morgan on there"/.test(mail.text), mail.text);
+check("links to review and undo", /\?update=x/.test(mail.html) && /Review or undo/.test(mail.html));
 check("never replies to the tracker's own domain", JSON.stringify(M.threadRecipients(["Adam <adam.yanke@rushortho.com>", "studyupdates@studypipeline.com, StudyUpdates <STUDYUPDATES@studypipeline.com>"], [])) === JSON.stringify(["adam.yanke@rushortho.com"]));
 check("reply-all minus the tracker's own mailbox", JSON.stringify(M.threadRecipients(["Adam Yanke <adam.yanke@rushortho.com>", "yankesportsresearch@gmail.com, Will Lee <william.lee@rushortho.com>", "adam.yanke@rushortho.com"], ["yankesportsresearch@gmail.com"])) === JSON.stringify(["adam.yanke@rushortho.com", "william.lee@rushortho.com"]));
 

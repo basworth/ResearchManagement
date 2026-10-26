@@ -8735,17 +8735,27 @@ function undoMeetingChanges(gId, changeIds) {
   else if (done) toast(`Undone ${done}; left ${refused.length} alone because ${refused[0]}`);
   else if (refused.length) toast("Left as is — " + refused[0]);
 }
+// One block per study: applied (✓) then held (○), each with what was heard. Mirrors groupByStudy
+// in the ingest function, so the email and the card read the same.
+function meetingGroups(g) {
+  const order = [], map = {};
+  const add = (k, it) => { if (!map[k]) { map[k] = []; order.push(k); } map[k].push(it); };
+  (g.applied || []).forEach(a => add(a.study || "", Object.assign({}, a, { held: false })));
+  (g.notApplied || []).forEach(n => add(n.study || "", Object.assign({}, n, { held: true })));
+  const keys = order.filter(k => k && k !== "New studies")
+    .concat(order.includes("New studies") ? ["New studies"] : [], order.includes("") ? [""] : []);
+  return keys.map(k => ({ study: k || "No study matched", items: map[k] }));
+}
 function meetingCardHTML(g) {
   const when = g.createdAt ? fmtDate(String(g.createdAt).slice(0, 10)) : "";
   const open = meetingUndoOpen(g);
   const can = canUndoMeeting(g);
   const live = (g.applied || []).filter(a => !a.undoneAt);
   const until = new Date(Date.parse(g.undoUntil || "") || (Date.parse(g.createdAt || "") + MEETING_UNDO_MS));
-  const groups = {};
-  (g.applied || []).forEach(a => { (groups[a.study] = groups[a.study] || []).push(a); });
+  const groups = meetingGroups(g);
   const head = g.status === "reading" ? "Reading the meeting…"
     : g.status === "failed" ? "Couldn't read this meeting — nothing was changed"
-    : `${(g.applied || []).length} update${(g.applied || []).length === 1 ? "" : "s"} from the meeting`;
+    : `${(g.applied || []).length} applied · ${(g.notApplied || []).length} need a person`;
   return `<div class="card" id="mtg-${esc(g.id)}" ${focusUpdateId === g.id ? 'style="outline:2px solid var(--blue)"' : ""}>
     <div style="display:flex;gap:8px;align-items:flex-start">
       <div style="flex:1;min-width:0">
@@ -8755,18 +8765,18 @@ function meetingCardHTML(g) {
       ${can && live.length > 1 ? `<button class="mini-btn" data-mtg-undo-all="${esc(g.id)}" style="margin:0;flex:0 0 auto">Undo all</button>` : ""}
     </div>
     ${g.error ? `<div style="font-size:12.5px;color:var(--orange);margin-top:6px">${esc(g.error)}</div>` : ""}
-    ${Object.keys(groups).map(study => `
-      <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:12px 2px 4px 2px">${esc(String(study).toUpperCase())}</div>
-      ${groups[study].map(a => `<div class="frow" style="gap:8px;padding:4px 0;border-bottom:none;align-items:flex-start">
+    ${groups.map(grp => `
+      <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:12px 2px 4px 2px">${esc(String(grp.study).toUpperCase())}</div>
+      ${grp.items.map(a => a.held ? `<div style="padding:4px 0">
+          <div style="font-size:13.5px"><span style="color:var(--orange);font-weight:700">○</span> ${esc(a.text)} <span style="font-size:11.5px;color:var(--text2)">— ${esc(a.why || "")}</span></div>
+          ${a.evidence ? `<div style="font-size:11.5px;color:var(--text2);margin:1px 0 0 16px">Heard: “${esc(a.evidence)}”</div>` : ""}
+        </div>` : `<div class="frow" style="gap:8px;padding:4px 0;border-bottom:none;align-items:flex-start">
         <div style="flex:1;min-width:0;font-size:13.5px;${a.undoneAt ? "text-decoration:line-through;color:var(--text2)" : ""}">
-          ${esc(a.label)}: ${a.from ? `<span style="color:var(--text2)">${esc(a.from)} →</span> ` : ""}<b>${esc(a.to)}</b>
-          <div style="font-size:11.5px;color:var(--text2);margin-top:1px;text-decoration:none">${esc(a.evidence || "")}${a.undoneAt ? ` · undone by ${esc(a.undoneBy || "")} ${esc(fmtDate(String(a.undoneAt).slice(0, 10)))}` : ""}${a.undoRefused && !a.undoneAt ? ` · not undone: ${esc(a.undoRefused)}` : ""}</div>
+          <span style="color:var(--green);font-weight:700">✓</span> ${esc(a.label)}: ${a.from && a.from.length <= 40 ? `<span style="color:var(--text2)">${esc(a.from)} →</span> ` : ""}<b>${esc(a.to)}</b>${typeof a.confidence === "number" && a.confidence < 0.7 ? ` <span style="font-size:11.5px;color:var(--orange)">— check · ${Math.round(a.confidence * 100)}% sure</span>` : ""}
+          <div style="font-size:11.5px;color:var(--text2);margin:1px 0 0 16px;text-decoration:none">${a.evidence ? `Heard: “${esc(a.evidence)}”` : ""}${a.undoneAt ? ` · undone by ${esc(a.undoneBy || "")} ${esc(fmtDate(String(a.undoneAt).slice(0, 10)))}` : ""}${a.undoRefused && !a.undoneAt ? ` · not undone: ${esc(a.undoRefused)}` : ""}</div>
         </div>
         ${can && !a.undoneAt ? `<button class="mini-btn" data-mtg-undo="${esc(g.id)}" data-mtg-change="${esc(a.id)}" style="margin:0;flex:0 0 auto">Undo</button>` : ""}
       </div>`).join("")}`).join("")}
-    ${(g.notApplied || []).length ? `
-      <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:12px 2px 4px 2px">NOT APPLIED — FOR A PERSON</div>
-      ${g.notApplied.map(n => `<div style="font-size:13px;padding:2px 0">${esc(n.text)} <span style="color:var(--text2)">(${esc(n.why || "")})</span></div>`).join("")}` : ""}
     <div style="font-size:11.5px;color:var(--text2);margin-top:10px;line-height:1.45">
       ${(g.applied || []).length ? (open
         ? `Shown here until ${esc(until.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}, then it moves to the history and to each study's page — undo still works from there.${can ? "" : " Undo is for whoever sent it, the people it was sent to, and admins."}`

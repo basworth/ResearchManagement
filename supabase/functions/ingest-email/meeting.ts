@@ -28,7 +28,12 @@
 
 // deno-lint-ignore-file no-explicit-any
 export const MEETING_UNDO_HOURS = 48;
-export const MEETING_MIN_CONFIDENCE = 0.7;
+// The model rates each update 0-1 for how sure it is that the meeting decided it AND that it
+// belongs to that study. Below this it is held for a person; from here up it is applied, and
+// anything under MEETING_CHECK_CONFIDENCE is flagged "check" in the summary. Lowered from 0.7
+// (Adam, 26 Oct: "lower and see what happens") — undo is the safety net, not the cutoff.
+export const MEETING_MIN_CONFIDENCE = 0.4;
+export const MEETING_CHECK_CONFIDENCE = 0.7;
 
 const PHASES = [
   "Concept", "Initiation", "Enrolling", "Data Extraction", "Experiments", "Data Collection",
@@ -146,7 +151,7 @@ export function extractPrompt(transcript: string, studies: any[], roster: string
     `- Do not record chit-chat, opinions, or things that are already true in the study list.`,
     `- Never put a patient's name or any identifier in any field. List every patient identifier you see in patientIdentifiers.`,
     `- Dates as YYYY-MM-DD, resolved against today. Leave out a date nobody stated.`,
-    `- confidence below 0.7 means "probably, but check": still record it.`,
+    `- confidence: 0.9+ = clearly decided or stated; 0.7-0.9 = very likely; 0.4-0.7 = probably (it will be applied and flagged for checking); below 0.4 = a guess (held for a person). Record everything, whatever the confidence.`,
     ``,
     `ROSTER:`,
     roster.join("; "),
@@ -230,8 +235,12 @@ export function applyMeeting(extracted: any, studies: any[], roster: string[], e
 
   for (const u of (extracted?.updates || [])) {
     const evidence = clean(u.evidence).slice(0, 240);
-    const skip = (why: string) => notApplied.push({ text: describe(u), why, evidence });
-    if ((Number(u.confidence) || 0) < MEETING_MIN_CONFIDENCE) { skip("not sure enough it was decided — check it"); continue; }
+    const confidence = Math.max(0, Math.min(1, Number(u.confidence) || 0));
+    const s0: any = u.type === "newStudy" ? null : byId.get(String(u.studyId || ""));
+    const where = u.type === "newStudy" ? { study: "New studies", studyId: "" }
+      : s0 ? { study: label(s0), studyId: s0.id } : { study: "", studyId: "" };
+    const skip = (why: string) => notApplied.push({ text: describe(u), why, evidence, confidence, ...where });
+    if (confidence < MEETING_MIN_CONFIDENCE) { skip("held — only " + Math.round(confidence * 100) + "% sure"); continue; }
 
     if (u.type === "newStudy") {
       const title = clean(u.title);
@@ -244,17 +253,17 @@ export function applyMeeting(extracted: any, studies: any[], roster: string[], e
         fromMeeting: true,
       };
       newStudies.push(s);
-      applied.push({ id: env.uid(), type: u.type, studyId: s.id, study: title, label: "New study", from: "", to: title,
-        evidence, undo: { kind: "studyShelve", studyId: s.id } });
+      applied.push({ id: env.uid(), type: u.type, studyId: s.id, study: "New studies", label: "New study", from: "", to: title,
+        evidence, confidence, undo: { kind: "studyShelve", studyId: s.id } });
       continue;
     }
 
-    const s: any = byId.get(String(u.studyId || ""));
+    const s: any = s0;
     if (!s) { skip("couldn't tell which study"); continue; }
     if (s.phase === "Published" && u.type !== "addNote") { skip(label(s) + " is published"); continue; }
     const rec = (lbl: string, from: unknown, to: unknown, undo: any) => {
       applied.push({ id: env.uid(), type: u.type, studyId: s.id, study: label(s), label: lbl,
-        from: String(from ?? ""), to: String(to ?? ""), evidence, undo });
+        from: String(from ?? ""), to: String(to ?? ""), evidence, confidence, undo });
       touched.add(s.id);
     };
 
@@ -378,14 +387,33 @@ export function applyMeeting(extracted: any, studies: any[], roster: string[], e
     }
   }
   for (const n of (extracted?.notMapped || [])) {
-    notApplied.push({ text: clean(n.text), why: clean(n.why) || "nothing in the tracker to put it in" });
+    notApplied.push({ text: clean(n.text), why: clean(n.why) || "nothing in the tracker to put it in", study: "", studyId: "" });
   }
   return { applied, notApplied, newTasks, newStudies, touched: [...touched] };
 }
 
+const TYPE_LABEL: Record<string, string> = {
+  enrollment: "Enrolled", addTeamMember: "Team", title: "Title", phase: "Phase", addMilestone: "Milestone",
+  updateMilestone: "Milestone", addTask: "Task", addNote: "Note", abstract: "Abstract",
+  journalDecision: "Journal decision", grantSource: "Grant source", newStudy: "New study",
+};
 function describe(u: any): string {
   const v = u.enrolled ?? u.name ?? u.title ?? u.phase ?? u.milestoneName ?? u.task ?? u.note ?? u.meeting ?? u.decision ?? u.source ?? "";
-  return `${u.type}${v !== "" ? ": " + String(v).slice(0, 140) : ""}`;
+  const lbl = TYPE_LABEL[u.type] || String(u.type || "Update");
+  return `${lbl}${v !== "" ? ": " + String(v).slice(0, 140) : ""}`;
+}
+
+// One block per study: what was applied, then what was held, each with the words that led to it.
+// Items with no study come last. Shared shape with the app's meeting card.
+export function groupByStudy(applied: any[], notApplied: any[]) {
+  const order: string[] = [];
+  const map = new Map<string, any[]>();
+  const add = (key: string, item: any) => { if (!map.has(key)) { map.set(key, []); order.push(key); } map.get(key)!.push(item); };
+  applied.forEach((a) => add(a.study || "", { ...a, held: false }));
+  notApplied.forEach((n) => add(n.study || "", { ...n, held: true }));
+  const keys = order.filter((k) => k && k !== "New studies")
+    .concat(order.includes("New studies") ? ["New studies"] : [], order.includes("") ? [""] : []);
+  return keys.map((k) => ({ study: k || "No study matched", items: map.get(k)! }));
 }
 
 // ---------- the reply ----------
@@ -393,32 +421,34 @@ const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
 
 export function summaryEmail(rec: { applied: any[]; notApplied: any[]; undoUntil: string; link: string; subject: string; by: string }) {
-  const groups = new Map<string, any[]>();
-  rec.applied.forEach((a) => { if (!groups.has(a.study)) groups.set(a.study, []); groups.get(a.study)!.push(a); });
-  const until = new Date(rec.undoUntil);
-  const untilText = until.toLocaleString("en-US", { timeZone: "America/Chicago", weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-  const head = rec.applied.length
-    ? `${rec.applied.length} update${rec.applied.length === 1 ? "" : "s"} applied to ${groups.size} stud${groups.size === 1 ? "y" : "ies"}`
-    : "Nothing in the meeting changed the tracker";
-  const line = (a: any) => `${a.label}: ${a.from ? a.from + " → " : ""}${a.to}`;
+  const groups = groupByStudy(rec.applied, rec.notApplied);
+  const head = `${rec.applied.length} applied · ${rec.notApplied.length} need a person`;
+  const pct = (c: unknown) => typeof c === "number" ? Math.round(c * 100) + "% sure" : "";
+  const what = (i: any) => i.held ? i.text : `${i.label}: ${i.from && i.from.length <= 40 ? i.from + " → " : ""}${i.to}`;
+  const tag = (i: any) => i.held ? i.why
+    : (typeof i.confidence === "number" && i.confidence < MEETING_CHECK_CONFIDENCE ? "check · " + pct(i.confidence) : "");
+  const short = (t: unknown, n: number) => { const v = String(t ?? ""); return v.length > n ? v.slice(0, n - 1) + "…" : v; };
   const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;max-width:600px;color:#1c1c1e">
-    <div style="font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#8e8e93;font-weight:700">Research Tracker · from the meeting ${esc(rec.by ? "sent by " + rec.by : "")}</div>
-    <h2 style="font-size:18px;margin:6px 0 10px 0">${esc(head)}</h2>
-    ${[...groups.entries()].map(([study, list]) => `
-      <div style="border:1px solid #e5e5ea;border-radius:10px;padding:10px 14px;margin:8px 0">
-        <div style="font-size:14.5px;font-weight:700;margin-bottom:4px">${esc(study)}</div>
-        ${list.map((a) => `<div style="font-size:13.5px;padding:2px 0">${esc(a.label)}: ${a.from ? `<span style="color:#8e8e93">${esc(a.from)} →</span> ` : ""}<b>${esc(a.to)}</b></div>`).join("")}
+    <div style="font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#8e8e93;font-weight:700">Research Tracker · meeting${esc(rec.by ? " from " + rec.by : "")}</div>
+    <h2 style="font-size:17px;margin:6px 0 10px 0">${esc(head)}</h2>
+    ${groups.map((g) => `
+      <div style="border:1px solid #e5e5ea;border-radius:10px;padding:8px 14px;margin:8px 0">
+        <div style="font-size:14px;font-weight:700;margin-bottom:2px">${esc(g.study)}</div>
+        ${g.items.map((i: any) => `
+          <div style="padding:5px 0">
+            <div style="font-size:13.5px"><span style="color:${i.held ? "#ff9500" : "#34c759"};font-weight:700">${i.held ? "○" : "✓"}</span> ${esc(short(what(i), 160))}${tag(i) ? ` <span style="color:#8e8e93;font-size:12px">— ${esc(tag(i))}</span>` : ""}</div>
+            ${i.evidence ? `<div style="font-size:12px;color:#8e8e93;margin:1px 0 0 16px">Heard: “${esc(short(i.evidence, 160))}”</div>` : ""}
+          </div>`).join("")}
       </div>`).join("")}
-    ${rec.notApplied.length ? `
-      <div style="font-size:11px;font-weight:700;color:#8e8e93;letter-spacing:.4px;margin:16px 0 4px">NOT APPLIED — FOR A PERSON TO HANDLE</div>
-      ${rec.notApplied.map((n) => `<div style="font-size:13.5px;padding:2px 0">${esc(n.text)} <span style="color:#8e8e93">(${esc(n.why)})</span></div>`).join("")}` : ""}
-    ${rec.applied.length ? `<p style="margin:18px 0 6px 0"><a href="${esc(rec.link)}" style="background:#0a84ff;color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:9px 16px;border-radius:9px;display:inline-block">Review or undo any of these</a></p>
-    <p style="font-size:12px;color:#8e8e93;line-height:1.45;margin:4px 0 0 0">This stays at the top of Suggested Updates until ${esc(untilText)} (Chicago), then moves to the history and to each study's page. You can still undo from there, and the record of what changed and why is kept for good.</p>` : ""}
+    <div style="font-size:12px;color:#8e8e93;margin:6px 0 0 0">✓ applied · ○ held for a person</div>
+    ${rec.applied.length ? `<p style="margin:14px 0 4px 0"><a href="${esc(rec.link)}" style="background:#0a84ff;color:#fff;text-decoration:none;font-weight:600;font-size:14px;padding:9px 16px;border-radius:9px;display:inline-block">Review or undo</a></p>` : ""}
   </div>`;
   const text = [head, ""].concat(
-    [...groups.entries()].flatMap(([study, list]) => [study, ...list.map((a) => "  - " + line(a)), ""]),
-    rec.notApplied.length ? ["Not applied — for a person to handle:", ...rec.notApplied.map((n) => "  - " + n.text + " (" + n.why + ")"), ""] : [],
-    rec.applied.length ? ["Review or undo: " + rec.link, "(At the top of Suggested Updates until " + untilText + ", then in the history and on each study's page.)"] : [],
+    groups.flatMap((g) => [g.study.toUpperCase(), ...g.items.flatMap((i: any) => [
+      `  ${i.held ? "○" : "✓"} ${short(what(i), 160)}${tag(i) ? " — " + tag(i) : ""}`,
+      ...(i.evidence ? [`      Heard: "${short(i.evidence, 160)}"`] : []),
+    ]), ""]),
+    rec.applied.length ? ["Review or undo: " + rec.link] : [],
   ).join("\n");
   // One line, no runs of spaces: see notifyForwarder for the "=20" this avoids.
   return { html: html.replace(/\s*\n\s*/g, "").replace(/ {2,}/g, " "), text };
