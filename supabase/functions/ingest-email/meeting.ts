@@ -431,6 +431,9 @@ export function threadRecipients(fields: string[], exclude: string[]): string[] 
       const m = /<([^>]+)>/.exec(part);
       const addr = (m ? m[1] : part).trim().toLowerCase();
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr) || skip.has(addr) || out.indexOf(addr) >= 0) continue;
+      // Any address on the tracker's own domain is a tracker mailbox — studyupdates@, or a
+      // per-lab alias added later — and replying to it would loop the summary back in.
+      if (/@(?:[\w-]+\.)*studypipeline\.com$/.test(addr)) continue;
       out.push(addr);
     }
   }

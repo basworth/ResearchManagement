@@ -52,7 +52,10 @@ function sharedInboxName(addr: string): string {
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
 const MEETING_MODEL = Deno.env.get("MEETING_MODEL") ?? "claude-sonnet-5-5";
 // The tracker's own mailboxes: never a recipient of its own summaries.
-const TRACKER_MAILBOXES = (Deno.env.get("TRACKER_MAILBOXES") ?? "yankesportsresearch@gmail.com")
+// studyupdates@studypipeline.com (26 Oct 2026) is the address people forward to; Cloudflare Email
+// Routing delivers it into the Gmail mailbox the Apps Script reads. Every address on the domain is
+// the tracker's own, so none of them is ever a recipient — see threadRecipients' domain rule.
+const TRACKER_MAILBOXES = (Deno.env.get("TRACKER_MAILBOXES") ?? "yankesportsresearch@gmail.com,studyupdates@studypipeline.com")
   .split(",").map((a) => a.trim().toLowerCase()).filter(Boolean);
 // Links go to the address people actually use. SITE_URL predates the move to studypipeline.com.
 const APP_URL = SITE_URL.includes("netlify.app") ? "https://studypipeline.com" : SITE_URL;

@@ -97,6 +97,7 @@ const mail = M.summaryEmail({ applied: out.applied, notApplied: out.notApplied, 
 check("groups by study and shows before → after", /MDAKP/.test(mail.text) && /Enrolled: 7 → 13/.test(mail.text));
 check("lists what wasn't applied, for a person", /Not applied/.test(mail.text) && /scout sequence/.test(mail.text));
 check("links to review and undo, and says until when", /\?update=x/.test(mail.html) && /until/.test(mail.html) && /still undo/.test(mail.html));
+check("never replies to the tracker's own domain", JSON.stringify(M.threadRecipients(["Adam <adam.yanke@rushortho.com>", "studyupdates@studypipeline.com, StudyUpdates <STUDYUPDATES@studypipeline.com>"], [])) === JSON.stringify(["adam.yanke@rushortho.com"]));
 check("reply-all minus the tracker's own mailbox", JSON.stringify(M.threadRecipients(["Adam Yanke <adam.yanke@rushortho.com>", "yankesportsresearch@gmail.com, Will Lee <william.lee@rushortho.com>", "adam.yanke@rushortho.com"], ["yankesportsresearch@gmail.com"])) === JSON.stringify(["adam.yanke@rushortho.com", "william.lee@rushortho.com"]));
 
 console.log(`\n${fail ? "FAILED" : "ALL CLEAR"} — ${pass} passed, ${fail} failed`);
