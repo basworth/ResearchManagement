@@ -3518,19 +3518,50 @@ function studyInvolvesPerson(s, name) {
 function hasStudyFootprint(scope, name) {
   return scope.some(s => studyInvolvesPerson(s, name));
 }
-// Free-text search across the fields someone would actually search by: title, nickname,
-// PI, IRB/ORA number, and the free-text team field. Used by both the Studies list and the
-// Worklist search boxes.
+// Free-text search across EVERY field on a study, used by both the Studies list and the Worklist.
+//
+// Adam, 26 Oct 2026: "the search function needs to take into account all fields, including grants
+// etc." It used to look at a hand-picked list (title, nickname, PI, IRB, team, journal, authors,
+// PMID, DOI), so a study could hold "OREF" as its grant source and still not come up for "OREF".
+// A hand-picked list goes stale every time a field is added, so this walks the whole record
+// instead, plus the titles and notes of the study's tasks.
+//
+// What is left out, on purpose: ids and timestamps (a search for "2026" should not match every
+// row's updated_at), and uploaded file contents, which are base64 and would match random letters.
+// Every word typed has to appear somewhere, in any order: "oref cartilage" finds the cartilage
+// study funded by OREF, not every study mentioning either.
+const SEARCH_SKIP_KEY = /^(id|studyId|.*Id|.*At|updated_at|created_at|data|dataUrl|content|base64|blob|size|mime)$/;
+function searchStrings(v, out, depth) {
+  if (v == null || depth > 6) return out;
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (t && !/^data:/i.test(t) && !(t.length > 400 && !/\s/.test(t))) out.push(t);
+  } else if (typeof v === "number") out.push(String(v));
+  else if (Array.isArray(v)) v.forEach(x => searchStrings(x, out, depth + 1));
+  else if (typeof v === "object") {
+    Object.keys(v).forEach(k => { if (!SEARCH_SKIP_KEY.test(k)) searchStrings(v[k], out, depth + 1); });
+  }
+  return out;
+}
+function studySearchText(s) {
+  const parts = searchStrings(s, [], 0);
+  (state.tasks || []).forEach(t => {
+    if (t.studyId !== s.id) return;
+    [t.title, t.notes, t.note].forEach(x => { if (typeof x === "string" && x.trim()) parts.push(x); });
+  });
+  return parts.join(" • ").toLowerCase();
+}
+// Deadlines and grant opportunities, searched the same way: society, name, dates, aim,
+// eligibility criteria, past awardees — everything on the entry, plus the word "grant" or
+// "abstract" so either can be typed as a filter.
+function meetingSearchText(m) {
+  return (searchStrings(m, [], 0).join(" \u2022 ") + " " + ((m.type || "abstract") === "grant" ? "grant" : "abstract")).toLowerCase();
+}
 function studyMatchesSearch(s, query) {
   const q = (query || "").trim().toLowerCase();
   if (!q) return true;
-  const team = Array.isArray(s.team) ? s.team.join(", ") : (s.team || "");
-  // Published papers also match on their journal and on every co-author — "who did I publish the
-  // saddle work with" is the question this is here to answer, and those names are mostly people
-  // outside the roster, so nothing else on the study would find them.
-  const pub = s.publication || {};
-  return [s.title, s.nickname, s.pi, s.irb, team, pub.journal, pub.authorList, pub.pmid, pub.doi]
-    .some(v => (v || "").toLowerCase().includes(q));
+  const hay = studySearchText(s);
+  return q.split(/\s+/).filter(Boolean).every(w => hay.includes(w));
 }
 // Renders a text search box (magnifying-glass icon + optional clear button). Paired with
 // bindSearchBox() below, which wires it up so re-rendering on every keystroke doesn't steal
@@ -3576,7 +3607,9 @@ function bindSheetSearch(id, rowSelector, emptyId) {
     clearBtn.style.display = q ? "" : "none";
     let shown = 0;
     document.querySelectorAll(rowSelector).forEach(row => {
-      const hit = !q || (row.dataset.search || "").includes(q);
+      // Every word must appear, in any order — the same rule as the Studies search.
+      const hay = row.dataset.search || "";
+      const hit = !q || q.split(/\s+/).filter(Boolean).every(w => hay.includes(w));
       row.style.display = hit ? "" : "none";
       if (hit) shown++;
     });
@@ -4191,11 +4224,11 @@ function openLinkSheet(meetingId, preselectIds) {
     return;
   }
   const body = `<div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">Select the projects associated with <b>${esc(m.society)} — ${esc(m.name)}</b>.</div>
-    ${sheetSearchHTML("link-study-search", "Search by title, nickname, PI, or IRB #")}
+    ${sheetSearchHTML("link-study-search", "Search everything on a study")}
     <button class="btn secondary" id="link-new-study" style="margin-bottom:12px">+ New Project</button>
     <div class="fgroup" id="link-study-list">` +
     state.studies.slice().sort((a, b) => a.title.localeCompare(b.title)).map(s => `
-      <div class="frow link-row" style="gap:12px;cursor:pointer" data-search="${esc([s.title, s.nickname, s.pi, s.irb].filter(Boolean).join(" ").toLowerCase())}">
+      <div class="frow link-row" style="gap:12px;cursor:pointer" data-search="${esc(studySearchText(s))}">
         <input type="checkbox" class="link-study" data-sid="${s.id}" ${selected.has(s.id) ? "checked" : ""}>
         <span style="flex:1;min-width:0;font-weight:600">${esc(s.title)}${s.nickname ? `<div style="font-weight:400;font-size:12px;color:var(--text2)">${esc(s.nickname)}</div>` : ""}</span>
       </div>`).join("") + `</div>
@@ -4228,7 +4261,7 @@ function openStudyLinkSheet(studyId) {
   const body = `<div style="font-size:13.5px;color:var(--text2);margin:2px 2px 12px 2px">Link this project to grants or abstract deadlines.</div>
     ${sheetSearchHTML("link-mtg-search", "Search by society or meeting name")}
     <div class="fgroup" id="link-mtg-list">` + list.map(m => `
-      <div class="frow link-row" style="gap:12px;cursor:pointer" data-search="${esc([m.society, m.name, (m.type || "abstract") === "grant" ? "grant" : "abstract"].filter(Boolean).join(" ").toLowerCase())}">
+      <div class="frow link-row" style="gap:12px;cursor:pointer" data-search="${esc(meetingSearchText(m))}">
         <input type="checkbox" class="link-mtg" data-mid="${m.id}" ${(m.studyIds || []).includes(studyId) ? "checked" : ""}>
         <span style="flex:1;min-width:0;font-weight:600;font-size:14px">${esc(m.society)} — ${esc(m.name)}<div style="font-weight:400;font-size:12px;color:var(--text2)">${(m.type||"abstract")==="grant"?"Grant":"Abstract"}${m.deadline?" · "+fmtDate(m.deadline):""}</div></span>
       </div>`).join("") + `</div>
@@ -4306,7 +4339,7 @@ function renderStudies() {
 
   let html = `<div class="seg">` + filters.map(f =>
     `<button class="${f === studyFilter ? "active" : ""}" data-filter="${f}">${f}</button>`).join("") + `</div>`;
-  html += searchBoxHTML("study-search", studySearchQuery, "Search by title, nickname, PI, or IRB #");
+  html += searchBoxHTML("study-search", studySearchQuery, "Search everything — title, PI, IRB #, grant, notes, authors…");
   html += filterSetsBarHTML("studies", studyViewId);
   const otherNames = state.roster.filter(n => n.trim().toLowerCase() !== myName.trim().toLowerCase());
   // Only admins can look beyond their own projects, so the Who picker is theirs alone. Everyone
@@ -8874,7 +8907,7 @@ function renderWorkingList() {
       <button class="${worklistStatus === "going" ? "active" : ""}" data-wl="going">Stale &amp; Rotten</button>
       <button class="${worklistStatus === "all" ? "active" : ""}" data-wl="all">All</button>
     </div>`;
-  html += searchBoxHTML("worklist-search", worklistSearchQuery, "Search by title, nickname, PI, or IRB #");
+  html += searchBoxHTML("worklist-search", worklistSearchQuery, "Search everything — title, PI, IRB #, grant, notes, authors…");
   html += filterSetsBarHTML("worklist", worklistViewId);
   html += `<div style="display:flex;justify-content:flex-end;margin:0 4px 10px 4px">
       <button class="mini-btn" id="wl-columns" style="margin:0">Columns (${worklistColumns.length})</button>
@@ -9903,7 +9936,7 @@ function renderSettings() {
   ${sheetSearchHTML("meeting-search", "Search by society or meeting name")}
   <div class="card" style="padding:6px 0" id="tracked-meeting-list">
     ${allMeetings.length ? allMeetings.map(m => `
-      <div class="task-row meeting-row" style="padding:9px 16px;cursor:pointer" data-meeting-edit="${m.id}" data-search="${esc([m.society, m.name, m.location, (m.type||"abstract")==="grant"?"grant":"abstract"].filter(Boolean).join(" ").toLowerCase())}">
+      <div class="task-row meeting-row" style="padding:9px 16px;cursor:pointer" data-meeting-edit="${m.id}" data-search="${esc(meetingSearchText(m))}">
         <div style="flex:1;min-width:0">
           <div style="font-size:14.5px;font-weight:600"><span class="badge" style="background:var(--indigo);font-size:10px;padding:2px 7px;margin-right:6px">${esc(m.society)}</span>${esc(m.name)}</div>
           <div style="font-size:12px;color:var(--text2);margin-top:2px">${(m.type || "abstract") === "grant" ? "Grant" : "Abstract"} · ${m.deadline ? "Due " + fmtDate(m.deadline) : "No deadline set"}${m.unconfirmed ? " · ⚠︎ unconfirmed" : ""}${m.hidden ? ` · <span style="color:var(--orange);font-weight:700">hidden</span>` : ""}</div>
