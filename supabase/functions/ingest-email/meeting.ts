@@ -127,7 +127,7 @@ export function extractPrompt(transcript: string, studies: any[], roster: string
   return [
     `Today is ${today}. Below is a research meeting (a transcript or notes) from an orthopaedic research lab, followed by the lab's active studies and its roster of people.`,
     ``,
-    `Find every update the meeting makes to the lab's research tracker, and record each one with the record_updates tool:`,
+    `Find every update the meeting makes to the lab's research tracker, and record each one with the record_updates tool. Always answer by calling record_updates exactly once, even if there are no updates:`,
     `- enrollment: a stated current enrollment count (and target if stated).`,
     `- addTeamMember: someone who should be on a study's team and is not (check the study's team list).`,
     `- title: the study's title is wrong and the meeting says what it should be or what must come out of it. Write the corrected title.`,
@@ -166,7 +166,9 @@ export async function callModel(apiKey: string, model: string, prompt: string): 
     headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
     body: JSON.stringify({
       model, max_tokens: 16000,
-      tools: [EXTRACT_TOOL], tool_choice: { type: "tool", name: EXTRACT_TOOL.name },
+      // Newer models refuse a forced tool_choice ("tool"/"any"), so the tool is offered and the
+      // prompt asks for it; a reply without it is still caught below.
+      tools: [EXTRACT_TOOL], tool_choice: { type: "auto" },
       messages: [{ role: "user", content: prompt }],
     }),
   });
