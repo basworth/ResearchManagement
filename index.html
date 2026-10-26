@@ -1980,6 +1980,23 @@ function isCollaboratorOn(d) {
   const team = Array.isArray(d.team) ? d.team : [];
   return team.some(t => String(t || "").trim().toLowerCase() === me);
 }
+// The PIs of the labs I MANAGE — lab admin of my own lab, or covering its section (migration 014's
+// lab_pis, via my_lab_pi_names()). A study anywhere that names one of them, on Team or anywhere in
+// the PI field, is mine to read and edit — it stays in its own lab. Empty for everyone else.
+let myLabPiNames = [];
+// Every name a study carries in Team or PI, lowercased. Mirrors study_named_people() in 014: the
+// PI field is free text that often holds several people ("Adam Yanke, Brian Cole").
+function studyNamedPeople(d) {
+  const out = new Set();
+  (Array.isArray(d && d.team) ? d.team : []).forEach(t => { const v = String(t || "").trim().toLowerCase(); if (v) out.add(v); });
+  String((d && d.pi) || "").split(/\s*(?:,|;|\/|&|\band\b)\s*/i).forEach(p => { const v = p.trim().toLowerCase(); if (v) out.add(v); });
+  return out;
+}
+function labPiNamedOn(d) {
+  if (!d || !myLabPiNames.length) return false;
+  const names = studyNamedPeople(d);
+  return myLabPiNames.some(n => names.has(n));
+}
 function labsIAmIn() {
   const set = new Set(myLabs);
   if (myWorkspace) set.add(myWorkspace);   // never lock someone out of their own lab
@@ -2517,7 +2534,9 @@ async function pullAll() {
       // without the same test here the row would arrive and then be thrown away locally, which
       // looks exactly like the feature not working. Deliberately NOT applied while viewing a lab
       // under a support grant — that view is meant to be that lab and nothing else.
-      || (!viewWorkspace && r.kind === "study" && isCollaboratorOn(r.data)));
+      || (!viewWorkspace && r.kind === "study" && isCollaboratorOn(r.data))
+      // ...or names the PI of a lab I manage (migration 014). Same reasoning, same support-view rule.
+      || (!viewWorkspace && r.kind === "study" && labPiNamedOn(r.data)));
 
     state.studies = rows.filter(r => r.kind === "study").map(r => r.data);
     state.tasks = rows.filter(r => r.kind === "task").map(r => r.data);
@@ -2604,7 +2623,7 @@ function isAppAdmin() {
 // leaves the list empty, which labsIAmIn() backfills with the profile lab — so the worst case is
 // the single-lab behaviour this replaced, never a lockout.
 async function loadLabMembership() {
-  if (!sb || !currentUser) { myLabs = []; myDivisions = []; return; }
+  if (!sb || !currentUser) { myLabs = []; myDivisions = []; myLabPiNames = []; return; }
   try {
     const { data, error } = await sb.from("lab_members").select("workspace").eq("user_id", currentUser.id);
     if (error) throw error;
@@ -2614,6 +2633,20 @@ async function loadLabMembership() {
     myLabs = [];
   }
   await loadDivisionCoverage();
+  await loadLabPiNames();
+}
+// Fails closed: if the function isn't there yet (014 not run) the list is empty, so the client
+// keeps fewer rows, never more.
+async function loadLabPiNames() {
+  myLabPiNames = [];
+  if (!sb || !currentUser) return;
+  try {
+    const { data, error } = await sb.rpc("my_lab_pi_names");
+    if (error) throw error;
+    myLabPiNames = (data || []).map(r => String(typeof r === "string" ? r : (r && r.my_lab_pi_names) || "").trim().toLowerCase()).filter(Boolean);
+  } catch (e) {
+    myLabPiNames = [];
+  }
 }
 // COVERAGE, not section membership. Being in Sports is a label on your profile and grants
 // nothing; covering Sports means seeing every lab in it, including labs added later (migration
