@@ -1415,7 +1415,7 @@ function rememberTab() {
 }
 function openingTab() {
   // A deep link is an explicit instruction and outranks both rules.
-  if (/[?&#](study|tab)=/.test(location.search + location.hash)) return "research";
+  if (/[?&#](study|tab|update)=/.test(location.search + location.hash)) return "research";
   try {
     const raw = JSON.parse(localStorage.getItem(LAST_TAB_KEY) || "null");
     if (!raw || raw.day !== localDayStr()) return "research";
@@ -1618,6 +1618,14 @@ let pendingPhaseOffer = null;
 // The id is consumed whether or not it resolves. A link to a study that has since been archived,
 // or that this person can't see, would otherwise re-fire on every sign-in for the rest of time —
 // and saying so once is more use to them than a tap that silently does nothing.
+function openPendingUpdate() {
+  if (!pendingUpdateId) return false;
+  focusUpdateId = pendingUpdateId;
+  pendingUpdateId = "";
+  try { history.replaceState(null, "", window.location.pathname); } catch (e) { /* non-fatal */ }
+  tab = "settings";
+  return true;
+}
 function openPendingStudy() {
   if (!pendingStudyId) return false;
   const id = pendingStudyId;
@@ -2210,6 +2218,9 @@ let authLinkError = detectAuthLinkError();
 // because both createClient() and the auth screens rewrite the URL out from under us. Held
 // until there is actually a study list to open it against; see openPendingStudy().
 let pendingStudyId = authLinkParam("study");
+// "Review or undo" links in a meeting summary arrive as ?update=<id> — held the same way.
+let pendingUpdateId = authLinkParam("update");
+let focusUpdateId = "";
 // A dead link carries no session, so there is nothing to set a password against. Offering the
 // password box anyway would fail on save and read as a second, unrelated fault.
 let pendingPasswordSetup = !authLinkError && ["invite", "recovery", "signup"].indexOf(authLinkType) >= 0;
@@ -2272,6 +2283,7 @@ async function handleAuthChange(event, session) {
       // Before the name/position prompts, so someone arriving from an "update please" email
       // lands on the study rather than behind a setup sheet with no idea why they're here.
       if (openPendingStudy()) render();
+      if (openPendingUpdate()) { render(); scrollToFocusedUpdate(); }
       // Forwarded emails that arrived while nobody was looking.
       if (parseIncomingSuggestions()) render();
       maybePromptDisplayName();
@@ -6869,6 +6881,7 @@ function renderStudyDetail() {
     ${tasks.length ? tasks.map(taskRowHTML).join("") : `<div style="color:var(--text2);font-size:14px">No tasks for this study.</div>`}
     <button class="btn secondary" id="add-task-here" style="margin:12px 0 0 0;padding:10px">+ Add Task</button>
   </div>
+  ${studyMeetingHistoryHTML(s)}
   <button class="btn danger" id="del-study-btn">Delete Study</button>`;
 
   $main.innerHTML = html;
@@ -8616,6 +8629,195 @@ function suggestionCardHTML(g) {
     </div>` : ""}
   </div>`;
 }
+// ---------- Meeting updates: applied, reviewable, undoable for two days ----------
+//
+// Adam, 26 Oct 2026: a forwarded meeting should "do all the action items", with "an option to undo
+// some of them if the reviewer doesn't like them", the list kept short ("2 days ... so there is not
+// a large backlog") "but keep a history of all changes in case we have to verify versions". Then,
+// on the two days: "i dont want to refuse the undo necessarily i just dont want there to be a big
+// messy list".
+//
+// So the two days decide what is SHOWN, not what is allowed. A meeting stays up front in Suggested
+// Updates for 48 hours, then folds into the history; every study also carries its own record of
+// meeting changes on its page. Undo works from all three places, at any age. It never deletes the
+// record of a change — it stamps undoneAt/undoneBy on it — and it refuses to overwrite a value
+// somebody has edited since, because by then the "before" is no longer the thing to go back to.
+const MEETING_UNDO_MS = 48 * 3600e3;
+// "Recent": shown up front. Older meetings are history — folded away, still undoable.
+function meetingUndoOpen(g) {
+  const until = Date.parse(g.undoUntil || "") || (Date.parse(g.createdAt || "") + MEETING_UNDO_MS);
+  return Date.now() < until;
+}
+function canUndoMeeting(g) {
+  if (!g || !currentUser) return false;
+  if (canDecideSuggestion(g)) return true;
+  // Everyone the summary went to reviews it — that is who it was sent to for.
+  const mine = String(currentUser.email || "").toLowerCase();
+  const alert = String(alertEmailFor(currentUser.id) || "").toLowerCase();
+  return [].concat(g.repliedTo || [], g.copied || []).map(x => String(x).toLowerCase())
+    .some(a => a && (a === mine || a === alert));
+}
+function getPath(o, path) { return path.split(".").reduce((v, k) => (v == null ? v : v[k]), o); }
+function setPath(o, path, val) {
+  const keys = path.split("."); const last = keys.pop();
+  const t = keys.reduce((v, k) => (v[k] && typeof v[k] === "object" ? v[k] : (v[k] = {})), o);
+  t[last] = val;
+}
+// Reverses one change. Returns "" on success, or why it was left alone.
+function reverseMeetingChange(a) {
+  const u = a.undo || {};
+  if (u.kind === "taskShelve") {
+    const t = state.tasks.find(x => x.id === u.taskId);
+    if (!t) return "the task was already removed";
+    state.tasks = state.tasks.filter(x => x.id !== u.taskId);
+    saveLocal(); deleteRemote(u.taskId);
+    return "";
+  }
+  if (u.kind === "studyShelve") {
+    const st = studyById(u.studyId);
+    if (!st) return "the study was already removed";
+    st.phase = "On Hold";
+    if (!Array.isArray(st.noteEntries)) st.noteEntries = [];
+    st.noteEntries.push({ id: uid(), text: "Undone from a meeting update by " + me() + " — this study was created automatically and can be deleted.", date: todayStr(), archivedOn: "" });
+    upsertStudy(st);
+    return "";
+  }
+  const s = studyById(a.studyId);
+  if (!s) return "the study no longer exists";
+  if (u.kind === "field") {
+    const cur = getPath(s, u.path);
+    if (String(cur ?? "") !== String(u.now ?? "")) return "it has been changed since, to " + (cur || "(empty)");
+    setPath(s, u.path, u.prev);
+    if (u.path === "grant.source" && typeof u.prevEnabled === "boolean") s.grant.enabled = u.prevEnabled;
+  } else if (u.kind === "teamRemove") {
+    if (!Array.isArray(s.team) || s.team.indexOf(u.name) < 0) return u.name + " is no longer on the team";
+    s.team = s.team.filter(n => n !== u.name);
+  } else if (u.kind === "milestoneRemove") {
+    if (!(s.milestones || []).some(m => m.id === u.milestoneId)) return "the milestone was already removed";
+    s.milestones = s.milestones.filter(m => m.id !== u.milestoneId);
+  } else if (u.kind === "milestoneRestore") {
+    const m = (s.milestones || []).find(x => x.id === u.milestoneId);
+    if (!m) return "the milestone was removed";
+    if ((m.date || "") !== (u.now.date || "") || !!m.done !== !!u.now.done) return "the milestone has been changed since";
+    m.date = u.prev.date; m.done = u.prev.done;
+  } else if (u.kind === "noteArchive") {
+    const n = (s.noteEntries || []).find(x => x.id === u.noteId);
+    if (!n) return "the note was removed";
+    if (n.archivedOn) return "the note was already archived";
+    n.archivedOn = todayStr();
+  } else if (u.kind === "abstractRemove") {
+    if (!(s.abstracts || []).some(x => x.id === u.abstractId)) return "the abstract was already removed";
+    s.abstracts = s.abstracts.filter(x => x.id !== u.abstractId);
+  } else if (u.kind === "abstractRestore") {
+    const ab = (s.abstracts || []).find(x => x.id === u.abstractId);
+    if (!ab) return "the abstract was removed";
+    if (ab.status !== u.now.status || (ab.format || "") !== (u.now.format || "")) return "the abstract has been changed since";
+    ab.status = u.prev.status; ab.format = u.prev.format;
+  } else return "this kind of change can't be undone automatically";
+  upsertStudy(s);
+  return "";
+}
+function undoMeetingChanges(gId, changeIds) {
+  const g = (state.suggestions || []).find(x => x.id === gId);
+  if (!g) return;
+  if (blockOfflineEdit("Undoing a meeting update")) return;
+  if (!canUndoMeeting(g)) { toast("Only whoever forwarded it, the people it was sent to, or an admin can undo this"); return; }
+  let done = 0; const refused = [];
+  (g.applied || []).forEach(a => {
+    if (changeIds.indexOf(a.id) < 0 || a.undoneAt) return;
+    const why = reverseMeetingChange(a);
+    if (why) { refused.push(a.label + ": " + why); a.undoRefused = why; return; }
+    a.undoneAt = new Date().toISOString(); a.undoneBy = me(); done++;
+  });
+  upsertSuggestion(g);
+  render();
+  if (done && !refused.length) toastAction(`Undone (${done}) — the record of what changed is kept`, "Review", () => scrollToFocusedUpdate(gId));
+  else if (done) toast(`Undone ${done}; left ${refused.length} alone because ${refused[0]}`);
+  else if (refused.length) toast("Left as is — " + refused[0]);
+}
+function meetingCardHTML(g) {
+  const when = g.createdAt ? fmtDate(String(g.createdAt).slice(0, 10)) : "";
+  const open = meetingUndoOpen(g);
+  const can = canUndoMeeting(g);
+  const live = (g.applied || []).filter(a => !a.undoneAt);
+  const until = new Date(Date.parse(g.undoUntil || "") || (Date.parse(g.createdAt || "") + MEETING_UNDO_MS));
+  const groups = {};
+  (g.applied || []).forEach(a => { (groups[a.study] = groups[a.study] || []).push(a); });
+  const head = g.status === "reading" ? "Reading the meeting…"
+    : g.status === "failed" ? "Couldn't read this meeting — nothing was changed"
+    : `${(g.applied || []).length} update${(g.applied || []).length === 1 ? "" : "s"} from the meeting`;
+  return `<div class="card" id="mtg-${esc(g.id)}" ${focusUpdateId === g.id ? 'style="outline:2px solid var(--blue)"' : ""}>
+    <div style="display:flex;gap:8px;align-items:flex-start">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14.5px;font-weight:700">${esc(head)}</div>
+        <div style="font-size:11.5px;color:var(--text2);margin-top:2px">${esc(g.subject || "")} · ${when}${g.forwardedByName ? " · sent by " + esc(g.forwardedByName) : ""}</div>
+      </div>
+      ${can && live.length > 1 ? `<button class="mini-btn" data-mtg-undo-all="${esc(g.id)}" style="margin:0;flex:0 0 auto">Undo all</button>` : ""}
+    </div>
+    ${g.error ? `<div style="font-size:12.5px;color:var(--orange);margin-top:6px">${esc(g.error)}</div>` : ""}
+    ${Object.keys(groups).map(study => `
+      <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:12px 2px 4px 2px">${esc(String(study).toUpperCase())}</div>
+      ${groups[study].map(a => `<div class="frow" style="gap:8px;padding:4px 0;border-bottom:none;align-items:flex-start">
+        <div style="flex:1;min-width:0;font-size:13.5px;${a.undoneAt ? "text-decoration:line-through;color:var(--text2)" : ""}">
+          ${esc(a.label)}: ${a.from ? `<span style="color:var(--text2)">${esc(a.from)} →</span> ` : ""}<b>${esc(a.to)}</b>
+          <div style="font-size:11.5px;color:var(--text2);margin-top:1px;text-decoration:none">${esc(a.evidence || "")}${a.undoneAt ? ` · undone by ${esc(a.undoneBy || "")} ${esc(fmtDate(String(a.undoneAt).slice(0, 10)))}` : ""}${a.undoRefused && !a.undoneAt ? ` · not undone: ${esc(a.undoRefused)}` : ""}</div>
+        </div>
+        ${can && !a.undoneAt ? `<button class="mini-btn" data-mtg-undo="${esc(g.id)}" data-mtg-change="${esc(a.id)}" style="margin:0;flex:0 0 auto">Undo</button>` : ""}
+      </div>`).join("")}`).join("")}
+    ${(g.notApplied || []).length ? `
+      <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:12px 2px 4px 2px">NOT APPLIED — FOR A PERSON</div>
+      ${g.notApplied.map(n => `<div style="font-size:13px;padding:2px 0">${esc(n.text)} <span style="color:var(--text2)">(${esc(n.why || "")})</span></div>`).join("")}` : ""}
+    <div style="font-size:11.5px;color:var(--text2);margin-top:10px;line-height:1.45">
+      ${(g.applied || []).length ? (open
+        ? `Shown here until ${esc(until.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}, then it moves to the history and to each study's page — undo still works from there.${can ? "" : " Undo is for whoever sent it, the people it was sent to, and admins."}`
+        : `In the history since ${esc(until.toLocaleDateString([], { month: "short", day: "numeric" }))}. Kept for good; each change is also on its study's page.`) : ""}
+      ${g.repliedTo && g.repliedTo.length ? ` Summary sent to ${esc(g.repliedTo.concat(g.copied || []).join(", "))}.` : ""}
+    </div>
+    <button class="mini-btn" data-sugg-text="${esc(g.id)}" style="margin-top:8px">Show the meeting</button>
+    <div id="sugg-text-${esc(g.id)}" style="display:none;font-size:12.5px;color:var(--text2);line-height:1.5;white-space:pre-wrap;background:var(--bg);border-radius:8px;padding:10px 12px;margin-top:8px">${esc(g.text || "")}</div>
+  </div>`;
+}
+let showAllMeetings = false;
+function meetingsSectionHTML() {
+  const list = (state.suggestions || []).filter(g => g.source === "meeting")
+    .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  if (!list.length) return "";
+  // The last two days up front; everything older is the history, kept but folded away.
+  const openOnes = list.filter(meetingUndoOpen);
+  const shown = showAllMeetings ? list : openOnes;
+  return `<div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:16px 2px 4px 2px">MEETING UPDATES</div>
+    ${shown.length ? shown.map(meetingCardHTML).join("") : `<div style="font-size:12.5px;color:var(--text2);margin:0 2px 6px 2px">Nothing from the last two days.</div>`}
+    ${list.length > shown.length || showAllMeetings ? `<button class="mini-btn" id="mtg-history" style="margin:0 0 8px 2px">${showAllMeetings ? "Show only the last two days" : `Show the full history (${list.length})`}</button>` : ""}`;
+}
+// Each study's own record of what meetings changed on it, oldest at the bottom. Folded by default
+// so it never clutters the page; this is where "what did that meeting do to this study?" is
+// answered months later.
+function studyMeetingHistoryHTML(s) {
+  const rows = [];
+  (state.suggestions || []).filter(g => g.source === "meeting").forEach(g => {
+    (g.applied || []).forEach(a => { if (a.studyId === s.id) rows.push({ g, a }); });
+  });
+  if (!rows.length) return "";
+  rows.sort((x, y) => String(y.g.createdAt || "").localeCompare(String(x.g.createdAt || "")));
+  return `<details class="card" style="padding:10px 14px">
+    <summary style="cursor:pointer;font-size:13.5px;font-weight:600">Changes from meetings (${rows.length})</summary>
+    ${rows.map(({ g, a }) => `<div class="frow" style="gap:8px;padding:6px 0;border-bottom:none;align-items:flex-start">
+      <div style="flex:1;min-width:0;font-size:13px;${a.undoneAt ? "text-decoration:line-through;color:var(--text2)" : ""}">
+        ${esc(a.label)}: ${a.from ? `<span style="color:var(--text2)">${esc(a.from)} →</span> ` : ""}<b>${esc(a.to)}</b>
+        <div style="font-size:11.5px;color:var(--text2);margin-top:1px">${esc(fmtDate(String(g.createdAt || "").slice(0, 10)))} · ${esc(g.subject || "meeting")}${g.forwardedByName ? " · " + esc(g.forwardedByName) : ""}${a.undoneAt ? " · undone by " + esc(a.undoneBy || "") : ""}</div>
+      </div>
+      ${canUndoMeeting(g) && !a.undoneAt ? `<button class="mini-btn" data-mtg-undo="${esc(g.id)}" data-mtg-change="${esc(a.id)}" style="margin:0;flex:0 0 auto">Undo</button>` : ""}
+    </div>`).join("")}
+  </details>`;
+}
+function scrollToFocusedUpdate(id) {
+  const target = id || focusUpdateId;
+  if (!target) return;
+  setTimeout(() => {
+    const el = document.getElementById("mtg-" + target);
+    if (el && el.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 60);
+}
 function suggestionsSectionHTML() {
   const pending = pendingSuggestions();
   // Your own forwards first. A coordinator who forwarded one email should not have to read the
@@ -8623,7 +8825,7 @@ function suggestionsSectionHTML() {
   const mine = pending.filter(g => !g.forwardedBy || (currentUser && g.forwardedBy === currentUser.id));
   const others = pending.filter(g => mine.indexOf(g) < 0);
   const recent = (state.suggestions || [])
-    .filter(g => g.status !== "pending")
+    .filter(g => g.status !== "pending" && g.source !== "meeting")
     .sort((a, b) => String(b.decidedAt || b.createdAt || "").localeCompare(String(a.decidedAt || a.createdAt || "")))
     .slice(0, 5);
   return `
@@ -8660,6 +8862,7 @@ function suggestionsSectionHTML() {
     <input type="file" id="tx-file" accept=".txt,.vtt,.srt,.md,text/plain" style="display:none">
     <div style="font-size:12px;margin-top:8px">Takes a .txt, .vtt or .srt — what Zoom, Teams and most recorders export. Timestamps and speaker labels are ignored.</div>
   </div>
+  ${meetingsSectionHTML()}
   ${mine.length ? mine.map(suggestionCardHTML).join("")
     : `<div class="card" style="color:var(--text2);font-size:14px">Nothing waiting on you.</div>`}
   ${others.length ? `
@@ -8765,6 +8968,16 @@ function bindSuggestions(root) {
     acceptSuggestion(id, fields);
   });
   root.querySelectorAll("[data-sugg-dismiss]").forEach(b => b.onclick = () => dismissSuggestion(b.dataset.suggDismiss));
+  root.querySelectorAll("[data-mtg-undo]").forEach(b => b.onclick = () => undoMeetingChanges(b.dataset.mtgUndo, [b.dataset.mtgChange]));
+  root.querySelectorAll("[data-mtg-undo-all]").forEach(b => b.onclick = () => {
+    const g = (state.suggestions || []).find(x => x.id === b.dataset.mtgUndoAll);
+    if (!g) return;
+    const ids = (g.applied || []).filter(a => !a.undoneAt).map(a => a.id);
+    if (!confirm(`Undo all ${ids.length} changes from this meeting? The record of them is kept.`)) return;
+    undoMeetingChanges(g.id, ids);
+  });
+  const mh = root.querySelector("#mtg-history");
+  if (mh) mh.onclick = () => { showAllMeetings = !showAllMeetings; render(); };
   root.querySelectorAll("[data-hint-forget]").forEach(b => b.onclick = () => forgetMatchHint(b.dataset.hintForget));
   root.querySelectorAll("[data-sugg-teach]").forEach(sel => sel.onchange = () => {
     if (sel.value) teachSuggestionStudy(sel.dataset.suggTeach, sel.value);

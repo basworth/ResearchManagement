@@ -20,6 +20,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
 import { setStudies, setMatchHints, setMeetings, stripPHI as stripPHIRules, readEmail, applyChangeTo, PARSER_VERSION } from "./rules.ts";
+import { looksLikeMeeting, studyContext, extractPrompt, callModel, applyMeeting, summaryEmail, threadRecipients, redactAll, MEETING_UNDO_HOURS } from "./meeting.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -46,6 +47,137 @@ function sharedInboxName(addr: string): string {
   if (SHARED_INBOXES.indexOf(addr) < 0) return "";
   const local = addr.split("@")[0].replace(/[._-]+/g, " ").trim();
   return local.replace(/\b\w/g, (c) => c.toUpperCase()) + " (shared)";
+}
+
+const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY") ?? "";
+const MEETING_MODEL = Deno.env.get("MEETING_MODEL") ?? "claude-sonnet-5-5";
+// The tracker's own mailboxes: never a recipient of its own summaries.
+const TRACKER_MAILBOXES = (Deno.env.get("TRACKER_MAILBOXES") ?? "yankesportsresearch@gmail.com")
+  .split(",").map((a) => a.trim().toLowerCase()).filter(Boolean);
+// Links go to the address people actually use. SITE_URL predates the move to studypipeline.com.
+const APP_URL = SITE_URL.includes("netlify.app") ? "https://studypipeline.com" : SITE_URL;
+
+async function sha256(text: string): Promise<string> {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function sendMail(opts: { to: string[]; cc?: string[]; subject: string; html: string; text: string;
+                                inReplyTo?: string; references?: string }) {
+  if (!SMTP_USER || !SMTP_PASSWORD || !opts.to.length) return false;
+  const smtp = new SMTPClient({
+    connection: { hostname: SMTP_HOST, port: SMTP_PORT, tls: true, auth: { username: SMTP_USER, password: SMTP_PASSWORD } },
+  });
+  try {
+    await smtp.send({
+      from: `${FROM_NAME} <${SMTP_USER}>`, to: opts.to, cc: opts.cc && opts.cc.length ? opts.cc : undefined,
+      subject: opts.subject, html: opts.html, content: opts.text,
+      // Threading. With the original Message-ID in both headers, Gmail and Outlook file the summary
+      // under the meeting email for everyone on it, instead of starting a new conversation.
+      inReplyTo: opts.inReplyTo || undefined, references: opts.references || opts.inReplyTo || undefined,
+    } as any);
+    return true;
+  } finally {
+    try { await smtp.close(); } catch { /* already closed */ }
+  }
+}
+
+// A forwarded meeting: read every action item, apply it, record it, reply on the thread.
+// Runs after the response has gone back to Gmail — reading a long transcript takes longer than the
+// Apps Script will wait — so everything it does is recorded on the meeting row, including failure.
+async function processMeeting(db: any, rowId: string, sender: { id: string; name: string; notify: string },
+                              payload: any, subject: string, raw: string) {
+  const nowIso = new Date().toISOString();
+  const record: any = {
+    id: rowId, createdAt: nowIso, source: "meeting", from: bareAddress(payload?.from ?? ""),
+    subject, forwardedBy: sender.id, forwardedByName: sender.name, unverified: false,
+    status: "applied", applied: [], notApplied: [], changes: [], needsParse: false, parserVersion: PARSER_VERSION,
+    undoUntil: new Date(Date.now() + MEETING_UNDO_HOURS * 3600e3).toISOString(),
+    sourceHash: payload.__hash, decidedAt: nowIso, decidedBy: "the tracker",
+  };
+  const save = async () => db.from("items").upsert({ id: rowId, kind: "suggestion", data: record,
+    updated_at: new Date().toISOString(), workspace: INGEST_WORKSPACE });
+  const replyTo = threadRecipients([payload?.from, payload?.to, payload?.cc].filter(Boolean),
+    TRACKER_MAILBOXES.concat([SMTP_USER.toLowerCase()]));
+  const reSubject = "Re: " + String(payload?.originalSubject || subject).replace(/^\s*(re|fw|fwd):\s*/i, "");
+  try {
+    const scrubbed = stripPHIRules(raw);
+    const { data: studyRows } = await db.from("items").select("id, data").eq("kind", "study").eq("workspace", INGEST_WORKSPACE);
+    const studies = (studyRows ?? []).map((r: any) => r.data).filter(Boolean);
+    const { data: profRows } = await db.from("items").select("data").eq("kind", "profile").eq("workspace", INGEST_WORKSPACE);
+    const profiles = (profRows ?? []).map((r: any) => r.data).filter((p: any) => p && p.name);
+    const { data: metaRows } = await db.from("items").select("data").eq("kind", "meta").eq("workspace", INGEST_WORKSPACE);
+    const rosterSet = new Set<string>();
+    profiles.forEach((p: any) => rosterSet.add(String(p.name).trim()));
+    (metaRows ?? []).forEach((r: any) => ((r.data && r.data.names) || []).forEach((n: any) => { if (typeof n === "string" && n.trim()) rosterSet.add(n.trim()); }));
+    const roster = [...rosterSet];
+
+    const today = nowIso.slice(0, 10);
+    const extracted = await callModel(ANTHROPIC_KEY, MEETING_MODEL,
+      extractPrompt(scrubbed.text, studyContext(studies), roster, today));
+    const env = { uid: () => crypto.randomUUID(), today, by: sender.name };
+    const result = applyMeeting(extracted, studies, roster, env);
+
+    // Writes, each checked. A change whose study failed to save is moved to "not applied" rather
+    // than reported as done — the summary must never claim something that didn't happen.
+    const failed = new Set<string>();
+    for (const sid of result.touched) {
+      const s = studies.find((x: any) => x.id === sid);
+      const { error } = await db.from("items").update({ data: s, updated_at: new Date().toISOString() })
+        .eq("id", sid).eq("workspace", INGEST_WORKSPACE);
+      if (error) failed.add(sid);
+    }
+    for (const t of result.newTasks) {
+      const { error } = await db.from("items").insert({ id: t.id, kind: "task", data: t, updated_at: new Date().toISOString(), workspace: INGEST_WORKSPACE });
+      if (error) failed.add(t.id);
+    }
+    for (const s of result.newStudies) {
+      const { error } = await db.from("items").insert({ id: s.id, kind: "study", data: s, updated_at: new Date().toISOString(), workspace: INGEST_WORKSPACE });
+      if (error) failed.add(s.id);
+    }
+    record.applied = result.applied.filter((a: any) => !failed.has(a.studyId) && !(a.undo && failed.has(a.undo.taskId)));
+    record.notApplied = result.notApplied.concat(result.applied
+      .filter((a: any) => record.applied.indexOf(a) < 0)
+      .map((a: any) => ({ text: a.label + ": " + a.to, why: "couldn't be saved — try again or enter it by hand", evidence: a.evidence })));
+    record.studyIds = [...new Set(record.applied.map((a: any) => a.studyId))];
+    // What is stored of the meeting itself: scrubbed of numbers by the rules AND of every patient
+    // identifier the model found.
+    record.text = redactAll(scrubbed.text, extracted.patientIdentifiers || []).slice(0, 20000);
+    record.redacted = scrubbed.redacted + (extracted.patientIdentifiers || []).length;
+    record.redactedKinds = scrubbed.kinds.concat((extracted.patientIdentifiers || []).length ? ["patient names"] : []);
+  } catch (e) {
+    record.status = "failed";
+    record.error = (e as Error)?.message || String(e);
+    record.text = stripPHIRules(raw).text.slice(0, 2000);
+    console.error("meeting ingest failed", e);
+  }
+
+  // The PI's direct research team: the people who carry the changes out, whether or not they were
+  // on the email (Adam, 26 Oct). lab_members rows with source = 'team' for this lab.
+  let team: string[] = [];
+  try {
+    const { data: tm } = await db.from("lab_members").select("user_id").eq("workspace", INGEST_WORKSPACE).eq("source", "team");
+    const ids = new Set((tm ?? []).map((r: any) => String(r.user_id)));
+    const { data: pr } = await db.from("items").select("data").eq("kind", "profile");
+    team = (pr ?? []).map((r: any) => r.data).filter((p: any) => p && ids.has(String(p.id)))
+      .map((p: any) => String(p.alertEmail || p.email || "").trim().toLowerCase()).filter(Boolean);
+  } catch (_) { /* the summary still goes to the thread */ }
+  const to = replyTo.length ? replyTo : [sender.notify.toLowerCase()];
+  const cc = team.filter((a) => to.indexOf(a) < 0 && TRACKER_MAILBOXES.indexOf(a) < 0);
+  record.repliedTo = to; record.copied = cc;
+
+  const link = `${APP_URL}/?update=${encodeURIComponent(rowId)}`;
+  const mail = record.status === "failed"
+    ? { html: `<p>The tracker couldn't read this meeting, so nothing was changed.</p><p style="color:#8e8e93">${record.error ? String(record.error).replace(/[<>&]/g, "") : ""}</p>`,
+        text: "The tracker couldn't read this meeting, so nothing was changed. " + (record.error || "") }
+    : summaryEmail({ applied: record.applied, notApplied: record.notApplied, undoUntil: record.undoUntil, link, subject, by: sender.name });
+  try {
+    record.replied = await sendMail({ to, cc, subject: reSubject, html: mail.html, text: mail.text,
+      inReplyTo: payload?.messageId || "", references: payload?.references || payload?.messageId || "" });
+  } catch (e) {
+    record.replied = false; record.replyError = (e as Error)?.message || String(e);
+  }
+  await save();
 }
 
 // Telling the forwarder what happened to their email. Without it, forwarding feels like shouting
@@ -178,6 +310,30 @@ Deno.serve(async (req) => {
       // Replying to the group is the point: the person who forwarded it is reading that mailbox,
       // and a reply to an individual would reach the wrong one of them — or nobody.
       if (groupName) sender = { id: "", name: groupName, notify: from, workspace: INGEST_WORKSPACE };
+    }
+
+    // A MEETING — a transcript or meeting notes — goes to the meeting reader, which applies every
+    // action item and replies on the thread. Only for a sender we know: a stranger's "meeting"
+    // would be an open channel for editing studies. Without a model key it falls through to the
+    // ordinary rules, which at worst file a note.
+    if (sender && ANTHROPIC_KEY && looksLikeMeeting(subject, raw)) {
+      const hash = await sha256(subject + "\n" + raw);
+      // The Apps Script retries anything it didn't get a 200 for, and a long transcript can outlast
+      // its patience. The same meeting must never be applied twice.
+      const { data: dup } = await db.from("items").select("id").eq("kind", "suggestion")
+        .eq("workspace", INGEST_WORKSPACE).eq("data->>sourceHash", hash).limit(1);
+      if (dup && dup.length) return json({ ok: true, mode: "meeting", duplicate: true, id: dup[0].id });
+      const rowId = crypto.randomUUID();
+      const nowIso0 = new Date().toISOString();
+      // A placeholder first, so a retry arriving while this one is still reading finds it.
+      await db.from("items").insert({ id: rowId, kind: "suggestion", updated_at: nowIso0, workspace: INGEST_WORKSPACE,
+        data: { id: rowId, createdAt: nowIso0, source: "meeting", status: "reading", subject, sourceHash: hash,
+                forwardedBy: sender.id, forwardedByName: sender.name, applied: [], changes: [], needsParse: false,
+                parserVersion: PARSER_VERSION } });
+      const work = processMeeting(db, rowId, sender, Object.assign({}, payload, { __hash: hash }), subject, raw);
+      const rt = (globalThis as any).EdgeRuntime;
+      if (rt && typeof rt.waitUntil === "function") rt.waitUntil(work); else await work;
+      return json({ ok: true, mode: "meeting", id: rowId, verified: true, forwardedByName: sender.name });
     }
 
     const clean = stripPHIRules(raw);
