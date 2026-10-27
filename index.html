@@ -848,7 +848,26 @@ function orgRoots() {
     .filter(p => !p.reportsTo || !profileFor(p.reportsTo) || isLinkedProfile(profileFor(p.reportsTo)))
     .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
 }
+// Which lab a profile row belongs to — what the database stamped on it.
+function profileLab(p) { return ((p && remoteMeta[p.id]) || {}).workspace || ""; }
 function orgChartHTML(canEdit) {
+  // The app admin sees every lab's people (migration 016) — Adam, 27 Oct: "the org chart … should
+  // show me all users for all labs". Grouped by lab, his own first; other labs are shown, not
+  // edited from here (their own admins manage them).
+  const labs = [...new Set(activeProfiles().map(profileLab).filter(Boolean))];
+  if (isAppAdmin() && labs.some(ws => ws !== myWorkspace)) {
+    const order = [myWorkspace].concat(labs.filter(ws => ws !== myWorkspace).sort());
+    return order.filter(ws => activeProfiles().some(p => profileLab(p) === ws)).map(ws => {
+      const n = activeProfiles().filter(p => profileLab(p) === ws).length;
+      return `<div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:${ws === myWorkspace ? 2 : 14}px 0 2px 0">
+          ${esc((ws === myWorkspace ? "MY LAB" : (piNameForLab(ws) || ws).toUpperCase() + "'S LAB"))} · ${n} ${n === 1 ? "PERSON" : "PEOPLE"}</div>
+        ${orgChartForLab(ws, canEdit && ws === myWorkspace)}`;
+    }).join("");
+  }
+  return orgChartForLab("", canEdit);
+}
+function orgChartForLab(ws, canEdit) {
+  const inLab = (p) => !ws || profileLab(p) === ws;
   const seen = {};
   const row = (p, depth) => {
     if (seen[p.id]) return "";   // cycle guard: a loop would otherwise recurse forever
@@ -857,7 +876,7 @@ function orgChartHTML(canEdit) {
       ? `<span class="badge outline" style="font-size:9.5px;padding:1px 6px;margin-left:6px">${esc(p.position)}</span>`
       : `<span class="badge" style="background:var(--orange);font-size:9.5px;padding:1px 6px;margin-left:6px">role not set</span>`;
     const admin = p.admin ? `<span class="badge" style="background:var(--blue);font-size:9.5px;padding:1px 6px;margin-left:4px">admin</span>` : "";
-    const kids = orgChildren(p.id).map(c => row(c, depth + 1)).join("");
+    const kids = orgChildren(p.id).filter(inLab).map(c => row(c, depth + 1)).join("");
     const degs = p.name ? degreesFor(p.name) : [];
     return `
       <div class="task-row" style="padding:8px 0;gap:8px;padding-left:${depth * 18}px">
@@ -869,9 +888,12 @@ function orgChartHTML(canEdit) {
         ${canEdit ? `<button class="mini-btn" data-org-edit="${esc(p.id)}" style="margin-top:0;flex:0 0 auto">Edit</button>` : ""}
       </div>${kids}`;
   };
-  const profiles = activeProfiles();
+  const profiles = activeProfiles().filter(inLab);
   if (!profiles.length) return `<div style="color:var(--text2);font-size:14px">Nobody has signed in yet, so there's nothing to chart.</div>`;
-  let html = orgRoots().map(p => row(p, 0)).join("");
+  // Within one lab, anyone whose manager is in another lab (or nowhere) heads a branch here.
+  const roots = ws ? profiles.filter(p => { const b = p.reportsTo && profileFor(p.reportsTo); return !b || isLinkedProfile(b) || profileLab(b) !== ws; })
+    .sort((a, b) => (a.name || "").localeCompare(b.name || "")) : orgRoots();
+  let html = roots.map(p => row(p, 0)).join("");
   // Anyone caught in a reporting loop never gets rendered above. If EVERY profile is in one,
   // the tree comes back empty — which must not be mistaken for "no one has signed in". Either
   // way, list the stranded people so they're visible and, crucially, still editable.
