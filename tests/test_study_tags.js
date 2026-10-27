@@ -23,7 +23,7 @@ const items = () => [
   st("s4", "Untagged study", undefined),
   { id: "s6", kind: "study", updated_at: now, workspace: "sports-yanke", data: { id: "s6", title: "MPFL reconstruction outcomes", pi: "Adam Yanke", team: ["Adam Yanke"], phase: "Published", design: "Prospective (Consented)",
     tagSuggestion: { region: ["Knee"], topic: ["Patellofemoral instability", "Imaging"], by: "suggested from the title, 27 Oct" } } },
-  { id: "s7", kind: "study", updated_at: now, workspace: "sports-yanke", data: { id: "s7", title: "Glenoid bone loss", pi: "Adam Yanke", team: ["Adam Yanke"], phase: "Published", design: "Prospective (Consented)",
+  { id: "s7", kind: "study", updated_at: now, workspace: "sports-yanke", data: { id: "s7", title: "Glenoid bone loss", pi: "Adam Yanke", team: ["Adam Yanke"], phase: "Enrolling", design: "Prospective (Consented)",
     tagSuggestion: { region: ["Shoulder"], topic: ["Shoulder instability"], by: "suggested from the title, 27 Oct" } } },
   st("s5", "TTO and PF", { region: ["Knee"], topic: ["PF instability"] }),
 ];
@@ -107,6 +107,12 @@ function check(name, cond, detail) {
 
   console.log("\n-- Suggested tags wait for approval (27 Oct) --");
   ev(`tab = "settings"; render()`); await wait(60);
+  check("active studies come first, under their own heading", /ACTIVE STUDIES · 1/.test(d.getElementById("tag-review").textContent)
+    && d.querySelector('[data-tr-box="active"] [data-tr-study="s7"]'));
+  check("prior publications sit under a separate heading, folded", /PRIOR PUBLICATIONS · 1/.test(d.getElementById("tag-review").textContent)
+    && !d.querySelector('[data-tr-box="published"]'));
+  d.getElementById("tr-toggle-pubs").click(); await wait(40);
+  check("Show opens them", !!d.querySelector('[data-tr-box="published"] [data-tr-study="s6"]'));
   check("Settings lists the suggestions", d.querySelectorAll("#tag-review .tag-review-row").length === 2);
   check("nothing is a tag until approved", ev(`allStudyTags(studyById("s6")).length`) === 0);
   d.querySelector('[data-tr-study="s6"] .tr-chip[data-tag="Imaging"]').click();
@@ -118,7 +124,7 @@ function check(name, cond, detail) {
   check("Undo puts it back", d.querySelectorAll("#tag-review .tag-review-row").length === 2 && ev(`allStudyTags(studyById("s6")).length`) === 0);
   d.querySelector('[data-tr-skip="s7"]').click(); await wait(40);
   check("Skip leaves it untagged and off the list, kept on record", ev(`studyById("s7").tagSuggestion.dismissed`) === true && ev(`allStudyTags(studyById("s7")).length`) === 0);
-  d.getElementById("tr-ok-page").click(); await wait(60);
+  d.querySelector('[data-tr-page-ok="published"]').click(); await wait(60);
   check("Approve these N tags the whole page", ev(`JSON.stringify(studyById("s6").tags.topic)`) === JSON.stringify(["Patellofemoral instability", "Imaging"]));
   check("...and the list empties", !d.getElementById("tag-review"));
   ev(`studyById("s6").tags = { region: [], topic: [] }; delete studyById("s6").tagSuggestion.approvedAt; openStudy("s6"); tab = "studies"; render()`); await wait(60);

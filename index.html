@@ -4479,24 +4479,23 @@ function tagPickerValue(root, prefix) {
 // — from the title by rule, or later by anything else that guesses. Nothing becomes a tag until a
 // person approves it here or on the study page. Approve takes the chips as ticked (untick a wrong
 // one first); Skip sets `dismissed` so it stops being offered, and keeps the record.
-let tagReviewPage = 0;
+// Two groups (Adam, 27 Oct): studies still being worked on first, prior publications below in their
+// own folded section — "they are less important than the ones we are actively working on".
+let tagReviewPage = { active: 0, published: 0 };
+let tagReviewShowPublished = false;
 const TAG_REVIEW_SIZE = 20;
+function isPriorPublication(s) { return (s && s.phase) === "Published"; }
 function pendingTagSuggestions() {
   return (state.studies || []).filter(s => s.tagSuggestion && !s.tagSuggestion.dismissed && !allStudyTags(s).length
     && ((s.tagSuggestion.region || []).length || (s.tagSuggestion.topic || []).length))
     .sort((a, b) => String(a.title || "").localeCompare(String(b.title || "")));
 }
-function tagReviewHTML() {
-  const all = pendingTagSuggestions();
-  if (!all.length) return "";
-  const pages = Math.ceil(all.length / TAG_REVIEW_SIZE);
-  if (tagReviewPage >= pages) tagReviewPage = pages - 1;
-  const page = all.slice(tagReviewPage * TAG_REVIEW_SIZE, (tagReviewPage + 1) * TAG_REVIEW_SIZE);
-  return `<div class="section-title">Suggested Tags (${all.length})</div>
-  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
-    Read from each study's title. Untick anything wrong, then Approve. Skip leaves a study untagged.
-  </div>
-  <div class="card" id="tag-review">
+function tagReviewGroupHTML(key, list) {
+  const pages = Math.max(1, Math.ceil(list.length / TAG_REVIEW_SIZE));
+  if (tagReviewPage[key] >= pages) tagReviewPage[key] = pages - 1;
+  const pg = tagReviewPage[key];
+  const page = list.slice(pg * TAG_REVIEW_SIZE, (pg + 1) * TAG_REVIEW_SIZE);
+  return `<div class="card tag-review" data-tr-box="${key}">
     ${page.map(s => { const g = s.tagSuggestion;
       return `<div class="frow tag-review-row" data-tr-study="${esc(s.id)}" style="gap:8px;padding:8px 0;align-items:flex-start;display:block">
         <div style="font-size:13.5px;font-weight:600;line-height:1.35;margin-bottom:5px">${esc(s.nickname || s.title)}</div>
@@ -4510,13 +4509,32 @@ function tagReviewHTML() {
         </div>
       </div>`; }).join("")}
     <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
-      <button class="btn" id="tr-ok-page" style="flex:1">Approve these ${page.length}</button>
+      <button class="btn tr-ok-page" data-tr-page-ok="${key}" style="flex:1">Approve these ${page.length}</button>
     </div>
     ${pages > 1 ? `<div style="display:flex;gap:8px;align-items:center;justify-content:center;margin-top:8px;font-size:12.5px;color:var(--text2)">
-      <button class="mini-btn" id="tr-prev" style="margin:0" ${tagReviewPage ? "" : "disabled"}>‹</button>
-      Page ${tagReviewPage + 1} of ${pages}
-      <button class="mini-btn" id="tr-next" style="margin:0" ${tagReviewPage < pages - 1 ? "" : "disabled"}>›</button>
+      <button class="mini-btn" data-tr-prev="${key}" style="margin:0" ${pg ? "" : "disabled"}>‹</button>
+      Page ${pg + 1} of ${pages}
+      <button class="mini-btn" data-tr-next="${key}" style="margin:0" ${pg < pages - 1 ? "" : "disabled"}>›</button>
     </div>` : ""}
+  </div>`;
+}
+function tagReviewHTML() {
+  const all = pendingTagSuggestions();
+  if (!all.length) return "";
+  const active = all.filter(s => !isPriorPublication(s));
+  const pubs = all.filter(isPriorPublication);
+  return `<div class="section-title">Suggested Tags (${all.length})</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
+    Read from each study's title. Untick anything wrong, then Approve. Skip leaves a study untagged.
+  </div>
+  <div id="tag-review">
+    ${active.length ? `<div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:4px 2px 6px 2px">ACTIVE STUDIES · ${active.length}</div>
+      ${tagReviewGroupHTML("active", active)}` : ""}
+    ${pubs.length ? `<div style="display:flex;align-items:center;gap:8px;margin:14px 2px 6px 2px">
+        <span style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;flex:1">PRIOR PUBLICATIONS · ${pubs.length}</span>
+        <button class="mini-btn" id="tr-toggle-pubs" style="margin:0">${tagReviewShowPublished || !active.length ? "Hide" : "Show"}</button>
+      </div>
+      ${tagReviewShowPublished || !active.length ? tagReviewGroupHTML("published", pubs) : ""}` : ""}
   </div>`;
 }
 function approveTagSuggestion(studyId, row) {
@@ -4562,17 +4580,17 @@ function bindTagReview() {
       upsertStudy(s); render(); toast("Tags saved");
     }, (sh) => bindTagPicker(sh, "tr"));
   });
-  const all = document.getElementById("tr-ok-page");
-  if (all) all.onclick = () => {
+  box.querySelectorAll("[data-tr-page-ok]").forEach(b => b.onclick = () => {
     if (blockOfflineEdit("Approving tags")) return;
-    const rows = [...box.querySelectorAll(".tag-review-row")];
+    const rows = [...box.querySelectorAll(`[data-tr-box="${b.dataset.trPageOk}"] .tag-review-row`)];
     const ids = rows.map(r => r.dataset.trStudy);
     rows.forEach(r => approveTagSuggestion(r.dataset.trStudy, r));
     render(); toastAction(`Tags approved on ${ids.length} ${ids.length === 1 ? "study" : "studies"}`, "Undo", () => ids.forEach(undoTagApproval));
-  };
-  const prev = document.getElementById("tr-prev"), next = document.getElementById("tr-next");
-  if (prev) prev.onclick = () => { tagReviewPage = Math.max(0, tagReviewPage - 1); render(); };
-  if (next) next.onclick = () => { tagReviewPage++; render(); };
+  });
+  box.querySelectorAll("[data-tr-prev]").forEach(b => b.onclick = () => { const k = b.dataset.trPrev; tagReviewPage[k] = Math.max(0, tagReviewPage[k] - 1); render(); });
+  box.querySelectorAll("[data-tr-next]").forEach(b => b.onclick = () => { tagReviewPage[b.dataset.trNext]++; render(); });
+  const tp = document.getElementById("tr-toggle-pubs");
+  if (tp) tp.onclick = () => { tagReviewShowPublished = !tagReviewShowPublished; render(); };
 }
 function undoTagApproval(id) {
   const s = studyById(id); if (!s || !s.tagSuggestion) return;
