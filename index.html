@@ -8809,6 +8809,39 @@ function meetingGroups(g) {
     .concat(order.includes("New studies") ? ["New studies"] : [], order.includes("") ? [""] : []);
   return keys.map(k => ({ study: k || "No study matched", items: map[k] }));
 }
+function meetingReplaced(g) { return !!(g && (g.rerun || g.retried)); }
+// Which part of a study each kind of change lives in, so Edit lands on it rather than at the top.
+const MEETING_CHANGE_SECTION = {
+  enrollment: "enrollment", addMilestone: "milestones", updateMilestone: "milestones", addNote: "notes",
+  abstract: "abstracts", journalDecision: "manuscript", grantSource: "grant", addTask: "tasks",
+};
+function meetingChangeTask(a) {
+  const id = a && a.undo && a.undo.kind === "taskShelve" ? a.undo.taskId : "";
+  return id ? (state.tasks || []).find(t => t.id === id) : null;
+}
+function canEditMeetingChange(a) {
+  const s = a && studyById(a.studyId);
+  return !!(s && (typeof canSeeStudy !== "function" || canSeeStudy(s)));
+}
+// Edit, as opposed to Undo: take the person to the thing the meeting changed. A task opens in the
+// task editor; anything else opens its study with the right section expanded and in view.
+function editMeetingChange(gId, changeId) {
+  const g = (state.suggestions || []).find(x => x.id === gId);
+  const a = g && (g.applied || []).find(x => x.id === changeId);
+  if (!a) return;
+  const s = studyById(a.studyId);
+  if (!s || !canEditMeetingChange(a)) { toast("That study isn't one you can open"); return; }
+  const t = meetingChangeTask(a);
+  if (t) { openTaskForm(t); return; }
+  openStudy(s.id); tab = "studies"; render();
+  const sec = MEETING_CHANGE_SECTION[a.type] || "";
+  if (sec && studySectionState[sec] === false) { studySectionState[sec] = true; render(); }
+  setTimeout(() => {
+    const el = sec && document.querySelector(`[data-sec-toggle="${sec}"]`);
+    if (el && el.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, 60);
+  toast(`Opened ${s.nickname || s.title}${sec ? " — " + a.label : ""}. Edit it here; Undo is still on the meeting card.`);
+}
 function meetingCardHTML(g) {
   const when = g.createdAt ? fmtDate(String(g.createdAt).slice(0, 10)) : "";
   const open = meetingUndoOpen(g);
@@ -8816,7 +8849,9 @@ function meetingCardHTML(g) {
   const live = (g.applied || []).filter(a => !a.undoneAt);
   const until = new Date(Date.parse(g.undoUntil || "") || (Date.parse(g.createdAt || "") + MEETING_UNDO_MS));
   const groups = meetingGroups(g);
-  const head = g.status === "reading" ? "Reading the meeting…"
+  const replaced = meetingReplaced(g);
+  const head = replaced ? "Replaced by a later run of this meeting — kept for the record"
+    : g.status === "reading" ? "Reading the meeting…"
     : g.status === "failed" ? "Couldn't read this meeting — nothing was changed"
     : `${(g.applied || []).length} applied · ${(g.notApplied || []).length} need a person`;
   return `<div class="card" id="mtg-${esc(g.id)}" ${focusUpdateId === g.id ? 'style="outline:2px solid var(--blue)"' : ""}>
@@ -8835,9 +8870,10 @@ function meetingCardHTML(g) {
           ${a.evidence ? `<div style="font-size:11.5px;color:var(--text2);margin:1px 0 0 16px">Heard: “${esc(a.evidence)}”</div>` : ""}
         </div>` : `<div class="frow" style="gap:8px;padding:4px 0;border-bottom:none;align-items:flex-start">
         <div style="flex:1;min-width:0;font-size:13.5px;${a.undoneAt ? "text-decoration:line-through;color:var(--text2)" : ""}">
-          <span style="color:var(--green);font-weight:700">✓</span> ${esc(a.label)}: ${a.from && a.from.length <= 40 ? `<span style="color:var(--text2)">${esc(a.from)} →</span> ` : ""}<b>${esc(a.to)}</b>${typeof a.confidence === "number" && a.confidence < 0.7 ? ` <span style="font-size:11.5px;color:var(--orange)">— check · ${Math.round(a.confidence * 100)}% sure</span>` : ""}
+          <span style="color:var(--green);font-weight:700">✓</span> <span ${!a.undoneAt && canEditMeetingChange(a) ? `data-mtg-edit="${esc(g.id)}" data-mtg-change="${esc(a.id)}" style="cursor:pointer" title="Open it to edit"` : ""}>${esc(a.label)}: ${a.from && a.from.length <= 40 ? `<span style="color:var(--text2)">${esc(a.from)} →</span> ` : ""}<b>${esc(a.to)}</b></span>${typeof a.confidence === "number" && a.confidence < 0.7 ? ` <span style="font-size:11.5px;color:var(--orange)">— check · ${Math.round(a.confidence * 100)}% sure</span>` : ""}
           <div style="font-size:11.5px;color:var(--text2);margin:1px 0 0 16px;text-decoration:none">${a.evidence ? `Heard: “${esc(a.evidence)}”` : ""}${a.undoneAt ? ` · undone by ${esc(a.undoneBy || "")} ${esc(fmtDate(String(a.undoneAt).slice(0, 10)))}` : ""}${a.undoRefused && !a.undoneAt ? ` · not undone: ${esc(a.undoRefused)}` : ""}</div>
         </div>
+        ${!a.undoneAt && canEditMeetingChange(a) ? `<button class="mini-btn" data-mtg-edit="${esc(g.id)}" data-mtg-change="${esc(a.id)}" style="margin:0;flex:0 0 auto">Edit</button>` : ""}
         ${can && !a.undoneAt ? `<button class="mini-btn" data-mtg-undo="${esc(g.id)}" data-mtg-change="${esc(a.id)}" style="margin:0;flex:0 0 auto">Undo</button>` : ""}
       </div>`).join("")}`).join("")}
     <div style="font-size:11.5px;color:var(--text2);margin-top:10px;line-height:1.45">
@@ -8856,7 +8892,10 @@ function meetingsSectionHTML() {
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   if (!list.length) return "";
   // The last two days up front; everything older is the history, kept but folded away.
-  const openOnes = list.filter(meetingUndoOpen);
+  // A run that was replaced by a rerun (or a failed read that was retried) is history the moment
+  // its replacement exists — showing both up front is what made three struck-through lines look
+  // like a fault on 27 Oct. It stays in the full history, labelled.
+  const openOnes = list.filter(g => meetingUndoOpen(g) && !meetingReplaced(g));
   const shown = showAllMeetings ? list : openOnes;
   return `<div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:16px 2px 4px 2px">MEETING UPDATES</div>
     ${shown.length ? shown.map(meetingCardHTML).join("") : `<div style="font-size:12.5px;color:var(--text2);margin:0 2px 6px 2px">Nothing from the last two days.</div>`}
@@ -9042,6 +9081,7 @@ function bindSuggestions(root) {
   });
   root.querySelectorAll("[data-sugg-dismiss]").forEach(b => b.onclick = () => dismissSuggestion(b.dataset.suggDismiss));
   root.querySelectorAll("[data-mtg-undo]").forEach(b => b.onclick = () => undoMeetingChanges(b.dataset.mtgUndo, [b.dataset.mtgChange]));
+  root.querySelectorAll("[data-mtg-edit]").forEach(b => b.onclick = (e) => { e.stopPropagation(); editMeetingChange(b.dataset.mtgEdit, b.dataset.mtgChange); });
   root.querySelectorAll("[data-mtg-undo-all]").forEach(b => b.onclick = () => {
     const g = (state.suggestions || []).find(x => x.id === b.dataset.mtgUndoAll);
     if (!g) return;

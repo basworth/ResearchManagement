@@ -73,7 +73,7 @@ const base = (m) => [
   let d = w.document;
   console.log("\n-- The link in the summary email lands on the meeting --");
   check("?update= opens Settings", ev("tab") === "settings", ev("tab"));
-  const card = d.getElementById("mtg-mtg1");
+  let card = d.getElementById("mtg-mtg1");
   check("...on that meeting's card", !!card);
   check("the card shows before → after, by study", card && /MDAKP/.test(card.textContent) && /7 →/.test(card.textContent) && /Integrative PFI/i.test(card.textContent));
   check("...and what wasn't applied", card && /scout sequence/.test(card.textContent));
@@ -82,6 +82,30 @@ const base = (m) => [
     const m = t.indexOf("MDAKP"), i = t.indexOf("INTEGRATIVE PFI"), x = t.indexOf("Excel subject tracker"), n = t.indexOf("NO STUDY MATCHED");
     return m >= 0 && x > m && x < i && /Heard: “maybe a spreadsheet”/.test(t) && n > i && t.indexOf("scout sequence") > n;
   })(), card && card.textContent.replace(/\s+/g, " ").slice(0, 600));
+
+  console.log("\n-- Edit, beside Undo, goes to the thing that changed (27 Oct) --");
+  check("every live change has an Edit button", card && card.querySelectorAll("[data-mtg-edit]").length >= 4, card && card.querySelectorAll("[data-mtg-edit]").length);
+  check("...and its text is clickable too", card && card.querySelector('span[data-mtg-edit][data-mtg-change="c1"]'));
+  ev(`editMeetingChange("mtg1", "c4")`);
+  await wait(150);
+  check("a task change opens the task editor on that task", /Segment controls/.test(d.body.innerHTML) && !!d.querySelector(".sheet, [class*=sheet]"), ev("detailStudyId"));
+  ev(`typeof closeSheet === "function" && closeSheet()`);
+  ev(`editMeetingChange("mtg1", "c1")`);
+  await wait(150);
+  check("anything else opens its study", ev("detailStudyId") === "mdakp" && ev("tab") === "studies", { id: ev("detailStudyId"), tab: ev("tab") });
+  check("...with that section expanded", ev(`studySectionState.enrollment`) === true);
+  ev(`detailStudyId = null; tab = "settings"; render()`);
+  await wait(100);
+  card = d.getElementById("mtg-mtg1");
+  ev(`state.suggestions.find(g => g.id === "mtg1").rerun = "replaced"; render()`);
+  await wait(100);
+  check("a run replaced by a rerun leaves the up-front list", !d.getElementById("mtg-mtg1"));
+  ev(`showAllMeetings = true; render()`);
+  await wait(100);
+  check("...but stays in the full history, labelled", d.getElementById("mtg-mtg1") && /Replaced by a later run/.test(d.getElementById("mtg-mtg1").textContent));
+  ev(`delete state.suggestions.find(g => g.id === "mtg1").rerun; showAllMeetings = false; render()`);
+  await wait(100);
+  card = d.getElementById("mtg-mtg1");
 
   console.log("\n-- Undo one change --");
   d.querySelector('[data-mtg-undo="mtg1"][data-mtg-change="c1"]').click(); await wait(100);
