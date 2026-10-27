@@ -13567,7 +13567,23 @@ function markTourSeen() {
  * nothing — so each step names its target by a stable selector (the tab buttons, the header
  * buttons) and a step whose target isn't on screen is skipped rather than shown floating.
  */
-const BALLOONS_VERSION = 1;
+/* New features get balloons too (Adam, 27 Oct: "do the balloons when we release new features as
+ * well even for existing users"). Each release that changes something people use adds an entry
+ * here with the next `since` number; that bumps the version, and everyone who has seen an older
+ * version gets just the entries newer than theirs, once, on their next load. Someone brand new gets
+ * the section tour and is marked current, so they aren't then shown a backlog of "new" things.
+ *
+ * `tab` switches to that tab before measuring (a new button usually lives inside a page, not in the
+ * header); the person is put back on the tab they were on when the balloons finish.
+ */
+function balloonNews() {
+  return [
+    // { since: 2, tab: "research", sel: ["#some-new-button"], title: "…", what: "…", custom: "…" },
+  ];
+}
+function balloonsVersion() {
+  return balloonNews().reduce((v, n) => Math.max(v, n.since || 1), 1);
+}
 function balloonSteps() {
   return [
     { sel: ["#sidebar:not(.collapsed)", 'nav.tabbar [data-tab="dashboard"]'], title: "Dashboard",
@@ -13602,6 +13618,7 @@ function balloonSteps() {
       custom: "It reaches Adam directly, with your name and the screen you were on attached." },
   ];
 }
+function balloonAvailable(step) { return !!step.tab || !!balloonTarget(step); }
 function balloonTarget(step) {
   for (const sel of step.sel) {
     const el = document.querySelector(sel);
@@ -13635,13 +13652,14 @@ function finishBalloons() {
   balloonState = null;
   closeBalloons();
   markBalloonsSeen();
+  if (st && st.startTab && tab !== st.startTab) { tab = st.startTab; render(); }
   if (st && typeof st.onDone === "function") st.onDone();
 }
 function stepBalloons(dir) {
   const st = balloonState;
   if (!st) return;
   let i = st.i + dir;
-  while (i >= 0 && i < st.steps.length && !balloonTarget(st.steps[i])) i += dir;
+  while (i >= 0 && i < st.steps.length && !balloonAvailable(st.steps[i])) i += dir;
   if (i < 0) return;
   if (i >= st.steps.length) { finishBalloons(); return; }
   st.i = i;
@@ -13650,9 +13668,16 @@ function stepBalloons(dir) {
 function placeBalloon() {
   const st = balloonState;
   const step = st.steps[st.i];
+  if (step.tab && tab !== step.tab) { tab = step.tab; detailStudyId = null; render(); }
   const el = balloonTarget(step);
-  if (!el) { stepBalloons(1); return; }
-  const shown = st.steps.map((s, n) => n).filter(n => balloonTarget(st.steps[n]));
+  if (!el) {
+    // Its page is up but the control isn't on it — drop it from this run rather than point at nothing.
+    st.steps = st.steps.filter((x, n) => n !== st.i);
+    st.i -= 1;
+    if (st.steps.length) stepBalloons(1); else finishBalloons();
+    return;
+  }
+  const shown = st.steps.map((s, n) => n).filter(n => balloonAvailable(st.steps[n]));
   const pos = shown.indexOf(st.i);
   const last = pos === shown.length - 1;
   balloonUnreveal();
@@ -13664,7 +13689,7 @@ function placeBalloon() {
     width: (r.width + pad * 2) + "px", height: (r.height + pad * 2) + "px" });
   const b = document.getElementById("balloon");
   b.innerHTML = `<div class="bl-arrow"></div>
-    <h3>${esc(step.title)}</h3>
+    <h3>${step.isNew ? `<span style="color:var(--blue)">New · </span>` : ""}${esc(step.title)}</h3>
     <p class="bl-what">${esc(step.what)}</p>
     <p class="bl-custom"><span style="font-weight:700;color:var(--text)">Make it yours:</span> ${step.custom}</p>
     <div class="bl-foot">
@@ -13696,16 +13721,21 @@ function placeBalloon() {
   const back = b.querySelector("#bl-back"); if (back) back.onclick = () => stepBalloons(-1);
   const skip = b.querySelector("#bl-skip"); if (skip) skip.onclick = finishBalloons;
 }
-function openBalloons(onDone) {
+// opts.newSince: show only the news entries newer than that version (an existing user after a
+// release). Otherwise the section tour.
+function openBalloons(onDone, opts) {
   closeBalloons();
-  const steps = balloonSteps();
-  const first = steps.findIndex(s => balloonTarget(s));
+  const newSince = opts && opts.newSince;
+  const steps = newSince
+    ? balloonNews().filter(n => (n.since || 1) > newSince).map(n => Object.assign({ isNew: true }, n))
+    : balloonSteps();
+  const first = steps.findIndex(s => balloonAvailable(s));
   if (first < 0) { if (typeof onDone === "function") onDone(); return; }
   // Taps outside the balloon do nothing rather than closing it by accident.
   const c = document.createElement("div"); c.id = "balloon-catch"; document.body.appendChild(c);
   const ring = document.createElement("div"); ring.id = "balloon-ring"; document.body.appendChild(ring);
   const b = document.createElement("div"); b.id = "balloon"; b.setAttribute("role", "dialog"); document.body.appendChild(b);
-  balloonState = { steps, i: first, onDone };
+  balloonState = { steps, i: first, onDone, startTab: tab };
   window.addEventListener("resize", balloonRelayout);
   document.addEventListener("keydown", balloonKey);
   placeBalloon();
@@ -13714,13 +13744,14 @@ function openBalloons(onDone) {
 function markBalloonsSeen() {
   if (!currentUser) return;
   const p = profileFor(currentUser.id);
-  if (p && p.balloonsSeen === BALLOONS_VERSION) return;
-  upsertProfile(null, { balloonsSeen: BALLOONS_VERSION });
+  const v = balloonsVersion();
+  if (p && p.balloonsSeen === v) return;
+  upsertProfile(null, { balloonsSeen: v });
 }
 function balloonsDue() {
   if (!currentUser) return false;
   const p = profileFor(currentUser.id);
-  return !!(p && p.name && p.position && p.balloonsSeen !== BALLOONS_VERSION);
+  return !!(p && p.name && p.position && (p.balloonsSeen || 0) < balloonsVersion());
 }
 // Only once the account is actually set up — a tour on top of the "who are you" prompt would be
 // two sheets deep on somebody's first ten seconds.
@@ -13731,7 +13762,11 @@ function maybeShowTour() {
   if (document.getElementById("sheet")) return;   // something else is already asking them something
   if (document.getElementById("balloon")) return;
   // Seen the sheet tour already (everyone signed up before 27 Oct): just the balloons, once.
-  if (p.tourSeen === TOUR_VERSION) { if (balloonsDue()) openBalloons(); return; }
+  // Seen an earlier version: only what's new since then.
+  if (p.tourSeen === TOUR_VERSION) {
+    if (balloonsDue()) openBalloons(null, p.balloonsSeen ? { newSince: p.balloonsSeen } : null);
+    return;
+  }
   openTour(0);
 }
 // A brand-new lab tracks one field, not eleven. Without this, the first thing a spine PI sees is
