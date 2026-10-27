@@ -26,7 +26,7 @@ function toJs(src) {
   return fs.readFileSync(path.join(dir, "m.js"), "utf8");
 }
 const js = toJs(SRC.replace(/^export\s+/gm, ""));
-const M = new Function(js + "\nreturn { looksLikeMeeting, studyContext, applyMeeting, canonPerson, redactAll, summaryEmail, threadRecipients, MEETING_UNDO_HOURS };")();
+const M = new Function(js + "\nreturn { looksLikeMeeting, studyContext, applyMeeting, canonPerson, redactAll, summaryEmail, threadRecipients, MEETING_UNDO_HOURS, tagVocabulary, extractPrompt };")();
 
 const studies = () => [
   { id: "ipfi", nickname: "Integrative PFI", title: "An Integrative Study of Cartilage Ultrastructure, Bone Morphology, and Synovial Fluid Biomarkers", phase: "Enrolling",
@@ -59,7 +59,7 @@ const out = M.applyMeeting({
     { type: "addNote", studyId: "ipfi", note: "None enrolled yet; under-18 amendment pending. Ladonna New declined.", evidence: "Ladonna New couldn't drive in", confidence: 0.9 },
     { type: "abstract", studyId: "comp", meeting: "AOSSM 2026", status: "Submitted", evidence: "submitted to AANA and AOSSM", confidence: 0.8 },
     { type: "abstract", studyId: "comp", meeting: "AANA 2026", status: "Submitted", evidence: "already there", confidence: 0.9 },
-    { type: "newStudy", title: "Version, torsion and knee rotation vs bone shape", pi: "Adam Yanke", team: ["Jacob Ackerman"], evidence: "that could be its own paper", confidence: 0.75 },
+    { type: "newStudy", title: "Version, torsion and knee rotation vs bone shape", pi: "Adam Yanke", team: ["Jacob Ackerman"], regions: ["knee", "Knee"], topics: ["patellofemoral INSTABILITY", "Torsion"], evidence: "that could be its own paper", confidence: 0.75 },
     { type: "enrollment", studyId: "made-up-id", enrolled: 4, evidence: "?", confidence: 0.9 },
     { type: "phase", studyId: "comp", phase: "Submitted", evidence: "maybe", confidence: 0.2 },
     { type: "addNote", studyId: "pub", note: "Johannes may want to collaborate", evidence: "ran into Johannes", confidence: 0.8 },
@@ -81,6 +81,16 @@ check("a study id the lab doesn't have is refused", out.notApplied.some(x => /co
 check("an unsure item is reported, not applied", st("comp").phase === "Manuscript" && out.notApplied.some(x => /held — only 20% sure/.test(x.why)));
 check("a published study takes a note but nothing else", st("pub").title === "Old paper" && (st("pub").noteEntries || []).length === 1);
 check("things with no home are passed through for a person", out.notApplied.some(x => /scout sequence/.test(x.text)));
+
+console.log("\n-- A new study comes with tags (27 Oct) --");
+{
+  const ns = (out.newStudies || [])[0];
+  check("regions land on the lab's spelling, once", ns && JSON.stringify(ns.tags.region) === JSON.stringify(["Knee"]), ns && ns.tags);
+  check("topics match the list case-blind, and a new one is kept as said", ns && JSON.stringify(ns.tags.topic) === JSON.stringify(["Patellofemoral instability", "Torsion"]), ns && ns.tags);
+  const v = M.tagVocabulary([{ region: ["Pelvis"], topic: ["Torsion"], hidden: ["topic|Imaging"] }]);
+  check("the vocabulary is the defaults plus the lab's own, minus any it retired", v.region.includes("Pelvis") && v.topic.includes("Torsion") && !v.topic.includes("Imaging") && v.region.includes("Knee"));
+  check("the model is shown the lab's tags", /TAGS — body regions: .*Pelvis/.test(M.extractPrompt("x", [], [], "2026-10-27", v)));
+}
 
 console.log("\n-- No patient ever reaches the tracker --");
 const everything = JSON.stringify([S, out]);

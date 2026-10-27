@@ -1387,7 +1387,7 @@ function setFieldSub(field, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [], watchConfig: null, watchVotes: null, watchKeeps: [] };
+let state = { tagLists: { region: [], topic: [] }, studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [], watchConfig: null, watchVotes: null, watchKeeps: [] };
 // Which tab you land on.
 //
 // Research is the first thing you see each day: it's the page you read rather than edit, and the
@@ -1426,6 +1426,7 @@ let tab = openingTab();
 let studyFilter = "Active";
 let studyPhaseFilter = "All phases";
 let studyDesignFilter = "All designs";
+let studyTagFilter = [];   // every tag ticked must be on the study (Knee + Cartilage = both)
 let studySearchQuery = "";
 // Studies-list "who" filter: "mine" (default — only studies I'm involved in as PI, team
 // member, or task assignee; gracefully shows everything if no identity is set), "all", or
@@ -2595,6 +2596,7 @@ async function pullAll() {
     if (meta && meta.data.nameAliases && typeof meta.data.nameAliases === "object") state.nameAliases = meta.data.nameAliases;
     // Team-wide, so a stage one person removed doesn't come back for everyone else.
     if (meta && Array.isArray(meta.data.stageAdds)) state.stageAdds = meta.data.stageAdds;
+    state.tagLists = normTagLists(meta && meta.data.tagLists);
     // `workspace` is captured here so stampFor can keep a record in the lab that owns it.
     rows.forEach(r => { remoteMeta[r.id] = { kind: r.kind, updated_at: r.updated_at, workspace: r.workspace }; setBaseline(r.id, r.data); });
     await loadAppAdmins();
@@ -2751,7 +2753,8 @@ async function loadSupportGrants() {
 function rosterPayload() {
   return { id: metaRowId(activeWorkspace()), names: state.roster, degrees: state.rosterDegrees || {},
            orgPermissions: !!state.orgPermissions, initiationStages: state.initiationStages || null,
-           nameAliases: state.nameAliases || {}, stageAdds: state.stageAdds || [] };
+           nameAliases: state.nameAliases || {}, stageAdds: state.stageAdds || [],
+           tagLists: normTagLists(state.tagLists) };
 }
 function pushRoster() {
   const p = rosterPayload();
@@ -2950,7 +2953,9 @@ function applyRealtimeRow(kind, id, data, updatedAt, ws) {
   remoteMeta[id] = { kind, updated_at: updatedAt, workspace: ws };
   setBaseline(id, data);
   if (kind === "meta") {
-    if (Array.isArray(data.names)) { state.roster = data.names; saveLocal(); render(); }
+    if (Array.isArray(data.names)) state.roster = data.names;
+    if (data.tagLists) state.tagLists = normTagLists(data.tagLists);
+    saveLocal(); render();
     return;
   }
   if (kind === "scholar") { state.scholar = data; saveLocal(); render(); return; }
@@ -4327,6 +4332,183 @@ function openStudyLinkSheet(studyId) {
   bindRowCheckboxes("#link-mtg-list .link-row");
 }
 
+// ---------- Study tags (Adam, 27 Oct) ----------
+// "a tag option … to group them into categories when we are running research meetings, like
+// shoulder, knee, hip, etc and cartilage, patellofemoral instability". Two groups, several of each
+// per study. The lab's list lives on its own meta row (beside the roster), so each lab keeps its
+// own words; anyone can add a tag by typing it, and lab admins rename or merge them in Settings.
+// Defaults are offered from day one so nobody starts from an empty box.
+const TAG_GROUPS = [
+  { key: "region", label: "Body region" },
+  { key: "topic", label: "Topic" },
+];
+const DEFAULT_TAGS = {
+  region: ["Knee", "Shoulder", "Hip", "Elbow", "Foot & Ankle", "Hand & Wrist", "Spine"],
+  topic: ["Cartilage", "Patellofemoral instability", "ACL", "Meniscus", "Rotator cuff", "Shoulder instability",
+    "Hip preservation", "Biologics", "Osteotomy", "Imaging", "Return to sport", "Osteoarthritis"],
+};
+function normTagLists(t) {
+  const out = { region: [], topic: [], hidden: [] };
+  TAG_GROUPS.forEach(g => { if (t && Array.isArray(t[g.key])) out[g.key] = t[g.key].map(x => String(x || "").trim()).filter(Boolean); });
+  if (t && Array.isArray(t.hidden)) out.hidden = t.hidden.slice();
+  return out;
+}
+function studyTags(s) {
+  const t = (s && s.tags && typeof s.tags === "object") ? s.tags : {};
+  return { region: Array.isArray(t.region) ? t.region : [], topic: Array.isArray(t.topic) ? t.topic : [] };
+}
+function allStudyTags(s) { const t = studyTags(s); return t.region.concat(t.topic); }
+// Defaults, then the lab's own list, then anything already on a study — case-insensitively unique,
+// first spelling wins, so "pf instability" typed later lands on the existing tag.
+function tagOptions(group) {
+  const seen = new Map();
+  const add = (x) => { const v = String(x || "").trim(); if (v && !seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v); };
+  const hidden = new Set(((state.tagLists || {}).hidden || []));
+  (DEFAULT_TAGS[group] || []).filter(x => !hidden.has(group + "|" + x)).forEach(add);
+  ((state.tagLists || {})[group] || []).forEach(add);
+  (state.studies || []).forEach(s => studyTags(s)[group].forEach(add));
+  return [...seen.values()];
+}
+function canonTag(group, name) {
+  const v = String(name || "").trim().replace(/\s+/g, " ");
+  if (!v) return "";
+  return tagOptions(group).find(o => o.toLowerCase() === v.toLowerCase()) || v;
+}
+function rememberTag(group, name) {
+  const v = canonTag(group, name);
+  if (!v) return "";
+  state.tagLists = normTagLists(state.tagLists);
+  const known = (DEFAULT_TAGS[group] || []).concat(state.tagLists[group]).some(o => o.toLowerCase() === v.toLowerCase());
+  if (!known) { state.tagLists[group].push(v); pushRoster(); }
+  return v;
+}
+function tagChipsHTML(s, small) {
+  const t = studyTags(s);
+  const chip = (x, g) => `<span class="badge outline" data-tag-chip="${esc(g)}" style="${small ? "font-size:10px;" : ""}${g === "region" ? "border-color:var(--blue);color:var(--blue)" : ""}">${esc(x)}</span>`;
+  return t.region.map(x => chip(x, "region")).concat(t.topic.map(x => chip(x, "topic"))).join("");
+}
+// The picker used in the study form, the study page and the guided setup: tap a chip to toggle,
+// or type a new one. Reading it back is tagPickerValue().
+function tagPickerHTML(prefix, selected) {
+  const sel = selected || { region: [], topic: [] };
+  return TAG_GROUPS.map(g => {
+    const opts = tagOptions(g.key);
+    (sel[g.key] || []).forEach(x => { if (!opts.some(o => o.toLowerCase() === String(x).toLowerCase())) opts.push(x); });
+    return `<div style="margin:2px 0 10px 0">
+      <div style="font-size:12px;font-weight:700;color:var(--text2);margin-bottom:6px">${esc(g.label)}</div>
+      <div class="tag-pick" data-tag-group="${g.key}" data-tag-prefix="${esc(prefix)}" style="display:flex;flex-wrap:wrap;gap:6px">
+        ${opts.map(o => { const on = (sel[g.key] || []).some(x => String(x).toLowerCase() === o.toLowerCase());
+          return `<button type="button" class="mini-btn tag-opt${on ? " on" : ""}" data-tag="${esc(o)}" aria-pressed="${on}" style="margin:0;${on ? "background:var(--blue);color:#fff" : ""}">${esc(o)}</button>`; }).join("")}
+      </div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <input class="tag-new" data-tag-group="${g.key}" data-tag-prefix="${esc(prefix)}" placeholder="Add a ${esc(g.label.toLowerCase())}…" style="flex:1;border:none;background:var(--bg);border-radius:8px;padding:7px 10px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
+        <button type="button" class="mini-btn tag-new-add" data-tag-group="${g.key}" data-tag-prefix="${esc(prefix)}" style="margin:0">Add</button>
+      </div>
+    </div>`;
+  }).join("");
+}
+function bindTagPicker(root, prefix) {
+  const toggle = (b) => {
+    const on = !b.classList.contains("on");
+    b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on));
+    b.style.background = on ? "var(--blue)" : ""; b.style.color = on ? "#fff" : "";
+  };
+  root.querySelectorAll(`.tag-pick[data-tag-prefix="${prefix}"] .tag-opt`).forEach(b => b.onclick = () => toggle(b));
+  root.querySelectorAll(`.tag-new-add[data-tag-prefix="${prefix}"]`).forEach(btn => {
+    const g = btn.dataset.tagGroup;
+    const input = root.querySelector(`.tag-new[data-tag-prefix="${prefix}"][data-tag-group="${g}"]`);
+    const add = () => {
+      const v = canonTag(g, input.value);
+      if (!v) return;
+      const box = root.querySelector(`.tag-pick[data-tag-prefix="${prefix}"][data-tag-group="${g}"]`);
+      let b = [...box.querySelectorAll(".tag-opt")].find(x => x.dataset.tag.toLowerCase() === v.toLowerCase());
+      if (!b) {
+        b = document.createElement("button");
+        b.type = "button"; b.className = "mini-btn tag-opt"; b.dataset.tag = v; b.textContent = v; b.style.margin = "0";
+        b.onclick = () => toggle(b);
+        box.appendChild(b);
+      }
+      if (!b.classList.contains("on")) toggle(b);
+      input.value = "";
+    };
+    btn.onclick = add;
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); add(); } });
+  });
+}
+function tagPickerValue(root, prefix) {
+  const out = { region: [], topic: [] };
+  TAG_GROUPS.forEach(g => {
+    out[g.key] = [...root.querySelectorAll(`.tag-pick[data-tag-prefix="${prefix}"][data-tag-group="${g.key}"] .tag-opt.on`)]
+      .map(b => rememberTag(g.key, b.dataset.tag)).filter(Boolean);
+  });
+  return out;
+}
+// Lab admins tidy the list: rename a tag everywhere, or rename it onto an existing tag to merge
+// the two ("PF instability" into "Patellofemoral instability"). Every study carrying it is
+// updated; nothing is deleted — a tag with no studies simply stops being offered.
+function studyTagsAdminHTML() {
+  const count = {};
+  (state.studies || []).forEach(s => { const t = studyTags(s); TAG_GROUPS.forEach(g => t[g.key].forEach(x => { const k = g.key + "|" + x; count[k] = (count[k] || 0) + 1; })); });
+  return `<div class="section-title">Study Tags</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
+    Anyone can add a tag while tagging a study. Rename one here to fix it everywhere, or rename it to an existing tag to merge the two.
+  </div>
+  <div class="card">
+    ${TAG_GROUPS.map(g => `<div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:6px 0 4px 0">${esc(g.label.toUpperCase())}</div>
+      ${tagOptions(g.key).map(x => `<div class="frow" style="gap:8px;padding:5px 0;border-bottom:none;align-items:center">
+        <span style="flex:1;font-size:14.5px">${esc(x)}</span>
+        <span style="font-size:12px;color:var(--text2)">${count[g.key + "|" + x] || 0} ${(count[g.key + "|" + x] || 0) === 1 ? "study" : "studies"}</span>
+        <button class="mini-btn" data-tag-group="${g.key}" data-tag-rename="${esc(x)}" style="margin:0">Rename</button>
+      </div>`).join("")}`).join("")}
+  </div>`;
+}
+function renameStudyTag(group, from, to) {
+  const v = String(to || "").trim().replace(/\s+/g, " ");
+  if (!v || v === from) return 0;
+  const target = tagOptions(group).find(o => o.toLowerCase() === v.toLowerCase() && o !== from) || v;
+  let n = 0;
+  (state.studies || []).forEach(s => {
+    const t = studyTags(s);
+    if (!t[group].includes(from)) return;
+    const next = t[group].filter(x => x !== from);
+    if (!next.some(x => x.toLowerCase() === target.toLowerCase())) next.push(target);
+    s.tags = Object.assign({}, t, { [group]: next });
+    upsertStudy(s); n++;
+  });
+  state.tagLists = normTagLists(state.tagLists);
+  state.tagLists[group] = state.tagLists[group].filter(x => x !== from);
+  if (!(DEFAULT_TAGS[group] || []).concat(state.tagLists[group]).some(x => x.toLowerCase() === target.toLowerCase())) state.tagLists[group].push(target);
+  // A renamed DEFAULT can't be removed from the defaults, but it must stop being offered.
+  state.tagLists.hidden = Array.isArray(state.tagLists.hidden) ? state.tagLists.hidden : [];
+  if ((DEFAULT_TAGS[group] || []).includes(from)) state.tagLists.hidden.push(group + "|" + from);
+  pushRoster();
+  studyTagFilter = studyTagFilter.map(x => x === from ? target : x);
+  return n;
+}
+function openTagRenameSheet(group, from) {
+  if (blockOfflineEdit("Renaming a tag")) return;
+  openSheet("Rename tag", `<div class="fld"><label for="tag-rename">Rename “${esc(from)}” to</label>
+      <input id="tag-rename" value="${esc(from)}" list="tag-rename-list">
+      <datalist id="tag-rename-list">${tagOptions(group).filter(x => x !== from).map(x => `<option value="${esc(x)}">`).join("")}</datalist></div>
+    <div style="font-size:12px;color:var(--text2);line-height:1.5;margin:0 2px">Pick an existing tag to merge the two. Every study tagged “${esc(from)}” is updated.</div>`,
+    () => {
+      const to = document.getElementById("tag-rename").value;
+      const n = renameStudyTag(group, from, to);
+      render();
+      toast(n ? `Renamed on ${n} ${n === 1 ? "study" : "studies"}` : "Tag renamed");
+    }, (sh) => { const i = sh.querySelector("#tag-rename"); if (i) { i.focus(); i.select && i.select(); } });
+}
+function openTagSheet(studyId) {
+  const s = studyById(studyId);
+  if (!s) return;
+  if (blockOfflineEdit("Tagging a study")) return;
+  openSheet("Tags", `<div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin:0 2px 10px 2px">Group studies for research meetings. Tap to add or remove; type to add one that isn't listed.</div>
+    ${tagPickerHTML("st", studyTags(s))}`, () => {
+      s.tags = tagPickerValue(document.getElementById("sheet"), "st");
+      upsertStudy(s);
+      toast("Tags saved");
+    }, (sh) => bindTagPicker(sh, "st"));
+}
 function studyCardHTML(s) {
   const openCount = state.tasks.filter(t => t.studyId === s.id && !t.done).length;
   const nextMs = (s.milestones || []).filter(m => !m.done && m.date).sort((a, b) => a.date.localeCompare(b.date))[0];
@@ -4345,6 +4527,7 @@ function studyCardHTML(s) {
       ${s.pi ? `<span class="meta">PI: ${esc(s.pi)}</span>` : ""}
       ${s.journal && SUBMITTED_PHASES.includes(s.phase) ? `<span class="badge" style="background:var(--teal);font-size:10px">${esc(s.journal)}</span>` : ""}
       ${s.priority && s.priority !== "Medium" ? `<span class="meta" style="color:${PRIORITY_COLORS[s.priority]};font-weight:700">${esc(s.priority)}</span>` : ""}
+      ${tagChipsHTML(s, true)}
     </div>
     <div class="meta">
       ${openCount ? `${openCount} open task${openCount > 1 ? "s" : ""}` : "No open tasks"}
@@ -4380,6 +4563,11 @@ function renderStudies() {
 
   let list = (studyPhaseFilter === "All phases") ? base : base.filter(s => s.phase === studyPhaseFilter);
   if (studyDesignFilter !== "All designs") list = list.filter(s => s.design === studyDesignFilter);
+  // Tags: counted against the list as filtered so far, so a chip's number is what tapping it leaves.
+  const tagCount = {};
+  list.forEach(s => allStudyTags(s).forEach(x => { tagCount[x] = (tagCount[x] || 0) + 1; }));
+  studyTagFilter = studyTagFilter.filter(x => tagCount[x] || list.length === 0);
+  if (studyTagFilter.length) list = list.filter(s => { const t = allStudyTags(s).map(x => x.toLowerCase()); return studyTagFilter.every(f => t.includes(f.toLowerCase())); });
   list.sort((a, b) => PHASES.indexOf(a.phase) - PHASES.indexOf(b.phase) || a.title.localeCompare(b.title));
 
   let html = `<div class="seg">` + filters.map(f =>
@@ -4413,6 +4601,19 @@ function renderStudies() {
         ${presentDesigns.map(d => `<option value="${esc(d)}" ${d === studyDesignFilter ? "selected" : ""}>${esc(DESIGN_SHORT[d] || d)} (${designCount[d]})</option>`).join("")}
       </select>
     </div>`;
+  {
+    const shownTags = TAG_GROUPS.flatMap(g => tagOptions(g.key).filter(x => tagCount[x]).map(x => ({ x, g: g.key })));
+    if (shownTags.length || studyTagFilter.length) {
+      html += `<div style="display:flex;align-items:center;gap:8px;margin:-6px 4px 14px 4px">
+        <span style="font-size:13px;font-weight:600;color:var(--text2)">Tags</span>
+        <div style="flex:1;display:flex;gap:6px;overflow-x:auto;padding-bottom:2px">
+          ${shownTags.map(({ x, g }) => { const on = studyTagFilter.includes(x);
+            return `<button class="mini-btn" data-tag-filter="${esc(x)}" style="margin:0;white-space:nowrap;${on ? "background:var(--blue);color:#fff" : g === "region" ? "color:var(--blue)" : ""}">${esc(x)} ${tagCount[x] || 0}</button>`; }).join("")}
+          ${studyTagFilter.length ? `<button class="mini-btn" data-tag-filter-clear style="margin:0;white-space:nowrap">Clear</button>` : ""}
+        </div>
+      </div>`;
+    }
+  }
   if (!list.length) {
     html += studySearchQuery
       ? `<div class="empty"><div class="big">🔍</div>No studies match "${esc(studySearchQuery)}".</div>`
@@ -4428,6 +4629,13 @@ function renderStudies() {
   if (personSel) personSel.onchange = (e) => { personFilter = e.target.value; studyPhaseFilter = "All phases"; studyDesignFilter = "All designs"; render(); };
   document.getElementById("phase-filter").onchange = (e) => { studyPhaseFilter = e.target.value; render(); };
   document.getElementById("design-filter").onchange = (e) => { studyDesignFilter = e.target.value; render(); };
+  $main.querySelectorAll("[data-tag-filter]").forEach(b => b.onclick = () => {
+    const x = b.dataset.tagFilter;
+    studyTagFilter = studyTagFilter.includes(x) ? studyTagFilter.filter(y => y !== x) : studyTagFilter.concat([x]);
+    render();
+  });
+  const tagClear = $main.querySelector("[data-tag-filter-clear]");
+  if (tagClear) tagClear.onclick = () => { studyTagFilter = []; render(); };
   $main.querySelectorAll("[data-study]").forEach(el => el.onclick = () => { openStudy(el.dataset.study); render(); });
 }
 
@@ -6739,6 +6947,10 @@ function renderStudyDetail() {
       ${s.nct ? `<br><b>ClinicalTrials.gov:</b> <a href="https://clinicaltrials.gov/study/${encodeURIComponent(s.nct)}" target="_blank" rel="noopener" style="color:var(--blue)">${esc(s.nct)}</a>` : ""}
       ${s.start ? `<br><b>Started:</b> ${fmtDate(s.start)}` : ""}
     </div>
+    <div class="chip-row" style="margin-top:8px;align-items:center">
+      ${tagChipsHTML(s)}
+      <a href="#" data-edit-tags="${esc(s.id)}" style="font-size:12.5px;color:var(--blue)">${allStudyTags(s).length ? "Edit tags" : "+ Add tags"}</a>
+    </div>
     ${(() => {
       // Surfaced on the header rather than buried in the checklist: a lapsed approval is the one
       // thing here that makes ongoing work reportable, so it shouldn't need a click to find.
@@ -6920,6 +7132,7 @@ function renderStudyDetail() {
   $main.innerHTML = html;
   document.getElementById("back-btn").onclick = () => { detailStudyId = null; render(); };
   document.getElementById("edit-study-btn").onclick = () => openStudyForm(s);
+  document.querySelectorAll("[data-edit-tags]").forEach(a => a.onclick = (e) => { e.preventDefault(); openTagSheet(a.dataset.editTags); });
   document.getElementById("ask-update-btn").onclick = () => openUpdateRequestSheet(s.id);
   // The same cards as in Settings, so the same handlers drive them.
   bindSuggestions($main);
@@ -7542,7 +7755,7 @@ function visibleFilterSets(tab) {
 function currentFilters(tab) {
   return tab === "worklist"
     ? { status: worklistStatus === "all" ? "All" : worklistStatus === "going" ? "Stale and Rotten" : "Active", person: worklistPerson, phase: worklistPhaseFilter, design: worklistDesignFilter, search: worklistSearchQuery, columns: worklistColumns.slice(), layout: worklistLayout }
-    : { status: studyFilter, person: personFilter, phase: studyPhaseFilter, design: studyDesignFilter, search: studySearchQuery };
+    : { status: studyFilter, person: personFilter, phase: studyPhaseFilter, design: studyDesignFilter, search: studySearchQuery, tags: studyTagFilter.slice() };
 }
 function applyFilters(tab, f) {
   if (!f) return;
@@ -7561,6 +7774,7 @@ function applyFilters(tab, f) {
     studyPhaseFilter = f.phase || "All phases";
     studyDesignFilter = f.design || "All designs";
     studySearchQuery = f.search || "";
+    studyTagFilter = Array.isArray(f.tags) ? f.tags.slice() : [];
   }
 }
 function saveFilterSet(tab, name) {
@@ -10061,6 +10275,7 @@ function renderSettings() {
     </div>
   </div>
 
+  ${isAdmin() ? studyTagsAdminHTML() : ""}
   ${isAdmin() ? `
   <div class="section-title">Initiation Stages</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
@@ -10444,6 +10659,7 @@ function renderSettings() {
   // in this function is bound — which takes the whole Settings screen down, not just this button.
   const addMeetingBtn = document.getElementById("add-meeting-btn");
   if (addMeetingBtn) addMeetingBtn.onclick = () => openMeetingForm(null);
+  document.querySelectorAll("[data-tag-rename]").forEach(b => b.onclick = () => openTagRenameSheet(b.dataset.tagGroup, b.dataset.tagRename));
   document.getElementById("roster-add").onclick = () => {
     const n = document.getElementById("roster-name").value.trim();
     if (!n) return;
@@ -11125,12 +11341,16 @@ function openStudyForm(existing, onCreated, opts) {
         </div>
       </div>
     </div>
-    ${wzEnd}${wzStep(3, "What kind of study is it, and where does it stand?")}
+    ${wzEnd}${wzStep(3, "What kind of study is it, where does it stand, and what's it about?")}
     <div class="fgroup">
       <div class="frow"><label>Design</label>${selectHTML("f-design", DESIGNS, s.design)}</div>
       <div class="frow"><label>Phase</label>${selectHTML("f-phase", TRACK_PHASES[s.design] || TRACK_PHASES[DESIGNS[0]], s.phase)}</div>
       <div class="frow"><label>Priority</label>${selectHTML("f-priority", PRIORITIES, s.priority)}</div>
     </div>
+    <div class="fgroup"><div class="frow" style="display:block">
+      <label style="display:block;margin-bottom:8px">Tags</label>
+      ${tagPickerHTML("f", studyTags(s))}
+    </div></div>
     <!-- Journal / revisions tracking moved to the study page's own "Manuscript Submission"
          section (manuscriptBodyHTML) -- day-to-day submission status shouldn't require opening
          Edit Study. See renderStudyDetail(). -->
@@ -11172,6 +11392,7 @@ function openStudyForm(existing, onCreated, opts) {
         irbExpiry: document.getElementById("f-irb-expiry").value,
         nct: document.getElementById("f-nct").value.trim(),
         start: document.getElementById("f-start").value,
+        tags: tagPickerValue(document.getElementById("sheet"), "f"),
         // `notes` is deliberately absent: notes now live in s.noteEntries, edited inline in
         // the study page's Notes section. The old blob is left untouched on existing records.
       });
@@ -11237,6 +11458,7 @@ function openStudyForm(existing, onCreated, opts) {
     phaseSel.innerHTML = phases.map(p => `<option ${p === current ? "selected" : ""}>${esc(p)}</option>`).join("");
     if (!phases.includes(current)) phaseSel.value = phases[0];
   };
+  bindTagPicker(document.getElementById("sheet"), "f");
   if (guided) bindStudyWizard();
 }
 // One question per screen. The sheet's own Save only appears on the last step; Back/Next sit at

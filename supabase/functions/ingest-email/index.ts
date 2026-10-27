@@ -20,7 +20,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
 import { setStudies, setMatchHints, setMeetings, stripPHI as stripPHIRules, readEmail, applyChangeTo, PARSER_VERSION } from "./rules.ts";
-import { looksLikeMeeting, studyContext, extractPrompt, callModel, applyMeeting, summaryEmail, threadRecipients, redactAll, MEETING_UNDO_HOURS } from "./meeting.ts";
+import { looksLikeMeeting, studyContext, extractPrompt, callModel, applyMeeting, summaryEmail, threadRecipients, redactAll, tagVocabulary, MEETING_UNDO_HOURS } from "./meeting.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -114,11 +114,12 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
     profiles.forEach((p: any) => rosterSet.add(String(p.name).trim()));
     (metaRows ?? []).forEach((r: any) => ((r.data && r.data.names) || []).forEach((n: any) => { if (typeof n === "string" && n.trim()) rosterSet.add(n.trim()); }));
     const roster = [...rosterSet];
+    const tags = tagVocabulary((metaRows ?? []).map((r: any) => r.data && r.data.tagLists).filter(Boolean));
 
     const today = nowIso.slice(0, 10);
     const extracted = await callModel(ANTHROPIC_KEY, MEETING_MODEL,
-      extractPrompt(scrubbed.text, studyContext(studies), roster, today));
-    const env = { uid: () => crypto.randomUUID(), today, by: sender.name };
+      extractPrompt(scrubbed.text, studyContext(studies), roster, today, tags));
+    const env = { uid: () => crypto.randomUUID(), today, by: sender.name, tags };
     const result = applyMeeting(extracted, studies, roster, env);
 
     // Writes, each checked. A change whose study failed to save is moved to "not applied" rather

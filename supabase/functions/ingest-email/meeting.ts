@@ -108,6 +108,8 @@ export const EXTRACT_TOOL = {
             decision: { type: "string", enum: DECISIONS }, journal: { type: "string" },
             source: { type: "string", description: "grantSource: the funder" },
             pi: { type: "string" }, team: { type: "array", items: { type: "string" } },
+            regions: { type: "array", items: { type: "string" }, description: "newStudy: body regions, from the TAGS list where one fits" },
+            topics: { type: "array", items: { type: "string" }, description: "newStudy: topics, from the TAGS list where one fits" },
             evidence: { type: "string", description: "What was said that justifies this, paraphrased in under 200 characters. Never include a patient's name or identifier." },
             confidence: { type: "number", description: "0 to 1: how sure you are this was decided or stated, and that it belongs to this study" },
           },
@@ -128,7 +130,39 @@ export const EXTRACT_TOOL = {
   },
 };
 
-export function extractPrompt(transcript: string, studies: any[], roster: string[], today: string): string {
+// The lab's tag vocabulary — the app's defaults plus whatever the lab added (meta.tagLists). Kept in
+// step with DEFAULT_TAGS in the app by hand; a word missing here just means the model may coin it.
+export const MEETING_DEFAULT_TAGS = {
+  region: ["Knee", "Shoulder", "Hip", "Elbow", "Foot & Ankle", "Hand & Wrist", "Spine"],
+  topic: ["Cartilage", "Patellofemoral instability", "ACL", "Meniscus", "Rotator cuff", "Shoulder instability",
+    "Hip preservation", "Biologics", "Osteotomy", "Imaging", "Return to sport", "Osteoarthritis"],
+};
+export function tagVocabulary(metaTagLists: any[]): { region: string[]; topic: string[] } {
+  const out: any = { region: [], topic: [] };
+  (["region", "topic"] as const).forEach((g) => {
+    const seen = new Map<string, string>();
+    const hidden = new Set<string>();
+    (metaTagLists || []).forEach((t: any) => ((t && t.hidden) || []).forEach((h: string) => hidden.add(h)));
+    const add = (x: unknown) => { const v = String(x ?? "").trim(); if (v && !seen.has(v.toLowerCase())) seen.set(v.toLowerCase(), v); };
+    MEETING_DEFAULT_TAGS[g].filter((x) => !hidden.has(g + "|" + x)).forEach(add);
+    (metaTagLists || []).forEach((t: any) => ((t && t[g]) || []).forEach(add));
+    out[g] = [...seen.values()];
+  });
+  return out;
+}
+function canonTags(list: unknown, vocab: string[]): string[] {
+  const out: string[] = [];
+  (Array.isArray(list) ? list : []).forEach((x) => {
+    const v = String(x ?? "").trim().replace(/\s+/g, " ");
+    if (!v) return;
+    const hit = vocab.find((o) => o.toLowerCase() === v.toLowerCase()) || v;
+    if (!out.some((o) => o.toLowerCase() === hit.toLowerCase())) out.push(hit);
+  });
+  return out.slice(0, 6);
+}
+
+export function extractPrompt(transcript: string, studies: any[], roster: string[], today: string,
+                              tags: { region: string[]; topic: string[] } = MEETING_DEFAULT_TAGS): string {
   return [
     `Today is ${today}. Below is a research meeting (a transcript or notes) from an orthopaedic research lab, followed by the lab's active studies and its roster of people.`,
     ``,
@@ -151,10 +185,13 @@ export function extractPrompt(transcript: string, studies: any[], roster: string
     `- Do not record chit-chat, opinions, or things that are already true in the study list.`,
     `- Never put a patient's name or any identifier in any field. List every patient identifier you see in patientIdentifiers.`,
     `- Dates as YYYY-MM-DD, resolved against today. Leave out a date nobody stated.`,
+    `- newStudy: also give its regions and topics, chosen from the TAGS lists when one fits; coin a new tag only when none does.`,
     `- confidence: 0.9+ = clearly decided or stated; 0.7-0.9 = very likely; 0.4-0.7 = probably (it will be applied and flagged for checking); below 0.4 = a guess (held for a person). Record everything, whatever the confidence.`,
     ``,
     `ROSTER:`,
     roster.join("; "),
+    ``,
+    `TAGS — body regions: ${tags.region.join("; ")}. Topics: ${tags.topic.join("; ")}.`,
     ``,
     `STUDIES (JSON):`,
     JSON.stringify(studies),
@@ -223,7 +260,9 @@ const label = (s: any) => s.nickname || s.title;
 // Pure: takes the model's reply and the lab's data, mutates the study objects it is handed, and
 // returns what it did plus the new rows to write. Every change carries an `undo` describing
 // exactly how to reverse it, so the app needs no knowledge of how it was made.
-export function applyMeeting(extracted: any, studies: any[], roster: string[], env: { uid: () => string; today: string; by: string }) {
+export function applyMeeting(extracted: any, studies: any[], roster: string[],
+                             env: { uid: () => string; today: string; by: string; tags?: { region: string[]; topic: string[] } }) {
+  const vocab = env.tags || MEETING_DEFAULT_TAGS;
   const byId = new Map(studies.map((s: any) => [s.id, s]));
   const applied: any[] = [];
   const notApplied: any[] = [];
@@ -249,6 +288,7 @@ export function applyMeeting(extracted: any, studies: any[], roster: string[], e
         id: env.uid(), title, nickname: "", phase: "Concept", pi: canonPerson(u.pi || "", roster).name || "",
         team: (u.team || []).map((n: string) => canonPerson(n, roster).name).filter(Boolean),
         design: "", irb: "", enrollCurrent: "", enrollTarget: "",
+        tags: { region: canonTags(u.regions, vocab.region), topic: canonTags(u.topics, vocab.topic) },
         noteEntries: [{ id: env.uid(), text: "Started from a meeting update: " + evidence, date: env.today, archivedOn: "" }],
         fromMeeting: true,
       };
