@@ -219,6 +219,24 @@
   .tour-dots { display: flex; justify-content: center; gap: 6px; margin-top: 16px; }
   .tour-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--line); }
   .tour-dot.on { background: var(--blue); }
+  /* Balloon tour: a ring around the real control, and a balloon beside it. */
+  #balloon-ring { position: fixed; z-index: 1000; border-radius: 12px; pointer-events: none;
+    box-shadow: 0 0 0 3px var(--blue), 0 0 0 9999px rgba(0,0,0,.45); }
+  #balloon { position: fixed; z-index: 1001; width: 300px; max-width: calc(100vw - 24px); box-sizing: border-box;
+    background: var(--card); color: var(--text); border-radius: 14px; padding: 14px 16px 12px 16px;
+    box-shadow: 0 8px 28px rgba(0,0,0,.35); font-size: 13.5px; line-height: 1.45; }
+  #balloon .bl-arrow { position: absolute; width: 14px; height: 14px; background: var(--card); transform: rotate(45deg); }
+  #balloon h3 { margin: 0 0 6px 0; font-size: 15.5px; }
+  #balloon .bl-what { margin: 0 0 8px 0; }
+  #balloon .bl-custom { margin: 0; color: var(--text2); }
+  #balloon .bl-custom b { color: var(--text); }
+  #balloon .bl-foot { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+  #balloon .bl-count { flex: 1; font-size: 12px; color: var(--text2); }
+  #balloon .bl-btn { border: none; border-radius: 8px; padding: 7px 12px; font-size: 13px; font-weight: 700; font-family: inherit; cursor: pointer; }
+  #balloon .bl-next { background: var(--blue); color: #fff; }
+  #balloon .bl-back { background: var(--bg); color: var(--text); }
+  #balloon .bl-skip { background: none; color: var(--text2); padding: 7px 4px; font-weight: 500; }
+  #balloon-catch { position: fixed; inset: 0; z-index: 999; }
   .help-head {
     width: 100%; border: none; background: none; font-family: inherit; cursor: pointer;
     display: flex; align-items: center; justify-content: space-between;
@@ -13507,7 +13525,11 @@ function openTour(i) {
     (sh) => {
       // Chained, not called alongside: the field picker opens a sheet of its own, and two sheets
       // deep on somebody's first minute is how a welcome becomes an obstacle course.
-      const done = () => { markTourSeen(); closeSheet(); setTimeout(maybeAskFields, 400); };
+      const done = () => {
+        markTourSeen(); closeSheet();
+        // Then point at the real controls, once; the field picker waits until that's finished.
+        setTimeout(() => balloonsDue() ? openBalloons(() => setTimeout(maybeAskFields, 300)) : maybeAskFields(), 400);
+      };
       sh.querySelector("#tour-next").onclick = () => { if (last) done(); else openTour(i + 1); };
       const back = sh.querySelector("#tour-back");
       if (back) back.onclick = () => openTour(i - 1);
@@ -13535,14 +13557,181 @@ function markTourSeen() {
   if (p && p.tourSeen === TOUR_VERSION) return;
   upsertProfile(null, { tourSeen: TOUR_VERSION });
 }
+/* ============ Balloon tour ============
+ *
+ * Adam, 27 Oct: "little balloons pop up when people first log in highlighting each section of the
+ * site, what it does, and how to customize it". The sheet tour above explains the rules; this one
+ * points at the real controls.
+ *
+ * The objection recorded on openTour still holds — a balloon aimed at a moved button points at
+ * nothing — so each step names its target by a stable selector (the tab buttons, the header
+ * buttons) and a step whose target isn't on screen is skipped rather than shown floating.
+ */
+const BALLOONS_VERSION = 1;
+function balloonSteps() {
+  return [
+    { sel: ["#sidebar:not(.collapsed)", 'nav.tabbar [data-tab="dashboard"]'], title: "Dashboard",
+      what: "Your starting point: what needs attention across the lab, with the conference and grant deadlines coming up.",
+      custom: "<b>Settings › Deadline Subscriptions</b> picks which deadlines you see. On a computer, drag its edge to resize it or use ‹ to fold it away." },
+    { sel: ['nav.tabbar [data-tab="studies"]'], title: "Studies",
+      what: "Every project and the phase it's in. Open one to see its team, tasks, notes and documents.",
+      custom: "Use <b>Who</b> to switch between your studies and the whole lab, filter by tag, search, then save the combination as a <b>View</b> your team can reuse." },
+    { sel: ['nav.tabbar [data-tab="tasks"]'], title: "Tasks",
+      what: "The small, dated jobs. Assigning one emails that person, with a reminder as it comes due.",
+      custom: "<b>Settings › Alerts to</b> sets which address your reminders go to." },
+    { sel: ['nav.tabbar [data-tab="worklist"]'], title: "Worklist",
+      what: "Every study in one table — the view to run a research meeting from.",
+      custom: "<b>Columns</b> chooses what's shown. Save the layout as a <b>View</b> to share it." },
+    { sel: ['nav.tabbar [data-tab="notes"]'], title: "Meeting notes",
+      what: "A link to each week's meeting notes, newest first.",
+      custom: "Forward a meeting transcript to <b>studyupdates@studypipeline.com</b> and the tracker updates the studies for you, then replies with a summary." },
+    { sel: ['nav.tabbar [data-tab="research"]'], title: "My Lab",
+      what: "Your publication numbers, and a research-year CV for each RA: active projects grouped by first, second and other authorship.",
+      custom: "<b>Settings › My research feed</b> chooses whose papers and which topics Research Watch follows." },
+    { sel: ['nav.tabbar [data-tab="settings"]'], title: "Settings",
+      what: "Things waiting on you sit at the top — meeting and email summaries, tags to review. Everything else is grouped underneath.",
+      custom: "<b>Account &amp; user settings</b> for alerts and deadlines; <b>People &amp; access</b> for the org chart and invites; <b>Lab setup</b> for study tags." },
+    { sel: ["#add-btn"], title: "Add",
+      what: "New study, task or deadline. A new study walks you through title, people, phase, tags and IRB one step at a time.",
+      custom: "Choose <b>Show all fields</b> in the new-study form if you'd rather see everything at once." },
+    { sel: ["#help-btn"], title: "Help",
+      what: "How everything works, any time.",
+      custom: "This tour lives here too — <b>Show me around</b> brings it back." },
+    { sel: ["#feedback-btn"], title: "Suggest a change",
+      what: "Something broken, or something you wish it did? Say so here.",
+      custom: "It reaches Adam directly, with your name and the screen you were on attached." },
+  ];
+}
+function balloonTarget(step) {
+  for (const sel of step.sel) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    const r = el.getBoundingClientRect();
+    // The + button is only hidden (not removed) on Settings, Notes and My Lab; it's shown while its
+    // balloon is up rather than skipped, so the tour doesn't depend on which tab you landed on.
+    if (r.width > 0 && r.height > 0 && (getComputedStyle(el).visibility !== "hidden" || el.id === "add-btn")) return el;
+  }
+  return null;
+}
+function balloonUnreveal() {
+  if (balloonState && balloonState.revealed) { balloonState.revealed.style.visibility = "hidden"; balloonState.revealed = null; }
+}
+function closeBalloons() {
+  ["balloon", "balloon-ring", "balloon-catch"].forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
+  window.removeEventListener("resize", balloonRelayout);
+  document.removeEventListener("keydown", balloonKey);
+}
+let balloonState = null;
+function balloonRelayout() { if (balloonState) placeBalloon(); }
+function balloonKey(e) {
+  if (!balloonState) return;
+  if (e.key === "Escape") finishBalloons();
+  else if (e.key === "ArrowRight") stepBalloons(1);
+  else if (e.key === "ArrowLeft") stepBalloons(-1);
+}
+function finishBalloons() {
+  const st = balloonState;
+  balloonUnreveal();
+  balloonState = null;
+  closeBalloons();
+  markBalloonsSeen();
+  if (st && typeof st.onDone === "function") st.onDone();
+}
+function stepBalloons(dir) {
+  const st = balloonState;
+  if (!st) return;
+  let i = st.i + dir;
+  while (i >= 0 && i < st.steps.length && !balloonTarget(st.steps[i])) i += dir;
+  if (i < 0) return;
+  if (i >= st.steps.length) { finishBalloons(); return; }
+  st.i = i;
+  placeBalloon();
+}
+function placeBalloon() {
+  const st = balloonState;
+  const step = st.steps[st.i];
+  const el = balloonTarget(step);
+  if (!el) { stepBalloons(1); return; }
+  const shown = st.steps.map((s, n) => n).filter(n => balloonTarget(st.steps[n]));
+  const pos = shown.indexOf(st.i);
+  const last = pos === shown.length - 1;
+  balloonUnreveal();
+  if (el.id === "add-btn" && el.style.visibility === "hidden") { el.style.visibility = "visible"; st.revealed = el; }
+  const r = el.getBoundingClientRect();
+  const pad = 6;
+  const ring = document.getElementById("balloon-ring");
+  Object.assign(ring.style, { left: (r.left - pad) + "px", top: (r.top - pad) + "px",
+    width: (r.width + pad * 2) + "px", height: (r.height + pad * 2) + "px" });
+  const b = document.getElementById("balloon");
+  b.innerHTML = `<div class="bl-arrow"></div>
+    <h3>${esc(step.title)}</h3>
+    <p class="bl-what">${esc(step.what)}</p>
+    <p class="bl-custom"><span style="font-weight:700;color:var(--text)">Make it yours:</span> ${step.custom}</p>
+    <div class="bl-foot">
+      <span class="bl-count">${pos + 1} of ${shown.length}</span>
+      ${last ? "" : `<button class="bl-btn bl-skip" id="bl-skip">Skip</button>`}
+      ${pos > 0 ? `<button class="bl-btn bl-back" id="bl-back">Back</button>` : ""}
+      <button class="bl-btn bl-next" id="bl-next">${last ? "Done" : "Next"}</button>
+    </div>`;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const bw = b.offsetWidth, bh = b.offsetHeight;
+  const below = r.top + r.height / 2 < vh / 2;
+  // Beside a tall target (the sidebar), above/below anything else.
+  const tall = r.height > vh * 0.5;
+  let left, top;
+  const arrow = b.querySelector(".bl-arrow");
+  if (tall) {
+    left = Math.min(r.right + 14, vw - bw - 12);
+    top = Math.max(12, Math.min(r.top + 40, vh - bh - 12));
+    Object.assign(arrow.style, { left: "-7px", top: "24px" });
+  } else {
+    left = Math.max(12, Math.min(r.left + r.width / 2 - bw / 2, vw - bw - 12));
+    top = below ? r.bottom + pad + 12 : r.top - pad - 12 - bh;
+    top = Math.max(12, Math.min(top, vh - bh - 12));
+    const ax = Math.max(14, Math.min(r.left + r.width / 2 - left - 7, bw - 28));
+    Object.assign(arrow.style, below ? { left: ax + "px", top: "-7px" } : { left: ax + "px", bottom: "-7px" });
+  }
+  Object.assign(b.style, { left: left + "px", top: top + "px" });
+  b.querySelector("#bl-next").onclick = () => stepBalloons(1);
+  const back = b.querySelector("#bl-back"); if (back) back.onclick = () => stepBalloons(-1);
+  const skip = b.querySelector("#bl-skip"); if (skip) skip.onclick = finishBalloons;
+}
+function openBalloons(onDone) {
+  closeBalloons();
+  const steps = balloonSteps();
+  const first = steps.findIndex(s => balloonTarget(s));
+  if (first < 0) { if (typeof onDone === "function") onDone(); return; }
+  // Taps outside the balloon do nothing rather than closing it by accident.
+  const c = document.createElement("div"); c.id = "balloon-catch"; document.body.appendChild(c);
+  const ring = document.createElement("div"); ring.id = "balloon-ring"; document.body.appendChild(ring);
+  const b = document.createElement("div"); b.id = "balloon"; b.setAttribute("role", "dialog"); document.body.appendChild(b);
+  balloonState = { steps, i: first, onDone };
+  window.addEventListener("resize", balloonRelayout);
+  document.addEventListener("keydown", balloonKey);
+  placeBalloon();
+}
+// On the profile, like tourSeen, so a second device doesn't show it again.
+function markBalloonsSeen() {
+  if (!currentUser) return;
+  const p = profileFor(currentUser.id);
+  if (p && p.balloonsSeen === BALLOONS_VERSION) return;
+  upsertProfile(null, { balloonsSeen: BALLOONS_VERSION });
+}
+function balloonsDue() {
+  if (!currentUser) return false;
+  const p = profileFor(currentUser.id);
+  return !!(p && p.name && p.position && p.balloonsSeen !== BALLOONS_VERSION);
+}
 // Only once the account is actually set up — a tour on top of the "who are you" prompt would be
 // two sheets deep on somebody's first ten seconds.
 function maybeShowTour() {
   if (!currentUser) return;
   const p = profileFor(currentUser.id);
   if (!p || !p.name || !p.position) return;
-  if (p.tourSeen === TOUR_VERSION) return;
   if (document.getElementById("sheet")) return;   // something else is already asking them something
+  if (document.getElementById("balloon")) return;
+  // Seen the sheet tour already (everyone signed up before 27 Oct): just the balloons, once.
+  if (p.tourSeen === TOUR_VERSION) { if (balloonsDue()) openBalloons(); return; }
   openTour(0);
 }
 // A brand-new lab tracks one field, not eleven. Without this, the first thing a spine PI sees is
@@ -13623,6 +13812,7 @@ function openHelpSheet() {
       </div>`).join("")}
     <div style="display:flex;gap:8px;margin-top:14px">
       <button class="btn secondary" id="help-tour" style="flex:1">Show me around</button>
+      <button class="btn secondary" id="help-balloons" style="flex:1">Point things out</button>
       <button class="btn" id="help-problem" style="flex:1">Something's wrong</button>
     </div>
     <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin-top:12px;text-align:center">
@@ -13640,6 +13830,7 @@ function openHelpSheet() {
         };
       });
       sh.querySelector("#help-tour").onclick = () => { closeSheet(); setTimeout(() => openTour(0), 320); };
+      sh.querySelector("#help-balloons").onclick = () => { closeSheet(); setTimeout(() => openBalloons(), 320); };
       sh.querySelector("#help-problem").onclick = () => { closeSheet(); setTimeout(() => openFeedbackSheet("problem"), 320); };
     },
     { cancelLabel: "Close" });
