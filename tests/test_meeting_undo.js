@@ -107,12 +107,39 @@ const base = (m) => [
   await wait(100);
   card = d.getElementById("mtg-mtg1");
 
+  console.log("\n-- Approve hides an item as people work through the list (27 Oct) --");
+  check("every applied item has an Approve box, every held one a Done box",
+    card.querySelectorAll('[data-mtg-review]').length === 6 && /Approve/.test(card.textContent) && /Done/.test(card.textContent),
+    card.querySelectorAll('[data-mtg-review]').length);
+  const tick = (rid, on) => { const b = d.querySelector(`[data-mtg-review="mtg1"][data-mtg-rid="${rid}"]`); b.checked = on; b.onchange(); };
+  tick("c2", true); await wait(80);
+  const rec = () => ev(`JSON.stringify(state.suggestions.find(g => g.id === "mtg1"))`);
+  check("approving records who and when, as its own field", /"reviewed:c2":\{"by":"Adam Yanke","at":"/.test(rec()), rec().slice(0, 200));
+  check("...and the item leaves the list", !/added Morgan Smith/.test(d.getElementById("mtg-mtg1").textContent));
+  check("approving changes nothing on the study", ev(`studyById("mdakp").team.indexOf("Morgan Smith")`) >= 0);
+  check("the card counts what's been reviewed", /1 of 6 reviewed/.test(d.getElementById("mtg-mtg1").textContent));
+  d.querySelector('[data-mtg-show-reviewed="mtg1"]').onclick(); await wait(80);
+  check("Show reviewed brings it back, saying who approved it", /added Morgan Smith/.test(d.getElementById("mtg-mtg1").textContent) && /approved by Adam Yanke/.test(d.getElementById("mtg-mtg1").textContent));
+  tick("c2", false); await wait(80);
+  check("unticking puts it back on the list", !/reviewed:c2/.test(rec()));
+  ev(`showReviewedFor["mtg1"] = false; render()`); await wait(80);
+  ["c1", "c2", "c3", "c4", "n0", "n1"].forEach(r => ev(`state.suggestions.find(g => g.id === "mtg1")["reviewed:${r}"] = { by: "Carla", at: "${new Date().toISOString()}" }`));
+  ev(`render()`); await wait(80);
+  check("once everything is reviewed the meeting leaves the up-front list", !d.getElementById("mtg-mtg1"));
+  ["c1", "c2", "c3", "c4", "n0", "n1"].forEach(r => ev(`delete state.suggestions.find(g => g.id === "mtg1")["reviewed:${r}"]`));
+  ev(`render()`); await wait(80);
+  card = d.getElementById("mtg-mtg1");
+  check("...and returns if an approval is taken back", !!card);
+
   console.log("\n-- Undo one change --");
   d.querySelector('[data-mtg-undo="mtg1"][data-mtg-change="c1"]').click(); await wait(100);
   check("enrollment goes back to 7", ev(`studyById("mdakp").enrollCurrent`) === "7");
   const c1 = ev(`JSON.stringify(state.suggestions.find(g => g.id === "mtg1").applied.find(a => a.id === "c1"))`);
   check("the change stays on the record, stamped undone", /"undoneAt"/.test(c1) && /"undoneBy":"Adam Yanke"/.test(c1));
-  check("...and shows struck through, not gone", /line-through/.test(d.getElementById("mtg-mtg1").innerHTML) && /undone by/.test(d.getElementById("mtg-mtg1").textContent));
+  check("an undone change leaves the working list", !/line-through/.test(d.getElementById("mtg-mtg1").innerHTML));
+  ev(`showReviewedFor["mtg1"] = true; render()`); await wait(80);
+  check("...and shows struck through under Show reviewed, not gone", /line-through/.test(d.getElementById("mtg-mtg1").innerHTML) && /undone by/.test(d.getElementById("mtg-mtg1").textContent));
+  ev(`showReviewedFor["mtg1"] = false; render()`); await wait(80);
 
   console.log("\n-- Never overwrite a later edit --");
   ev(`studyById("ipfi").title = "Someone fixed it by hand"`);

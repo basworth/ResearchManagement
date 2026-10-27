@@ -8803,11 +8803,38 @@ function undoMeetingChanges(gId, changeIds) {
 function meetingGroups(g) {
   const order = [], map = {};
   const add = (k, it) => { if (!map[k]) { map[k] = []; order.push(k); } map[k].push(it); };
-  (g.applied || []).forEach(a => add(a.study || "", Object.assign({}, a, { held: false })));
-  (g.notApplied || []).forEach(n => add(n.study || "", Object.assign({}, n, { held: true })));
+  (g.applied || []).forEach(a => add(a.study || "", Object.assign({}, a, { held: false, rid: a.id })));
+  (g.notApplied || []).forEach((n, i) => add(n.study || "", Object.assign({}, n, { held: true, rid: "n" + i })));
   const keys = order.filter(k => k && k !== "New studies")
     .concat(order.includes("New studies") ? ["New studies"] : [], order.includes("") ? [""] : []);
   return keys.map(k => ({ study: k || "No study matched", items: map[k] }));
+}
+// APPROVE (Adam, 27 Oct): "an approve box … that allows those to then be hidden as people work
+// through looking at the lists, or if multiple people are working on different aspects".
+// Each item's approval is its OWN top-level field on the meeting record ("reviewed:<id>"), never
+// a list: pushItem merges field by field, so two people ticking different items at the same
+// moment both land. A shared array would let the second save quietly erase the first.
+// An undone change counts as dealt with. Held items are ticked "Done" when someone has handled
+// them by hand. Approving changes nothing on the study — it only records that a person looked.
+const reviewKey = (id) => "reviewed:" + id;
+function meetingReviewed(g, rid) { return !!(g && g[reviewKey(rid)]); }
+function meetingItemDealtWith(g, it) { return meetingReviewed(g, it.rid) || (!it.held && !!it.undoneAt); }
+function meetingAllReviewed(g) {
+  const items = [].concat(...meetingGroups(g).map(x => x.items));
+  return items.length > 0 && items.every(it => meetingItemDealtWith(g, it));
+}
+let showReviewedFor = {};   // view state only: which cards are showing their approved items
+function setMeetingReviewed(gId, rid, on) {
+  const g = (state.suggestions || []).find(x => x.id === gId);
+  if (!g) return;
+  if (blockOfflineEdit("Approving a meeting update")) return;
+  if (on) g[reviewKey(rid)] = { by: me(), at: new Date().toISOString() };
+  else delete g[reviewKey(rid)];
+  upsertSuggestion(g);
+  render();
+  if (on) toastAction(meetingAllReviewed(g) ? "Approved — that was the last one; the meeting moves to the history" : "Approved — hidden from the list",
+    "Undo", () => setMeetingReviewed(gId, rid, false));
+  else toast("Back on the list");
 }
 function meetingReplaced(g) { return !!(g && (g.rerun || g.retried)); }
 // Which part of a study each kind of change lives in, so Edit lands on it rather than at the top.
@@ -8863,19 +8890,42 @@ function meetingCardHTML(g) {
       ${can && live.length > 1 ? `<button class="mini-btn" data-mtg-undo-all="${esc(g.id)}" style="margin:0;flex:0 0 auto">Undo all</button>` : ""}
     </div>
     ${g.error ? `<div style="font-size:12.5px;color:var(--orange);margin-top:6px">${esc(g.error)}</div>` : ""}
-    ${groups.map(grp => `
+    ${groups.map(grp => {
+      const shown = grp.items.filter(a => showReviewedFor[g.id] || !meetingItemDealtWith(g, a));
+      if (!shown.length) return "";
+      return `
       <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:12px 2px 4px 2px">${esc(String(grp.study).toUpperCase())}</div>
-      ${grp.items.map(a => a.held ? `<div style="padding:4px 0">
-          <div style="font-size:13.5px"><span style="color:var(--orange);font-weight:700">○</span> ${esc(a.text)} <span style="font-size:11.5px;color:var(--text2)">— ${esc(a.why || "")}</span></div>
-          ${a.evidence ? `<div style="font-size:11.5px;color:var(--text2);margin:1px 0 0 16px">Heard: “${esc(a.evidence)}”</div>` : ""}
+      ${shown.map(a => {
+        const rv = g[reviewKey(a.rid)];
+        const box = can && !(a.undoneAt && !a.held) ? `<label style="display:flex;align-items:center;gap:4px;font-size:11.5px;color:var(--text2);flex:0 0 auto;cursor:pointer;margin-top:2px">
+            <input type="checkbox" data-mtg-review="${esc(g.id)}" data-mtg-rid="${esc(a.rid)}" ${rv ? "checked" : ""}>${a.held ? "Done" : "Approve"}</label>` : "";
+        const who = rv ? ` · ${a.held ? "done" : "approved"} by ${esc(rv.by || "")} ${esc(fmtDate(String(rv.at || "").slice(0, 10)))}` : "";
+        return a.held ? `<div class="frow" style="gap:8px;padding:4px 0;border-bottom:none;align-items:flex-start">
+          <div style="flex:1;min-width:0;${rv ? "color:var(--text2)" : ""}">
+            <div style="font-size:13.5px"><span style="color:var(--orange);font-weight:700">○</span> ${esc(a.text)} <span style="font-size:11.5px;color:var(--text2)">— ${esc(a.why || "")}</span></div>
+            ${a.evidence || who ? `<div style="font-size:11.5px;color:var(--text2);margin:1px 0 0 16px">${a.evidence ? `Heard: “${esc(a.evidence)}”` : ""}${who}</div>` : ""}
+          </div>
+          ${box}
         </div>` : `<div class="frow" style="gap:8px;padding:4px 0;border-bottom:none;align-items:flex-start">
-        <div style="flex:1;min-width:0;font-size:13.5px;${a.undoneAt ? "text-decoration:line-through;color:var(--text2)" : ""}">
+        <div style="flex:1;min-width:0;font-size:13.5px;${a.undoneAt ? "text-decoration:line-through;color:var(--text2)" : rv ? "color:var(--text2)" : ""}">
           <span style="color:var(--green);font-weight:700">✓</span> <span ${!a.undoneAt && canEditMeetingChange(a) ? `data-mtg-edit="${esc(g.id)}" data-mtg-change="${esc(a.id)}" style="cursor:pointer" title="Open it to edit"` : ""}>${esc(a.label)}: ${a.from && a.from.length <= 40 ? `<span style="color:var(--text2)">${esc(a.from)} →</span> ` : ""}<b>${esc(a.to)}</b></span>${typeof a.confidence === "number" && a.confidence < 0.7 ? ` <span style="font-size:11.5px;color:var(--orange)">— check · ${Math.round(a.confidence * 100)}% sure</span>` : ""}
-          <div style="font-size:11.5px;color:var(--text2);margin:1px 0 0 16px;text-decoration:none">${a.evidence ? `Heard: “${esc(a.evidence)}”` : ""}${a.undoneAt ? ` · undone by ${esc(a.undoneBy || "")} ${esc(fmtDate(String(a.undoneAt).slice(0, 10)))}` : ""}${a.undoRefused && !a.undoneAt ? ` · not undone: ${esc(a.undoRefused)}` : ""}</div>
+          <div style="font-size:11.5px;color:var(--text2);margin:1px 0 0 16px;text-decoration:none">${a.evidence ? `Heard: “${esc(a.evidence)}”` : ""}${a.undoneAt ? ` · undone by ${esc(a.undoneBy || "")} ${esc(fmtDate(String(a.undoneAt).slice(0, 10)))}` : ""}${a.undoRefused && !a.undoneAt ? ` · not undone: ${esc(a.undoRefused)}` : ""}${who}</div>
         </div>
         ${!a.undoneAt && canEditMeetingChange(a) ? `<button class="mini-btn" data-mtg-edit="${esc(g.id)}" data-mtg-change="${esc(a.id)}" style="margin:0;flex:0 0 auto">Edit</button>` : ""}
         ${can && !a.undoneAt ? `<button class="mini-btn" data-mtg-undo="${esc(g.id)}" data-mtg-change="${esc(a.id)}" style="margin:0;flex:0 0 auto">Undo</button>` : ""}
-      </div>`).join("")}`).join("")}
+        ${box}
+      </div>`;
+      }).join("")}`;
+    }).join("")}
+    ${(() => {
+      const all = [].concat(...groups.map(x => x.items));
+      const done = all.filter(a => meetingItemDealtWith(g, a)).length;
+      if (!done) return "";
+      return `<div style="display:flex;align-items:center;gap:8px;margin-top:10px">
+        <span style="font-size:12px;color:var(--text2)">${done} of ${all.length} reviewed${done === all.length ? " — all done" : ""}</span>
+        <button class="mini-btn" data-mtg-show-reviewed="${esc(g.id)}" style="margin:0">${showReviewedFor[g.id] ? "Hide reviewed" : "Show reviewed"}</button>
+      </div>`;
+    })()}
     <div style="font-size:11.5px;color:var(--text2);margin-top:10px;line-height:1.45">
       ${(g.applied || []).length ? (open
         ? `Shown here until ${esc(until.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}, then it moves to the history and to each study's page — undo still works from there.${can ? "" : " Undo is for whoever sent it, the people it was sent to, and admins."}`
@@ -8895,7 +8945,8 @@ function meetingsSectionHTML() {
   // A run that was replaced by a rerun (or a failed read that was retried) is history the moment
   // its replacement exists — showing both up front is what made three struck-through lines look
   // like a fault on 27 Oct. It stays in the full history, labelled.
-  const openOnes = list.filter(g => meetingUndoOpen(g) && !meetingReplaced(g));
+  // ...and so does a meeting where every item has been approved, undone or marked done.
+  const openOnes = list.filter(g => meetingUndoOpen(g) && !meetingReplaced(g) && !meetingAllReviewed(g));
   const shown = showAllMeetings ? list : openOnes;
   return `<div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:16px 2px 4px 2px">MEETING UPDATES</div>
     ${shown.length ? shown.map(meetingCardHTML).join("") : `<div style="font-size:12.5px;color:var(--text2);margin:0 2px 6px 2px">Nothing from the last two days.</div>`}
@@ -9082,6 +9133,10 @@ function bindSuggestions(root) {
   root.querySelectorAll("[data-sugg-dismiss]").forEach(b => b.onclick = () => dismissSuggestion(b.dataset.suggDismiss));
   root.querySelectorAll("[data-mtg-undo]").forEach(b => b.onclick = () => undoMeetingChanges(b.dataset.mtgUndo, [b.dataset.mtgChange]));
   root.querySelectorAll("[data-mtg-edit]").forEach(b => b.onclick = (e) => { e.stopPropagation(); editMeetingChange(b.dataset.mtgEdit, b.dataset.mtgChange); });
+  root.querySelectorAll("[data-mtg-review]").forEach(b => b.onchange = () => setMeetingReviewed(b.dataset.mtgReview, b.dataset.mtgRid, b.checked));
+  root.querySelectorAll("[data-mtg-show-reviewed]").forEach(b => b.onclick = () => {
+    const id = b.dataset.mtgShowReviewed; showReviewedFor[id] = !showReviewedFor[id]; render();
+  });
   root.querySelectorAll("[data-mtg-undo-all]").forEach(b => b.onclick = () => {
     const g = (state.suggestions || []).find(x => x.id === b.dataset.mtgUndoAll);
     if (!g) return;
