@@ -6649,8 +6649,9 @@ function renderResearch() {
 
   // Headline numbers across the top, then two columns the whole way down. Nothing breaks out to
   // full width partway through: a column that widens halfway down the page reads as a mistake.
-  $main.innerHTML = cvCardsHTML()
-    + (stats.band || "")
+  // Adam, 27 Oct: the summary numbers go first; the research-year CV cards follow.
+  $main.innerHTML = (stats.band || "")
+    + cvCardsHTML()
     + confirmPubsNudgeHTML()
     + exploreBoxHTML()
     + `<div class="rw-grid">${side}${main}</div>`

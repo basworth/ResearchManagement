@@ -56,7 +56,7 @@ function check(name, cond, detail) {
   console.log("\n-- A PI sees their research team at the top --");
   const opens = [...d.querySelectorAll("[data-cv-open]")].map(b => b.dataset.cvOpen).sort();
   check("one card per person on their team", JSON.stringify(opens) === JSON.stringify(["Thomas Turinske", "William Lee"]), opens);
-  check("the cards come first on the page", d.querySelector("[data-cv-open]").closest(".card") === d.querySelectorAll(".card")[0]);
+  check("the summary numbers sit above the CV cards", /\$main\.innerHTML = \(stats\.band \|\| ""\)\s*\+ cvCardsHTML\(\)/.test(html));
   const cardText = d.querySelector('[data-cv-open="William Lee"]').closest(".card").textContent;
   check("each card counts first / second / other", /1 first · 1 second · 1 other · 1 published/.test(cardText.replace(/\s+/g, " ")), cardText);
   check("an admin can pick anyone else", !!d.getElementById("cv-pick"));
