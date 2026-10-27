@@ -185,6 +185,25 @@ const base = (m) => [
   ev(`currentUser = { id: "x", email: "stranger@rushortho.com" }; state.profiles.push({ id: "x", name: "Stranger", email: "stranger@rushortho.com", admin: false })`);
   check("someone it wasn't sent to may not", ev(`canUndoMeeting(state.suggestions.find(g => g.id === "mtg1"))`) === false);
 
+  console.log("\n-- Who may SEE it: admins, sender, recipients (27 Oct, migration 015) --");
+  ev(`tab = "settings"; render()`); await wait(100);
+  check("someone it wasn't sent to doesn't see the card at all", !w.document.getElementById("mtg-mtg1"));
+  ev(`currentUser = { id: "ra", email: "will.lee@rushortho.com" }; render()`); await wait(100);
+  check("a recipient does", !!w.document.getElementById("mtg-mtg1"));
+  {
+    const sqlPath = require("path").join(__dirname, "..", "supabase", "migrations", "015-meeting-visibility.sql");
+    if (!require("fs").existsSync(sqlPath)) console.log("  skip  supabase/ not in this checkout");
+    else {
+      const body = require("fs").readFileSync(sqlPath, "utf8").replace(/--[^\n]*/g, "");
+      const fn = (body.match(/function public\.can_see_meeting[\s\S]*?\$\$;/) || [""])[0];
+      check("the database rule: managers, sender, recipients", /sees_whole_lab\(ws\)/.test(fn) && /forwardedBy/.test(fn) && /repliedTo/.test(fn) && /copied/.test(fn) && /alertEmail/.test(fn));
+      check("only meeting rows are narrowed", /kind = 'suggestion' and coalesce\(data->>'source', ''\) = 'meeting' and public\.can_see_meeting/.test(body)
+        && /kind <> 'study' and not \(kind = 'suggestion' and coalesce\(data->>'source', ''\) = 'meeting'\)/.test(body));
+      check("the earlier read branches are all kept", ["is_collaborator(data)", "assigned_on_study_strict", "lab_pi_named(data)", "has_support_access", "lm.workspace in"].every(x => body.includes(x)));
+      check("write policies untouched", !/policy "workspace (insert|update|delete)"/.test(body));
+    }
+  }
+
   console.log(`\n${fail ? "FAILED" : "ALL CLEAR"} — ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error(e); process.exit(1); });

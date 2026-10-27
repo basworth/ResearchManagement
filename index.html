@@ -8938,7 +8938,10 @@ function meetingCardHTML(g) {
 }
 let showAllMeetings = false;
 function meetingsSectionHTML() {
-  const list = (state.suggestions || []).filter(g => g.source === "meeting")
+  // Seen by the same people who may act on it: the lab's admins, the sender, the summary's
+  // recipients (migration 015 enforces this in the database; this keeps a cached copy from
+  // showing a card the server would no longer send).
+  const list = (state.suggestions || []).filter(g => g.source === "meeting" && canUndoMeeting(g))
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
   if (!list.length) return "";
   // The last two days up front; everything older is the history, kept but folded away.
