@@ -103,7 +103,9 @@ function check(name, cond, detail) {
 
   console.log("\n-- ...and never survives one save --");
   check("it is cleared in a finally, not after upsertStudy returns",
-    /try \{\s*upsertStudy\(s\);\s*\} finally \{\s*newRecordLab = "";/.test(html),
+    // Anything else saved inside the try (the guided setup's first task, 27 Oct) is
+    // stamped with the same lab on purpose; the rule is only that the finally clears it.
+    /try \{\s*upsertStudy\(s\);[\s\S]{0,400}?\} finally \{\s*newRecordLab = "";/.test(html),
     (html.match(/newRecordLab = labSel[\s\S]{0,260}/) || [])[0]);
   check("it starts empty", ev('newRecordLab') === "");
 

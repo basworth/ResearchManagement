@@ -8860,6 +8860,9 @@ function editMeetingChange(gId, changeId) {
   if (!s || !canEditMeetingChange(a)) { toast("That study isn't one you can open"); return; }
   const t = meetingChangeTask(a);
   if (t) { openTaskForm(t); return; }
+  // A study the meeting started: walk through the questions to finish it, pre-filled from what
+  // was heard (title, PI, team), rather than dropping the person on a half-empty study page.
+  if (a.type === "newStudy") { openStudyForm(s, null, { guided: true, heard: a.evidence || "" }); return; }
   openStudy(s.id); tab = "studies"; render();
   const sec = MEETING_CHANGE_SECTION[a.type] || "";
   if (sec && studySectionState[sec] === false) { studySectionState[sec] = true; render(); }
@@ -8911,7 +8914,7 @@ function meetingCardHTML(g) {
           <span style="color:var(--green);font-weight:700">✓</span> <span ${!a.undoneAt && canEditMeetingChange(a) ? `data-mtg-edit="${esc(g.id)}" data-mtg-change="${esc(a.id)}" style="cursor:pointer" title="Open it to edit"` : ""}>${esc(a.label)}: ${a.from && a.from.length <= 40 ? `<span style="color:var(--text2)">${esc(a.from)} →</span> ` : ""}<b>${esc(a.to)}</b></span>${typeof a.confidence === "number" && a.confidence < 0.7 ? ` <span style="font-size:11.5px;color:var(--orange)">— check · ${Math.round(a.confidence * 100)}% sure</span>` : ""}
           <div style="font-size:11.5px;color:var(--text2);margin:1px 0 0 16px;text-decoration:none">${a.evidence ? `Heard: “${esc(a.evidence)}”` : ""}${a.undoneAt ? ` · undone by ${esc(a.undoneBy || "")} ${esc(fmtDate(String(a.undoneAt).slice(0, 10)))}` : ""}${a.undoRefused && !a.undoneAt ? ` · not undone: ${esc(a.undoRefused)}` : ""}${who}</div>
         </div>
-        ${!a.undoneAt && canEditMeetingChange(a) ? `<button class="mini-btn" data-mtg-edit="${esc(g.id)}" data-mtg-change="${esc(a.id)}" style="margin:0;flex:0 0 auto">Edit</button>` : ""}
+        ${!a.undoneAt && canEditMeetingChange(a) ? `<button class="mini-btn" data-mtg-edit="${esc(g.id)}" data-mtg-change="${esc(a.id)}" style="margin:0;flex:0 0 auto${a.type === "newStudy" && !(studyById(a.studyId) || {}).setupDone ? ";background:var(--blue);color:#fff" : ""}">${a.type === "newStudy" ? ((studyById(a.studyId) || {}).setupDone ? "Edit" : "Finish setting up") : "Edit"}</button>` : ""}
         ${can && !a.undoneAt ? `<button class="mini-btn" data-mtg-undo="${esc(g.id)}" data-mtg-change="${esc(a.id)}" style="margin:0;flex:0 0 auto">Undo</button>` : ""}
         ${box}
       </div>`;
@@ -11062,12 +11065,30 @@ function openDegreesSheet(name) {
   document.getElementById("f-degree-other").oninput = refresh;
 }
 
-function openStudyForm(existing, onCreated) {
+// GUIDED (Adam, 27 Oct): "a series of questions … verifying title, who is involved etc … this can
+// be used when adding a new study in general to work through all the fields". It is the SAME form,
+// shown one question at a time — same fields, same save, same lab stamping — so the two can never
+// drift apart. Guided is the default for a new study; "Show all fields" drops back to the whole
+// form at any point. A study a meeting created opens guided too, to finish what was heard.
+function openStudyForm(existing, onCreated, opts) {
+  opts = opts || {};
+  const guided = opts.guided !== undefined ? !!opts.guided : !existing;
   if (blockOfflineEdit(existing ? "Editing a study" : "Adding a study")) return;
   const s = existing || { id: uid(), title: "", nickname: "", pi: "", team: "", design: "Prospective (Consented)", phase: "Concept", priority: "Medium", irb: "", irbStatus: "Not Submitted", start: todayStr(), notes: "", journal: "", submittedDate: "", journalTrackingId: "", revisionsReceivedDate: "", revisionsDeadline: "", milestones: [] };
   if (!s.grant) s.grant = { enabled: false, amount: "", source: "", awardDate: "", balance: "", expirationDate: "", balanceUpdatedDate: "" };
   editingRef = existing ? { kind: "study", id: s.id, baseline: remoteMeta[s.id] ? remoteMeta[s.id].updated_at : null } : null;
-  openSheet(existing ? "Edit Study" : "New Study", `
+  const wzStep = (n, q) => guided ? `<div data-wz-step="${n}" data-wz-q="${esc(q)}">` : "";
+  const wzEnd = guided ? `</div>` : "";
+  openSheet(existing ? (guided ? "Finish setting up" : "Edit Study") : "New Study", `
+    ${guided ? `<div id="wz-head" style="margin:0 2px 12px 2px">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">
+        <div id="wz-q" style="font-size:16px;font-weight:700;line-height:1.3"></div>
+        <div id="wz-count" style="font-size:12px;color:var(--text2);white-space:nowrap"></div>
+      </div>
+      <div style="height:4px;background:var(--bg);border-radius:2px;margin-top:8px;overflow:hidden"><div id="wz-bar" style="height:100%;width:0;background:var(--blue);transition:width .2s"></div></div>
+      ${opts.heard ? `<div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-top:8px">Heard in the meeting: “${esc(opts.heard)}” — check it's right.</div>` : ""}
+    </div>` : ""}
+    ${wzStep(1, "What is this study called, and whose is it?")}
     <div class="fgroup">
       <div class="frow"><label>Title</label><input id="f-title" placeholder="IRB study name / title" value="${esc(s.title)}"></div>
       <div class="frow"><label>Nickname</label><input id="f-nickname" placeholder="Short name (e.g. ACL Registry)" value="${esc(s.nickname || "")}"></div>
@@ -11088,6 +11109,7 @@ function openStudyForm(existing, onCreated) {
       </div>
     </div>` : ""}
     <datalist id="dl-pis">${PIS.map(p => `<option value="${esc(p)}">`).join("")}</datalist>
+    ${wzEnd}${wzStep(2, "Who's involved?")}
     <div class="fgroup">
       <div class="frow" style="display:block">
         <label style="display:block;margin-bottom:8px">Team</label>
@@ -11103,6 +11125,7 @@ function openStudyForm(existing, onCreated) {
         </div>
       </div>
     </div>
+    ${wzEnd}${wzStep(3, "What kind of study is it, and where does it stand?")}
     <div class="fgroup">
       <div class="frow"><label>Design</label>${selectHTML("f-design", DESIGNS, s.design)}</div>
       <div class="frow"><label>Phase</label>${selectHTML("f-phase", TRACK_PHASES[s.design] || TRACK_PHASES[DESIGNS[0]], s.phase)}</div>
@@ -11111,6 +11134,7 @@ function openStudyForm(existing, onCreated) {
     <!-- Journal / revisions tracking moved to the study page's own "Manuscript Submission"
          section (manuscriptBodyHTML) -- day-to-day submission status shouldn't require opening
          Edit Study. See renderStudyDetail(). -->
+    ${wzEnd}${wzStep(4, "IRB, registration, funding and a first task")}
     <div class="fgroup">
       <div class="frow"><label>ORA / IRB #</label><input id="f-irb" placeholder="Protocol #, Exempt, or N/A" value="${esc(s.irb || "")}"></div>
       <div class="frow"><label>IRB status</label>${selectHTML("f-irbstatus", IRB_STATUSES, s.irbStatus || "Not Submitted")}</div>
@@ -11118,6 +11142,14 @@ function openStudyForm(existing, onCreated) {
       <div class="frow"><label>NCT number</label><input id="f-nct" placeholder="NCT01234567" value="${esc(s.nct || "")}"></div>
       <div class="frow"><label>Start</label><input id="f-start" type="date" value="${esc(s.start || "")}"></div>
     </div>
+    ${guided || !existing ? `<div class="fgroup">
+      <div class="frow"><label>Funding</label><input id="f-grant-source" list="dl-grant-sources" placeholder="e.g. OREF, NIH, Industry — or leave blank" value="${esc((s.grant && s.grant.source) || "")}"></div>
+      <datalist id="dl-grant-sources">${GRANT_SOURCES.map(g => `<option value="${esc(g)}">`).join("")}</datalist>
+      <div class="frow"><label>First task</label><input id="f-first-task" placeholder="e.g. Submit IRB application — optional"></div>
+      <div class="frow"><label>Due</label><input id="f-first-task-due" type="date"></div>
+    </div>
+    <div style="font-size:12px;color:var(--text2);line-height:1.45;margin:-4px 2px 10px 2px">The first task is assigned to you; reassign it from the study page any time.</div>` : ""}
+    ${wzEnd}
     <!-- Enrollment numbers and Grant & Award Funding both moved to their own inline-editable
          sections on the study page (enrollmentBodyHTML / grantBodyHTML) -- Adam's day-to-day
          tracking shouldn't require opening Edit Study. See renderStudyDetail(). -->`,
@@ -11144,6 +11176,18 @@ function openStudyForm(existing, onCreated) {
         // the study page's Notes section. The old blob is left untouched on existing records.
       });
       delete s.type;
+      const grantEl = document.getElementById("f-grant-source");
+      if (grantEl) {
+        const src = grantEl.value.trim();
+        if (src || (s.grant && s.grant.source)) {
+          if (!s.grant || typeof s.grant !== "object") s.grant = {};
+          s.grant.source = src;
+          if (src) s.grant.enabled = true;
+        }
+      }
+      const firstTaskEl = document.getElementById("f-first-task");
+      const firstTaskTitle = firstTaskEl ? firstTaskEl.value.trim() : "";
+      const firstTaskDue = (document.getElementById("f-first-task-due") || {}).value || "";
       // Whose study is this? Only asked of somebody in more than one lab — Will works for Adam
       // and for Chahla, so "the lab I happen to be in" is not an answer. The choice decides the
       // workspace the row is stamped with, which is what keeps it in the right PI's tracker, and
@@ -11152,10 +11196,14 @@ function openStudyForm(existing, onCreated) {
       if (!existing && labSel && labSel.value) newRecordLab = labSel.value;
       try {
         upsertStudy(s);
+        // Created in the same lab as its study, while newRecordLab still says which that is.
+        if (firstTaskTitle) upsertTask({ id: uid(), title: firstTaskTitle, studyId: s.id, due: firstTaskDue,
+          assignees: me() ? [me()] : [], done: false, notes: "" });
       } finally {
         newRecordLab = "";   // never leaks into the next record created
       }
-      toast(existing ? "Study updated" : "Study added");
+      toast((existing ? "Study updated" : "Study added") + (firstTaskTitle ? " — first task added" : ""));
+      if (existing && existing.fromMeeting && guided) { existing.setupDone = true; upsertStudy(existing); }
       if (!existing && onCreated) onCreated(s.id);
     });
   bindSheetSearch("f-team-search", "#f-team-list .team-row", "f-team-empty");
@@ -11189,6 +11237,53 @@ function openStudyForm(existing, onCreated) {
     phaseSel.innerHTML = phases.map(p => `<option ${p === current ? "selected" : ""}>${esc(p)}</option>`).join("");
     if (!phases.includes(current)) phaseSel.value = phases[0];
   };
+  if (guided) bindStudyWizard();
+}
+// One question per screen. The sheet's own Save only appears on the last step; Back/Next sit at
+// the bottom. "Show all fields" turns it back into the ordinary form without losing anything typed.
+function bindStudyWizard() {
+  const sheet = document.getElementById("sheet");
+  if (!sheet) return;
+  const steps = [...sheet.querySelectorAll("[data-wz-step]")];
+  const save = document.getElementById("sheet-save");
+  const nav = document.createElement("div");
+  nav.id = "wz-nav";
+  nav.style.cssText = "display:flex;gap:8px;align-items:center;margin:8px 2px 4px 2px";
+  nav.innerHTML = `<button type="button" class="btn secondary" id="wz-back" style="flex:1">Back</button>
+    <button type="button" class="btn" id="wz-next" style="flex:1">Next</button>`;
+  const all = document.createElement("div");
+  all.style.cssText = "text-align:center;margin:6px 0 2px 0";
+  all.innerHTML = `<a href="#" id="wz-all" style="font-size:12.5px;color:var(--blue)">Show all fields</a>`;
+  const body = sheet.querySelector(".sheet-body");
+  body.appendChild(nav); body.appendChild(all);
+  let i = 0;
+  const show = () => {
+    steps.forEach((el, k) => { el.style.display = k === i ? "" : "none"; });
+    const q = document.getElementById("wz-q"), c = document.getElementById("wz-count"), bar = document.getElementById("wz-bar");
+    if (q) q.textContent = steps[i].dataset.wzQ || "";
+    if (c) c.textContent = `${i + 1} of ${steps.length}`;
+    if (bar) bar.style.width = Math.round(((i + 1) / steps.length) * 100) + "%";
+    document.getElementById("wz-back").style.visibility = i ? "visible" : "hidden";
+    const last = i === steps.length - 1;
+    document.getElementById("wz-next").textContent = last ? "Save study" : "Next";
+    if (save) save.style.visibility = last ? "visible" : "hidden";
+    const first = steps[i].querySelector("input:not([type=checkbox]), select");
+    if (first && first.focus) try { first.focus(); } catch (e) {}
+  };
+  document.getElementById("wz-back").onclick = () => { if (i > 0) { i--; show(); } };
+  document.getElementById("wz-next").onclick = () => {
+    if (i === 0 && !document.getElementById("f-title").value.trim()) { toast("Give it a title first"); return; }
+    if (i < steps.length - 1) { i++; show(); return; }
+    if (save) save.click();
+  };
+  document.getElementById("wz-all").onclick = (e) => {
+    e.preventDefault();
+    steps.forEach(el => { el.style.display = ""; });
+    nav.remove(); all.remove();
+    const head = document.getElementById("wz-head"); if (head) head.style.display = "none";
+    if (save) save.style.visibility = "visible";
+  };
+  show();
 }
 
 // ---------- Who to offer when assigning a task ----------
