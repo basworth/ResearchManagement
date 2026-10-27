@@ -850,6 +850,13 @@ function orgRoots() {
 }
 // Which lab a profile row belongs to — what the database stamped on it.
 function profileLab(p) { return ((p && remoteMeta[p.id]) || {}).workspace || ""; }
+// "sports-cole" → "Cole lab". Labs are one-per-PI and named for the PI, so the slug is the truest
+// label available here: the first admin found in a lab is often their RA, not the PI (Cole's lab
+// read "Lee Friedman's lab" on 27 Oct before this).
+function labLabel(ws) {
+  const last = String(ws || "").split("-").pop() || ws || "";
+  return last ? last.charAt(0).toUpperCase() + last.slice(1) + " lab" : "Lab";
+}
 function orgChartHTML(canEdit) {
   // The app admin sees every lab's people (migration 016) — Adam, 27 Oct: "the org chart … should
   // show me all users for all labs". Grouped by lab, his own first; other labs are shown, not
@@ -860,7 +867,7 @@ function orgChartHTML(canEdit) {
     return order.filter(ws => activeProfiles().some(p => profileLab(p) === ws)).map(ws => {
       const n = activeProfiles().filter(p => profileLab(p) === ws).length;
       return `<div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:${ws === myWorkspace ? 2 : 14}px 0 2px 0">
-          ${esc((ws === myWorkspace ? "MY LAB" : (piNameForLab(ws) || ws).toUpperCase() + "'S LAB"))} · ${n} ${n === 1 ? "PERSON" : "PEOPLE"}</div>
+          ${esc(ws === myWorkspace ? "MY LAB" : labLabel(ws).toUpperCase())} · ${n} ${n === 1 ? "PERSON" : "PEOPLE"}</div>
         ${orgChartForLab(ws, canEdit && ws === myWorkspace)}`;
     }).join("");
   }

@@ -46,14 +46,14 @@ function check(name, cond, detail) {
   const t = div.textContent.replace(/\s+/g, " ");
   console.log("\n-- The app admin sees every lab --");
   check("my lab first", /^\s*MY LAB · 2 PEOPLE/.test(t), t.slice(0, 80));
-  check("then each other lab, named by its PI", /BRIAN COLE'S LAB · 2 PEOPLE/.test(t) && /SPINE-SINGH'S LAB · 1 PERSON/.test(t), t);
-  check("people sit under their own lab", t.indexOf("Matthew Kao") > t.indexOf("BRIAN COLE'S LAB") && t.indexOf("William Lee") < t.indexOf("BRIAN COLE'S LAB"));
+  check("then each other lab, named for its PI — never an RA", /COLE LAB · 2 PEOPLE/.test(t) && /SINGH LAB · 1 PERSON/.test(t), t);
+  check("people sit under their own lab", t.indexOf("Matthew Kao") > t.indexOf("COLE LAB") && t.indexOf("William Lee") < t.indexOf("COLE LAB") && !/KAO'S LAB|FRIEDMAN'S LAB/.test(t));
   check("someone whose manager hasn't signed in still shows", /Maximillian Lee/.test(t));
   check("only my own lab is editable here", div.querySelectorAll('[data-org-edit="will"]').length === 1 && div.querySelectorAll('[data-org-edit="kao"]').length === 0);
   console.log("\n-- Anyone else: the chart as before --");
   ev(`appAdminIds = []`);
   const plain = ev(`orgChartHTML(true)`);
-  check("no lab headings", !/MY LAB|'S LAB/.test(plain));
+  check("no lab headings", !/MY LAB| LAB ·/.test(plain));
   const sql = path.join(PROJECT, "supabase", "migrations", "016-app-admin-sees-all-people.sql");
   if (fs.existsSync(sql)) {
     const body = fs.readFileSync(sql, "utf8").replace(/--[^\n]*/g, "");
