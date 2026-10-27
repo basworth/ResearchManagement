@@ -4260,7 +4260,7 @@ function dashboardHTML() {
 function bindDashboardHandlers(root) {
   bindTaskRows(root);
   const ms = root.querySelector(".js-meet-settings");
-  if (ms) ms.onclick = () => { tab = "settings"; render(); setTimeout(() => { const el = document.getElementById("societies-anchor"); if (el) el.scrollIntoView({ behavior: "smooth" }); }, 60); };
+  if (ms) ms.onclick = () => { tab = "settings"; render(); setTimeout(() => { const el = document.getElementById("societies-anchor"); if (el) { revealInSettings(el); el.scrollIntoView({ behavior: "smooth" }); } }, 60); };
   bindDeadlineRows(root);
 }
 
@@ -10177,6 +10177,43 @@ function confirmDuplicateInvite(email, similar, say, input) {
 }
 // What has been announced before. Worth having on screen for the same reason the invite list is:
 // without it, "did anyone tell them?" is answered from memory.
+// Settings was getting hard to manage (Adam, 27 Oct). What you act on — meeting and email updates,
+// suggested tags — stays open at the top in #settings-act; every section after it folds into its
+// own collapsible group, closed unless you opened it. Done on the rendered DOM rather than in the
+// template so every element keeps its id and every handler bound afterwards still finds it.
+let settingsOpenGroups = {};
+function foldSettingsSections(root) {
+  const act = root.querySelector("#settings-act");
+  const kids = [...root.children];
+  let start = act ? kids.indexOf(act) + 1 : 0;
+  let group = null;
+  for (const el of kids.slice(start)) {
+    const isTitle = el.classList && el.classList.contains("section-title") && !el.hasAttribute("data-toggle-meetings");
+    if (isTitle) {
+      const key = el.textContent.trim().replace(/\s+/g, " ");
+      const g = document.createElement("details");   // its own const: the toggle handler must see THIS group
+      g.className = "settings-group";
+      g.dataset.sg = key;
+      if (settingsOpenGroups[key]) g.open = true;
+      g.addEventListener("toggle", () => { settingsOpenGroups[key] = g.open; });
+      group = g;
+      const sum = document.createElement("summary");
+      sum.className = "section-title";
+      sum.style.cssText = "cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none";
+      if (el.id) sum.id = el.id;
+      sum.innerHTML = `<span>${esc(key)}</span><span style="font-size:11px;color:var(--text2)">▸</span>`;
+      group.appendChild(sum);
+      root.insertBefore(group, el);
+      el.remove();
+      continue;
+    }
+    if (group) group.appendChild(el);
+  }
+}
+// Open whichever folded group holds this element, so a jump-to link lands on something visible.
+function revealInSettings(el) {
+  for (let n = el; n; n = n.parentElement) if (n.tagName === "DETAILS") { n.open = true; if (n.dataset.sg) settingsOpenGroups[n.dataset.sg] = true; }
+}
 async function loadAnnouncements() {
   const box = document.getElementById("ann-history");
   if (!box) return;
@@ -10320,6 +10357,11 @@ function renderSettings() {
   const currentFieldSubs = fieldSubs();
   const allMeetings = state.meetings.slice().sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
   $main.innerHTML = `
+  <div id="settings-act">
+    ${suggestionsSectionHTML()}
+    ${isAdmin() ? tagReviewHTML() : ""}
+  </div>
+  <div class="section-title" style="margin-top:22px">Help &amp; tools</div>
   <div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 15px">
     <div style="flex:1;min-width:0">
       <div style="font-size:15px;font-weight:600">How this works</div>
@@ -10403,8 +10445,7 @@ function renderSettings() {
   <datalist id="dl-people-set">${state.roster.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
   <button class="btn danger" id="sign-out-btn">Sign Out</button>
 
-  ${suggestionsSectionHTML()}
-
+  <div class="section-title">Team list</div>
   <div class="card">
     <div style="font-size:12px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin-bottom:4px">TEAM MEMBERS — used for task assignment &amp; author lists</div>
     <div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin-bottom:10px">
@@ -10436,7 +10477,7 @@ function renderSettings() {
     </div>
   </div>
 
-  ${isAdmin() ? tagReviewHTML() + studyTagsAdminHTML() : ""}
+  ${isAdmin() ? studyTagsAdminHTML() : ""}
   ${isAdmin() ? `
   <div class="section-title">Initiation Stages</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
@@ -10470,8 +10511,8 @@ function renderSettings() {
     <button class="btn secondary" id="merge-go" style="margin:0">Merge</button>
   </div>
   ${Object.keys(state.nameAliases || {}).length ? `
-  <div class="card" style="margin-top:10px">
-    <div style="font-size:12px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin-bottom:6px">ALREADY MERGED</div>
+  <details class="card" style="margin-top:10px">
+    <summary style="font-size:12px;font-weight:700;color:var(--text2);letter-spacing:.5px;cursor:pointer">ALREADY MERGED (${Object.keys(state.nameAliases || {}).length})</summary>
     ${Object.entries(state.nameAliases).map(([from, to]) => `
       <div style="display:flex;align-items:center;gap:8px;padding:5px 0;font-size:13.5px">
         <span style="color:var(--text2);text-decoration:line-through">${esc(from)}</span>
@@ -10480,7 +10521,7 @@ function renderSettings() {
         <button class="mini-btn" data-unalias="${esc(from)}" style="margin:0;color:var(--red)">Undo</button>
       </div>`).join("")}
     <div style="font-size:12px;color:var(--text2);line-height:1.45;margin-top:6px">Undo only forgets the rule — it doesn't put the old spelling back on any record.</div>
-  </div>` : ""}
+  </details>` : ""}
   ` : ""}
 
   <div class="section-title">Admin Access</div>
@@ -10546,43 +10587,9 @@ function renderSettings() {
   </div>
   <div id="pending-invites" class="card" style="padding:6px 14px"><div style="color:var(--text2);font-size:14px">Checking…</div></div>
 
-  <!-- Announcements. Until now this was Adam pasting into Gmail, which left no record of what was
-       said, no idea who it reached, and the address list re-gathered by hand every time. -->
-  <div class="section-title">Send an Announcement</div>
-  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
-    One note to everybody, sent from here and kept. Each person gets their own copy, so nobody sees
-    anyone else's address. ${isAppAdmin()
-      ? "You can send to every lab or to one."
-      : `This goes to ${esc(myWorkspace)} only.`}
-    People who were invited but have never signed in aren't included — they have no address on
-    file here yet, and they'd be reading about features they've not seen.
-  </div>
-  <div class="card">
-    ${isAppAdmin() ? `
-    <div class="frow" style="padding:0"><label for="ann-audience">Who</label>
-      <select id="ann-audience" style="flex:1">
-        <option value="all">Everybody, every lab</option>
-        ${labsIAmIn().map(w => `<option value="${esc(w)}">${esc(w)} only</option>`).join("")}
-      </select>
-    </div>` : ""}
-    <div class="fld" style="margin-top:${isAppAdmin() ? "10" : "0"}px"><label for="ann-subject">Subject</label>
-      <input id="ann-subject" placeholder="e.g. Buttons that weren't working are fixed" autocomplete="off"
-        style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none">
-    </div>
-    <div class="fld" style="margin-top:10px"><label for="ann-body">The note</label>
-      <textarea id="ann-body" rows="9" placeholder="Write it as you'd say it. Leave a blank line between paragraphs. A line starting with - becomes a bullet."
-        style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:10px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none;resize:vertical"></textarea>
-    </div>
-    <div id="ann-who" style="font-size:12.5px;color:var(--text2);line-height:1.5;margin:2px 2px 0 2px">Checking who this would reach…</div>
-    <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-      <button class="btn secondary" id="ann-preview" style="flex:none">Preview it</button>
-      <button id="ann-send" style="flex:none;border:none;background:var(--blue);color:#fff;border-radius:8px;padding:10px 18px;font-weight:700;font-size:15px;cursor:pointer;font-family:inherit">Send</button>
-    </div>
-    <div id="ann-msg" style="font-size:13px;line-height:1.45;margin-top:8px"></div>
-  </div>
-
-  <div class="section-title">Announcements Sent</div>
-  <div id="ann-history" class="card" style="padding:6px 14px"><div style="color:var(--text2);font-size:14px">Checking…</div></div>
+  <!-- Send an Announcement was removed from Settings 27 Oct (Adam: "i dont see why this needs to
+       be a field in the app") — announcements are drafted in chat, approved, and sent from there.
+       The announce function and its history are untouched. -->
 
   ${(() => {
     // Only worth a section when there's something in it — an empty "Linked Accounts" heading on
@@ -10765,6 +10772,7 @@ function renderSettings() {
       if (box) { box.focus(); box.select(); }
     });
   };
+  foldSettingsSections($main);
   document.getElementById("settings-help").onclick = () => openHelpSheet();
   const supportBtn = document.getElementById("settings-support");
   if (supportBtn) supportBtn.onclick = () => openSupportSheet();
