@@ -21,6 +21,8 @@ const items = (meAdmin) => [
   prof(ME, meAdmin ? "Adam Yanke" : "William Lee", meAdmin ? { admin: true, position: "Clinician" } : {}),
   prof("will", meAdmin ? "William Lee" : "Adam Yanke", meAdmin ? { admin: true, reportsTo: ME } : { admin: true, position: "Clinician" }),
   prof("tj", "Thomas Turinske", { admin: true, reportsTo: meAdmin ? ME : "will" }),
+  prof("carla", "Carla Coordinator", { admin: true, reportsTo: meAdmin ? ME : "will", position: "Research manager (CRCM)" }),
+  prof("crc", "Casey Crc", { admin: true, reportsTo: meAdmin ? ME : "will", position: "CRC" }),
   st("s1", { title: "OCA return to sport", phase: "Manuscript", authors: ["William Lee", "Cade Smelley", "Adam Yanke"], team: ["William Lee"] }),
   st("s2", { title: "MPFL registry", phase: "Enrolling", team: ["Adam Yanke", "Thomas Turinske", "William Lee"] }),
   st("s3", { title: "Saddle point", phase: "Submitted", authors: ["Cade Smelley", "William Lee", "Adam Yanke"], journal: "AJSM" }),
@@ -58,6 +60,8 @@ function check(name, cond, detail) {
   const cardText = d.querySelector('[data-cv-open="William Lee"]').closest(".card").textContent;
   check("each card counts first / second / other", /1 first · 1 second · 1 other · 1 published/.test(cardText.replace(/\s+/g, " ")), cardText);
   check("an admin can pick anyone else", !!d.getElementById("cv-pick"));
+  check("no CV card for a CRCM or CRC", !opens.some(n => /Carla|Casey/.test(n)), opens);
+  check("...nor in the picker", ![...d.querySelectorAll("#cv-pick option")].some(o => /Carla|Casey/.test(o.value)));
   d.querySelector('[data-cv-open="William Lee"]').click(); await wait(60);
   const t = d.body.textContent.replace(/\s+/g, " ");
   console.log("\n-- The CV --");

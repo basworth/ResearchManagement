@@ -6515,11 +6515,18 @@ function researchWatchHTML(w){
 // Who appears at the top of My Lab: a PI sees their research team (admins who report to them);
 // anyone else sees themselves. A lab admin can open anyone on the roster.
 let cvPerson = "";
+// Coordinators (CRC, CRCM) run studies rather than author them, so no research-year CV for them
+// (Adam, 27 Oct: "not applicable for CRCM or CRC").
+function cvApplies(name) {
+  const k = canonName(name || "").toLowerCase();
+  const p = activeProfiles().find(x => x.name && canonName(x.name).toLowerCase() === k);
+  return !(p && /\bCRCM?\b|coordinator/i.test(p.position || ""));
+}
 function cvPeople() {
   const team = adminsReportingToMe();
-  if (team.length) return team;
+  if (team.length) return team.filter(cvApplies);
   const mine = canonName(me());
-  return mine ? [mine] : [];
+  return mine && cvApplies(mine) ? [mine] : [];
 }
 const CV_GROUPS = [
   { key: "first", label: "First author" },
@@ -6573,7 +6580,7 @@ function cvCardsHTML() {
     <span style="font-size:12.5px;color:var(--text2)">Someone else:</span>
     <select id="cv-pick" style="flex:1;max-width:280px;border:none;background:var(--card);border-radius:8px;padding:7px 10px;font-size:14px;font-family:inherit;color:var(--text)">
       <option value="">— pick a person —</option>
-      ${uniqNames(state.roster.concat(activeProfiles().map(p => p.name))).sort((a, b) => a.localeCompare(b)).map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}
+      ${uniqNames(state.roster.concat(activeProfiles().map(p => p.name))).filter(cvApplies).sort((a, b) => a.localeCompare(b)).map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}
     </select>
   </div>` : ""}`;
 }
