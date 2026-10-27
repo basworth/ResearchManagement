@@ -32,6 +32,11 @@ const INGEST_SECRET = Deno.env.get("INGEST_SECRET") ?? "";
 // another lab is refused and nothing is stored, rather than quietly half-working for a team that
 // was never told the feature exists.
 const INGEST_WORKSPACE = Deno.env.get("INGEST_WORKSPACE") ?? "sports-yanke";
+// The labs it IS on for. Adam, 27 Oct 2026: turn it on for Singh's lab. A forward is filed in the
+// SENDER'S lab — their studies, their roster, their team — never another lab's; a lab not listed
+// here is still refused outright. Add a lab by adding it here (or the INGEST_WORKSPACES secret).
+const INGEST_WORKSPACES = (Deno.env.get("INGEST_WORKSPACES") ?? "sports-yanke,spine-singh")
+  .split(",").map((x) => x.trim()).filter(Boolean);
 const SITE_URL = Deno.env.get("SITE_URL") ?? "https://rushsportsresearch.netlify.app";
 const SMTP_USER = Deno.env.get("SMTP_USER") ?? "";
 const SMTP_PASSWORD = Deno.env.get("SMTP_PASSWORD") ?? "";
@@ -88,9 +93,10 @@ async function sendMail(opts: { to: string[]; cc?: string[]; subject: string; ht
 // A forwarded meeting: read every action item, apply it, record it, reply on the thread.
 // Runs after the response has gone back to Gmail — reading a long transcript takes longer than the
 // Apps Script will wait — so everything it does is recorded on the meeting row, including failure.
-async function processMeeting(db: any, rowId: string, sender: { id: string; name: string; notify: string },
+async function processMeeting(db: any, rowId: string, sender: { id: string; name: string; notify: string; workspace?: string },
                               payload: any, subject: string, raw: string) {
   const nowIso = new Date().toISOString();
+  const ws = sender.workspace || INGEST_WORKSPACE;
   const record: any = {
     id: rowId, createdAt: nowIso, source: "meeting", from: bareAddress(payload?.from ?? ""),
     subject, forwardedBy: sender.id, forwardedByName: sender.name, unverified: false,
@@ -99,17 +105,17 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
     sourceHash: payload.__hash, decidedAt: nowIso, decidedBy: "the tracker",
   };
   const save = async () => db.from("items").upsert({ id: rowId, kind: "suggestion", data: record,
-    updated_at: new Date().toISOString(), workspace: INGEST_WORKSPACE });
+    updated_at: new Date().toISOString(), workspace: ws });
   const replyTo = threadRecipients([payload?.from, payload?.to, payload?.cc].filter(Boolean),
     TRACKER_MAILBOXES.concat([SMTP_USER.toLowerCase()]));
   const reSubject = "Re: " + String(payload?.originalSubject || subject).replace(/^\s*(re|fw|fwd):\s*/i, "");
   try {
     const scrubbed = stripPHIRules(raw);
-    const { data: studyRows } = await db.from("items").select("id, data").eq("kind", "study").eq("workspace", INGEST_WORKSPACE);
+    const { data: studyRows } = await db.from("items").select("id, data").eq("kind", "study").eq("workspace", ws);
     const studies = (studyRows ?? []).map((r: any) => r.data).filter(Boolean);
-    const { data: profRows } = await db.from("items").select("data").eq("kind", "profile").eq("workspace", INGEST_WORKSPACE);
+    const { data: profRows } = await db.from("items").select("data").eq("kind", "profile").eq("workspace", ws);
     const profiles = (profRows ?? []).map((r: any) => r.data).filter((p: any) => p && p.name);
-    const { data: metaRows } = await db.from("items").select("data").eq("kind", "meta").eq("workspace", INGEST_WORKSPACE);
+    const { data: metaRows } = await db.from("items").select("data").eq("kind", "meta").eq("workspace", ws);
     const rosterSet = new Set<string>();
     profiles.forEach((p: any) => rosterSet.add(String(p.name).trim()));
     (metaRows ?? []).forEach((r: any) => ((r.data && r.data.names) || []).forEach((n: any) => { if (typeof n === "string" && n.trim()) rosterSet.add(n.trim()); }));
@@ -128,15 +134,15 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
     for (const sid of result.touched) {
       const s = studies.find((x: any) => x.id === sid);
       const { error } = await db.from("items").update({ data: s, updated_at: new Date().toISOString() })
-        .eq("id", sid).eq("workspace", INGEST_WORKSPACE);
+        .eq("id", sid).eq("workspace", ws);
       if (error) failed.add(sid);
     }
     for (const t of result.newTasks) {
-      const { error } = await db.from("items").insert({ id: t.id, kind: "task", data: t, updated_at: new Date().toISOString(), workspace: INGEST_WORKSPACE });
+      const { error } = await db.from("items").insert({ id: t.id, kind: "task", data: t, updated_at: new Date().toISOString(), workspace: ws });
       if (error) failed.add(t.id);
     }
     for (const s of result.newStudies) {
-      const { error } = await db.from("items").insert({ id: s.id, kind: "study", data: s, updated_at: new Date().toISOString(), workspace: INGEST_WORKSPACE });
+      const { error } = await db.from("items").insert({ id: s.id, kind: "study", data: s, updated_at: new Date().toISOString(), workspace: ws });
       if (error) failed.add(s.id);
     }
     record.applied = result.applied.filter((a: any) => !failed.has(a.studyId) && !(a.undo && failed.has(a.undo.taskId)));
@@ -160,7 +166,7 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
   // on the email (Adam, 26 Oct). lab_members rows with source = 'team' for this lab.
   let team: string[] = [];
   try {
-    const { data: tm } = await db.from("lab_members").select("user_id").eq("workspace", INGEST_WORKSPACE).eq("source", "team");
+    const { data: tm } = await db.from("lab_members").select("user_id").eq("workspace", ws).eq("source", "team");
     const ids = new Set((tm ?? []).map((r: any) => String(r.user_id)));
     const { data: pr } = await db.from("items").select("data").eq("kind", "profile");
     team = (pr ?? []).map((r: any) => r.data).filter((p: any) => p && ids.has(String(p.id)))
@@ -304,8 +310,8 @@ Deno.serve(async (req) => {
     // mean reading a lab this feature was never turned on for, and searching the ingest lab's
     // studies would mean showing them someone else's work. Neither is acceptable, and there is no
     // third option that isn't a surprise to somebody.
-    if (sender && sender.workspace !== INGEST_WORKSPACE) {
-      console.warn(`ingest-email refused: ${from} is in ${sender.workspace}, ingest runs for ${INGEST_WORKSPACE}`);
+    if (sender && INGEST_WORKSPACES.indexOf(sender.workspace) < 0) {
+      console.warn(`ingest-email refused: ${from} is in ${sender.workspace}, ingest runs for ${INGEST_WORKSPACES.join(", ")}`);
       return json({ error: "Email forwarding isn't switched on for your team yet" }, 403);
     }
 
@@ -315,6 +321,8 @@ Deno.serve(async (req) => {
       // and a reply to an individual would reach the wrong one of them — or nobody.
       if (groupName) sender = { id: "", name: groupName, notify: from, workspace: INGEST_WORKSPACE };
     }
+    // The lab this forward belongs to: the sender's own. Everything below reads and writes there.
+    const ws = (sender && sender.workspace) || INGEST_WORKSPACE;
 
     // A MEETING — a transcript or meeting notes — goes to the meeting reader, which applies every
     // action item and replies on the thread. Only for a sender we know: a stranger's "meeting"
@@ -325,12 +333,12 @@ Deno.serve(async (req) => {
       // The Apps Script retries anything it didn't get a 200 for, and a long transcript can outlast
       // its patience. The same meeting must never be applied twice.
       const { data: dup } = await db.from("items").select("id").eq("kind", "suggestion")
-        .eq("workspace", INGEST_WORKSPACE).eq("data->>sourceHash", hash).limit(1);
+        .eq("workspace", ws).eq("data->>sourceHash", hash).limit(1);
       if (dup && dup.length) return json({ ok: true, mode: "meeting", duplicate: true, id: dup[0].id });
       const rowId = crypto.randomUUID();
       const nowIso0 = new Date().toISOString();
       // A placeholder first, so a retry arriving while this one is still reading finds it.
-      await db.from("items").insert({ id: rowId, kind: "suggestion", updated_at: nowIso0, workspace: INGEST_WORKSPACE,
+      await db.from("items").insert({ id: rowId, kind: "suggestion", updated_at: nowIso0, workspace: ws,
         data: { id: rowId, createdAt: nowIso0, source: "meeting", status: "reading", subject, sourceHash: hash,
                 forwardedBy: sender.id, forwardedByName: sender.name, applied: [], changes: [], needsParse: false,
                 parserVersion: PARSER_VERSION } });
@@ -346,13 +354,13 @@ Deno.serve(async (req) => {
 
     // Read it now, so a forward is fully understood within five minutes of being sent whether or
     // not anyone has the tracker open.
-    const { data: studyRows, error: studyErr } = await db.from("items").select("id, data").eq("kind", "study").eq("workspace", INGEST_WORKSPACE);
+    const { data: studyRows, error: studyErr } = await db.from("items").select("id, data").eq("kind", "study").eq("workspace", ws);
     if (studyErr) throw studyErr;
     const studies = (studyRows ?? []).map((r: any) => r.data).filter(Boolean);
     setStudies(studies);
     // Corrections the team has made. Loaded here too, or a correction would only help whoever is
     // looking at the app and every forward would keep arriving mismatched.
-    const { data: hintRows } = await db.from("items").select("data").eq("kind", "matchHint").eq("workspace", INGEST_WORKSPACE);
+    const { data: hintRows } = await db.from("items").select("data").eq("kind", "matchHint").eq("workspace", ws);
     setMatchHints((hintRows ?? []).map((r: any) => r.data).filter(Boolean));
     // The deadline catalogue, so an extension email can be matched to the meeting it is about.
     const { data: meetingRows } = await db.from("items").select("id, data").eq("kind", "meeting");
@@ -374,7 +382,7 @@ Deno.serve(async (req) => {
         });
         read.changes = read.changes.filter((c: any) => !c.safe);
         const { error: upErr } = await db.from("items")
-          .update({ data: target, updated_at: nowIso }).eq("id", target.id).eq("workspace", INGEST_WORKSPACE);
+          .update({ data: target, updated_at: nowIso }).eq("id", target.id).eq("workspace", ws);
         // A failed write must not leave the suggestion claiming it applied something.
         if (upErr) { applied.length = 0; read.changes = readEmail(clean.text, subject).changes; }
       }
@@ -439,7 +447,7 @@ Deno.serve(async (req) => {
     // forward is captured into a queue nobody can see — a silent failure that looks exactly like
     // ingest not running at all.
     const { error: insErr } = await db.from("items").insert({
-      id, kind: "suggestion", data: suggestion, updated_at: nowIso, workspace: INGEST_WORKSPACE,
+      id, kind: "suggestion", data: suggestion, updated_at: nowIso, workspace: ws,
     });
     if (insErr) throw insErr;
 

@@ -48,8 +48,8 @@ const ALLOWED = [
     fn: "ingest-email",
     match: 'eq("kind", "profile")',
     why: "the sender must be identified before their lab is known; the very next statement " +
-         "refuses anyone outside INGEST_WORKSPACE",
-    requires: "INGEST_WORKSPACE",
+         "refuses anyone outside INGEST_WORKSPACES",
+    requires: "INGEST_WORKSPACES",
   },
   {
     fn: "invite-user",
@@ -199,15 +199,19 @@ check("it compares the caller's lab to the study's", /callerWorkspace !== studyW
 check("...and answers as though the study doesn't exist",
   /callerWorkspace !== studyWorkspace[\s\S]{0,300}no longer exists"\s*\}, 404\)/.test(reqUpdate));
 
-console.log("\n-- Email ingest stays one lab's feature --");
+console.log("\n-- Email ingest: on for listed labs, each forward kept in the sender's own lab (27 Oct) --");
 const ingest = fs.readFileSync(path.join(DIR, "ingest-email", "index.ts"), "utf8");
-check("there's a single ingest workspace", /INGEST_WORKSPACE/.test(ingest));
-check("a sender from another lab is refused", /sender\.workspace !== INGEST_WORKSPACE/.test(ingest));
-check("studies are searched within it only",
-  /eq\("kind", "study"\)\.eq\("workspace", INGEST_WORKSPACE\)/.test(ingest));
+check("the labs it runs for are listed", /const INGEST_WORKSPACES = /.test(ingest) && /"sports-yanke,spine-singh"/.test(ingest));
+check("a sender from a lab not listed is refused", /INGEST_WORKSPACES\.indexOf\(sender\.workspace\) < 0[\s\S]{0,300}403\)/.test(ingest));
+check("the lab used is the sender's own", /const ws = \(sender && sender\.workspace\) \|\| INGEST_WORKSPACE;/.test(ingest)
+  && /const ws = sender\.workspace \|\| INGEST_WORKSPACE;/.test(ingest));
+check("studies are searched within that lab only",
+  /eq\("kind", "study"\)\.eq\("workspace", ws\)/.test(ingest) && !/eq\("kind", "study"\)\.eq\("workspace", INGEST_WORKSPACE\)/.test(ingest));
 // Without the stamp the row lands with a NULL workspace, which no policy matches — the forward is
 // captured into a queue nobody can see.
-check("the suggestion row is stamped", /kind: "suggestion"[\s\S]{0,120}workspace: INGEST_WORKSPACE/.test(ingest));
+check("every suggestion row is stamped with that lab", /kind: "suggestion"[\s\S]{0,120}workspace: ws/.test(ingest)
+  && !/workspace: INGEST_WORKSPACE,/.test(ingest.replace(/sender = \{[^}]*\}/g, "")));
+check("the PI's team cc is that lab's team", /from\("lab_members"\)\.select\("user_id"\)\.eq\("workspace", ws\)/.test(ingest));
 
 console.log("\n" + pass + " passed, " + fail + " failed");
 process.exit(fail ? 1 : 0);
