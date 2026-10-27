@@ -21,6 +21,10 @@ const items = () => [
   st("s2", "MPFL saddle point", { region: ["Knee"], topic: ["Patellofemoral instability"] }),
   st("s3", "Rotator cuff PRP", { region: ["Shoulder"], topic: ["Rotator cuff", "Biologics"] }),
   st("s4", "Untagged study", undefined),
+  { id: "s6", kind: "study", updated_at: now, workspace: "sports-yanke", data: { id: "s6", title: "MPFL reconstruction outcomes", pi: "Adam Yanke", team: ["Adam Yanke"], phase: "Published", design: "Prospective (Consented)",
+    tagSuggestion: { region: ["Knee"], topic: ["Patellofemoral instability", "Imaging"], by: "suggested from the title, 27 Oct" } } },
+  { id: "s7", kind: "study", updated_at: now, workspace: "sports-yanke", data: { id: "s7", title: "Glenoid bone loss", pi: "Adam Yanke", team: ["Adam Yanke"], phase: "Published", design: "Prospective (Consented)",
+    tagSuggestion: { region: ["Shoulder"], topic: ["Shoulder instability"], by: "suggested from the title, 27 Oct" } } },
   st("s5", "TTO and PF", { region: ["Knee"], topic: ["PF instability"] }),
 ];
 function boot() {
@@ -54,7 +58,7 @@ function check(name, cond, detail) {
   check("Knee + Cartilage shows only studies with both", listed() === "s1", listed());
   ev(`saveFilterSet("studies", "Knee cartilage")`); await wait(20);
   d.querySelector("[data-tag-filter-clear]").click(); await wait(40);
-  check("Clear brings everything back", listed() === "s1,s2,s3,s4,s5", listed());
+  check("Clear brings everything back", listed() === "s1,s2,s3,s4,s5,s6,s7", listed());
   const vs = ev(`JSON.stringify(state.filterSets.find(f => f.name === "Knee cartilage").filters.tags)`);
   check("a saved view remembers its tags", vs === JSON.stringify(["Knee", "Cartilage"]), vs);
   ev(`applyFilters("studies", state.filterSets.find(f => f.name === "Knee cartilage").filters); render()`); await wait(40);
@@ -99,7 +103,28 @@ function check(name, cond, detail) {
   check("...and the old spelling stops being offered", !ev(`JSON.stringify(tagOptions("topic"))`).includes('"PF instability"'));
   ev(`renameStudyTag("region", "Hip", "Hip & Pelvis")`);
   check("renaming a default retires the old one", !ev(`JSON.stringify(tagOptions("region"))`).includes('"Hip"') && ev(`studyById("s4").tags.region[0]`) === "Hip & Pelvis");
-  check("nothing is deleted from any study", ev(`state.studies.length`) === 6);
+  check("nothing is deleted from any study", ev(`state.studies.length`) === 8, ev(`state.studies.length`));
+
+  console.log("\n-- Suggested tags wait for approval (27 Oct) --");
+  ev(`tab = "settings"; render()`); await wait(60);
+  check("Settings lists the suggestions", d.querySelectorAll("#tag-review .tag-review-row").length === 2);
+  check("nothing is a tag until approved", ev(`allStudyTags(studyById("s6")).length`) === 0);
+  d.querySelector('[data-tr-study="s6"] .tr-chip[data-tag="Imaging"]').click();
+  d.querySelector('[data-tr-ok="s6"]').click(); await wait(60);
+  check("Approve takes the chips as ticked", ev(`JSON.stringify(studyById("s6").tags)`) === JSON.stringify({ region: ["Knee"], topic: ["Patellofemoral instability"] }), ev(`JSON.stringify(studyById("s6").tags)`));
+  check("...and records who approved it", ev(`studyById("s6").tagSuggestion.approvedBy`) === "Adam Yanke");
+  check("an approved study leaves the list", d.querySelectorAll("#tag-review .tag-review-row").length === 1);
+  ev(`undoTagApproval("s6")`); await wait(40);
+  check("Undo puts it back", d.querySelectorAll("#tag-review .tag-review-row").length === 2 && ev(`allStudyTags(studyById("s6")).length`) === 0);
+  d.querySelector('[data-tr-skip="s7"]').click(); await wait(40);
+  check("Skip leaves it untagged and off the list, kept on record", ev(`studyById("s7").tagSuggestion.dismissed`) === true && ev(`allStudyTags(studyById("s7")).length`) === 0);
+  d.getElementById("tr-ok-page").click(); await wait(60);
+  check("Approve these N tags the whole page", ev(`JSON.stringify(studyById("s6").tags.topic)`) === JSON.stringify(["Patellofemoral instability", "Imaging"]));
+  check("...and the list empties", !d.getElementById("tag-review"));
+  ev(`studyById("s6").tags = { region: [], topic: [] }; delete studyById("s6").tagSuggestion.approvedAt; openStudy("s6"); tab = "studies"; render()`); await wait(60);
+  check("the study page shows the suggestion with Accept", d.querySelector('[data-accept-tags="s6"]') && /Suggested: Knee/.test(d.body.textContent));
+  d.querySelector('[data-accept-tags="s6"]').click(); await wait(60);
+  check("Accept there applies it", ev(`studyById("s6").tags.region[0]`) === "Knee");
 
   console.log(`\n${fail ? "FAILED" : "ALL CLEAR"} — ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);

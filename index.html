@@ -4446,6 +4446,111 @@ function tagPickerValue(root, prefix) {
 // Lab admins tidy the list: rename a tag everywhere, or rename it onto an existing tag to merge
 // the two ("PF instability" into "Patellofemoral instability"). Every study carrying it is
 // updated; nothing is deleted — a tag with no studies simply stops being offered.
+// SUGGESTED TAGS (27 Oct): proposals written onto each study as `tagSuggestion` {region, topic, by}
+// — from the title by rule, or later by anything else that guesses. Nothing becomes a tag until a
+// person approves it here or on the study page. Approve takes the chips as ticked (untick a wrong
+// one first); Skip sets `dismissed` so it stops being offered, and keeps the record.
+let tagReviewPage = 0;
+const TAG_REVIEW_SIZE = 20;
+function pendingTagSuggestions() {
+  return (state.studies || []).filter(s => s.tagSuggestion && !s.tagSuggestion.dismissed && !allStudyTags(s).length
+    && ((s.tagSuggestion.region || []).length || (s.tagSuggestion.topic || []).length))
+    .sort((a, b) => String(a.title || "").localeCompare(String(b.title || "")));
+}
+function tagReviewHTML() {
+  const all = pendingTagSuggestions();
+  if (!all.length) return "";
+  const pages = Math.ceil(all.length / TAG_REVIEW_SIZE);
+  if (tagReviewPage >= pages) tagReviewPage = pages - 1;
+  const page = all.slice(tagReviewPage * TAG_REVIEW_SIZE, (tagReviewPage + 1) * TAG_REVIEW_SIZE);
+  return `<div class="section-title">Suggested Tags (${all.length})</div>
+  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
+    Read from each study's title. Untick anything wrong, then Approve. Skip leaves a study untagged.
+  </div>
+  <div class="card" id="tag-review">
+    ${page.map(s => { const g = s.tagSuggestion;
+      return `<div class="frow tag-review-row" data-tr-study="${esc(s.id)}" style="gap:8px;padding:8px 0;align-items:flex-start;display:block">
+        <div style="font-size:13.5px;font-weight:600;line-height:1.35;margin-bottom:5px">${esc(s.nickname || s.title)}</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+          ${(g.region || []).map(x => `<button type="button" class="mini-btn tr-chip on" data-tr-group="region" data-tag="${esc(x)}" style="margin:0;background:var(--blue);color:#fff">${esc(x)}</button>`).join("")}
+          ${(g.topic || []).map(x => `<button type="button" class="mini-btn tr-chip on" data-tr-group="topic" data-tag="${esc(x)}" style="margin:0;background:var(--indigo);color:#fff">${esc(x)}</button>`).join("")}
+          <span style="flex:1"></span>
+          <button type="button" class="mini-btn" data-tr-more="${esc(s.id)}" style="margin:0">More…</button>
+          <button type="button" class="mini-btn" data-tr-skip="${esc(s.id)}" style="margin:0">Skip</button>
+          <button type="button" class="mini-btn" data-tr-ok="${esc(s.id)}" style="margin:0;background:var(--green);color:#fff">Approve</button>
+        </div>
+      </div>`; }).join("")}
+    <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+      <button class="btn" id="tr-ok-page" style="flex:1">Approve these ${page.length}</button>
+    </div>
+    ${pages > 1 ? `<div style="display:flex;gap:8px;align-items:center;justify-content:center;margin-top:8px;font-size:12.5px;color:var(--text2)">
+      <button class="mini-btn" id="tr-prev" style="margin:0" ${tagReviewPage ? "" : "disabled"}>‹</button>
+      Page ${tagReviewPage + 1} of ${pages}
+      <button class="mini-btn" id="tr-next" style="margin:0" ${tagReviewPage < pages - 1 ? "" : "disabled"}>›</button>
+    </div>` : ""}
+  </div>`;
+}
+function approveTagSuggestion(studyId, row) {
+  const s = studyById(studyId);
+  if (!s || !s.tagSuggestion) return false;
+  const pick = (g) => row ? [...row.querySelectorAll(`.tr-chip.on[data-tr-group="${g}"]`)].map(b => rememberTag(g, b.dataset.tag)).filter(Boolean)
+    : (s.tagSuggestion[g] || []).map(x => rememberTag(g, x)).filter(Boolean);
+  s.tags = { region: pick("region"), topic: pick("topic") };
+  s.tagSuggestion = Object.assign({}, s.tagSuggestion, { approvedAt: new Date().toISOString(), approvedBy: me() });
+  upsertStudy(s);
+  return true;
+}
+function bindTagReview() {
+  const box = document.getElementById("tag-review");
+  if (!box) return;
+  box.querySelectorAll(".tr-chip").forEach(b => b.onclick = () => {
+    const on = !b.classList.contains("on");
+    b.classList.toggle("on", on);
+    b.style.background = on ? (b.dataset.trGroup === "region" ? "var(--blue)" : "var(--indigo)") : "";
+    b.style.color = on ? "#fff" : "";
+    b.style.textDecoration = on ? "" : "line-through";
+  });
+  box.querySelectorAll("[data-tr-ok]").forEach(b => b.onclick = () => {
+    if (blockOfflineEdit("Approving tags")) return;
+    const id = b.dataset.trOk;
+    approveTagSuggestion(id, box.querySelector(`[data-tr-study="${id}"]`));
+    render(); toastAction("Tags approved", "Undo", () => undoTagApproval(id));
+  });
+  box.querySelectorAll("[data-tr-skip]").forEach(b => b.onclick = () => {
+    if (blockOfflineEdit("Skipping tags")) return;
+    const s = studyById(b.dataset.trSkip); if (!s) return;
+    s.tagSuggestion = Object.assign({}, s.tagSuggestion, { dismissed: true, dismissedBy: me() });
+    upsertStudy(s); render(); toastAction("Skipped — left untagged", "Undo", () => { delete s.tagSuggestion.dismissed; upsertStudy(s); render(); });
+  });
+  box.querySelectorAll("[data-tr-more]").forEach(b => b.onclick = () => {
+    const s = studyById(b.dataset.trMore); if (!s) return;
+    const row = box.querySelector(`[data-tr-study="${s.id}"]`);
+    const sel = { region: [...row.querySelectorAll('.tr-chip.on[data-tr-group="region"]')].map(x => x.dataset.tag),
+                  topic: [...row.querySelectorAll('.tr-chip.on[data-tr-group="topic"]')].map(x => x.dataset.tag) };
+    openSheet("Tags", `<div style="font-size:13px;font-weight:600;margin:0 2px 10px 2px">${esc(s.nickname || s.title)}</div>${tagPickerHTML("tr", sel)}`, () => {
+      s.tags = tagPickerValue(document.getElementById("sheet"), "tr");
+      s.tagSuggestion = Object.assign({}, s.tagSuggestion, { approvedAt: new Date().toISOString(), approvedBy: me() });
+      upsertStudy(s); render(); toast("Tags saved");
+    }, (sh) => bindTagPicker(sh, "tr"));
+  });
+  const all = document.getElementById("tr-ok-page");
+  if (all) all.onclick = () => {
+    if (blockOfflineEdit("Approving tags")) return;
+    const rows = [...box.querySelectorAll(".tag-review-row")];
+    const ids = rows.map(r => r.dataset.trStudy);
+    rows.forEach(r => approveTagSuggestion(r.dataset.trStudy, r));
+    render(); toastAction(`Tags approved on ${ids.length} ${ids.length === 1 ? "study" : "studies"}`, "Undo", () => ids.forEach(undoTagApproval));
+  };
+  const prev = document.getElementById("tr-prev"), next = document.getElementById("tr-next");
+  if (prev) prev.onclick = () => { tagReviewPage = Math.max(0, tagReviewPage - 1); render(); };
+  if (next) next.onclick = () => { tagReviewPage++; render(); };
+}
+function undoTagApproval(id) {
+  const s = studyById(id); if (!s || !s.tagSuggestion) return;
+  s.tags = { region: [], topic: [] };
+  delete s.tagSuggestion.approvedAt; delete s.tagSuggestion.approvedBy;
+  upsertStudy(s); render();
+}
 function studyTagsAdminHTML() {
   const count = {};
   (state.studies || []).forEach(s => { const t = studyTags(s); TAG_GROUPS.forEach(g => t[g.key].forEach(x => { const k = g.key + "|" + x; count[k] = (count[k] || 0) + 1; })); });
@@ -4503,7 +4608,8 @@ function openTagSheet(studyId) {
   if (!s) return;
   if (blockOfflineEdit("Tagging a study")) return;
   openSheet("Tags", `<div style="font-size:12.5px;color:var(--text2);line-height:1.45;margin:0 2px 10px 2px">Group studies for research meetings. Tap to add or remove; type to add one that isn't listed.</div>
-    ${tagPickerHTML("st", studyTags(s))}`, () => {
+    ${tagPickerHTML("st", allStudyTags(s).length || !s.tagSuggestion || s.tagSuggestion.dismissed ? studyTags(s)
+        : { region: s.tagSuggestion.region || [], topic: s.tagSuggestion.topic || [] })}`, () => {
       s.tags = tagPickerValue(document.getElementById("sheet"), "st");
       upsertStudy(s);
       toast("Tags saved");
@@ -6949,6 +7055,9 @@ function renderStudyDetail() {
     </div>
     <div class="chip-row" style="margin-top:8px;align-items:center">
       ${tagChipsHTML(s)}
+      ${!allStudyTags(s).length && s.tagSuggestion && !s.tagSuggestion.dismissed && ((s.tagSuggestion.region || []).length || (s.tagSuggestion.topic || []).length)
+        ? `<span style="font-size:12.5px;color:var(--text2)">Suggested: ${esc([].concat(s.tagSuggestion.region || [], s.tagSuggestion.topic || []).join(", "))}</span>
+           <a href="#" data-accept-tags="${esc(s.id)}" style="font-size:12.5px;color:var(--green);font-weight:600">Accept</a>` : ""}
       <a href="#" data-edit-tags="${esc(s.id)}" style="font-size:12.5px;color:var(--blue)">${allStudyTags(s).length ? "Edit tags" : "+ Add tags"}</a>
     </div>
     ${(() => {
@@ -7133,6 +7242,11 @@ function renderStudyDetail() {
   document.getElementById("back-btn").onclick = () => { detailStudyId = null; render(); };
   document.getElementById("edit-study-btn").onclick = () => openStudyForm(s);
   document.querySelectorAll("[data-edit-tags]").forEach(a => a.onclick = (e) => { e.preventDefault(); openTagSheet(a.dataset.editTags); });
+  document.querySelectorAll("[data-accept-tags]").forEach(a => a.onclick = (e) => {
+    e.preventDefault(); if (blockOfflineEdit("Accepting tags")) return;
+    const id = a.dataset.acceptTags; approveTagSuggestion(id, null); render();
+    toastAction("Tags added", "Undo", () => undoTagApproval(id));
+  });
   document.getElementById("ask-update-btn").onclick = () => openUpdateRequestSheet(s.id);
   // The same cards as in Settings, so the same handlers drive them.
   bindSuggestions($main);
@@ -10275,7 +10389,7 @@ function renderSettings() {
     </div>
   </div>
 
-  ${isAdmin() ? studyTagsAdminHTML() : ""}
+  ${isAdmin() ? tagReviewHTML() + studyTagsAdminHTML() : ""}
   ${isAdmin() ? `
   <div class="section-title">Initiation Stages</div>
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">
@@ -10660,6 +10774,7 @@ function renderSettings() {
   const addMeetingBtn = document.getElementById("add-meeting-btn");
   if (addMeetingBtn) addMeetingBtn.onclick = () => openMeetingForm(null);
   document.querySelectorAll("[data-tag-rename]").forEach(b => b.onclick = () => openTagRenameSheet(b.dataset.tagGroup, b.dataset.tagRename));
+  bindTagReview();
   document.getElementById("roster-add").onclick = () => {
     const n = document.getElementById("roster-name").value.trim();
     if (!n) return;
