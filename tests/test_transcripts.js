@@ -205,15 +205,13 @@ Carla Edwards: Revisions due by November 14, 2026.`;
     const win = await settings(dom);
     const dirty = `Adam Yanke: ORA-24-0117, major revision from AJSM.
 Carla Edwards: The patient with MRN 00456789 is the one we excluded, DOB: 03/14/1998.`;
-    win.document.getElementById("tx-body").value = dirty;
-    win.document.getElementById("tx-add").click();
+    win.eval(`ingestTranscript(${JSON.stringify(dirty)}, ""); render();`);
     await wait(400);
     const g = suggestions(win)[0];
     check("No MRN stored", !/00456789/.test(g.text), g.text);
     check("No date of birth stored", !/03\/14\/1998/.test(g.text), g.text);
     check("It counts what it removed", g.redacted >= 2, g.redacted);
     check("The study still matched", g.studyId === S1);
-    check("...and the toast says identifiers were removed", /removed/i.test(toastText(win)), toastText(win));
     dom.window.close();
   }
 
@@ -221,11 +219,9 @@ Carla Edwards: The patient with MRN 00456789 is the one we excluded, DOB: 03/14/
   {
     const dom = boot();
     const win = await settings(dom);
-    win.document.getElementById("tx-body").value = "Adam Yanke: Let's talk about the budget and the new fellow.";
-    win.document.getElementById("tx-add").click();
+    win.eval(`ingestTranscript("Adam Yanke: Let's talk about the budget and the new fellow.", ""); render();`);
     await wait(400);
     check("Nothing is created", suggestions(win).length === 0);
-    check("...and it says why", /didn't mention a study/i.test(toastText(win)), toastText(win));
     dom.window.close();
   }
 
@@ -233,8 +229,7 @@ Carla Edwards: The patient with MRN 00456789 is the one we excluded, DOB: 03/14/
   {
     const dom = boot();
     const win = await settings(dom);
-    win.document.getElementById("tx-body").value = "Adam Yanke: ORA-25-0099, rotator cuff. Nothing new this week, carry on.";
-    win.document.getElementById("tx-add").click();
+    win.eval(`ingestTranscript("Adam Yanke: ORA-25-0099, rotator cuff. Nothing new this week, carry on.", ""); render();`);
     await wait(400);
     const gs = suggestions(win);
     check("It's queued as a note", gs.length === 1 && gs[0].changes.every(c => c.field === "addNote"), gs);
@@ -243,36 +238,19 @@ Carla Edwards: The patient with MRN 00456789 is the one we excluded, DOB: 03/14/
     dom.window.close();
   }
 
+  // 27 Oct: the paste/upload box is gone (Adam: "let's make people use the email route"). Forwarded
+  // meetings go through the meeting reader on the server; ingestTranscript is still exercised above.
   console.log("\n-- The screen --");
   {
     const dom = boot();
     const win = await settings(dom);
     const doc = win.document;
-    check("There's a transcript box", !!doc.getElementById("tx-body"));
-    check("...a place to name the meeting", !!doc.getElementById("tx-label"));
-    check("...and a file upload", !!doc.getElementById("tx-file"));
-    check("It says nothing is applied automatically", /Nothing from a transcript is applied/i.test(mainText(win)),
-      mainText(win).slice(0, 900));
-    doc.getElementById("tx-label").value = "Weekly Research Meeting 9/28";
-    doc.getElementById("tx-body").value = TRANSCRIPT;
-    doc.getElementById("tx-add").click();
+    check("No transcript box, label or upload any more", !doc.getElementById("tx-body") && !doc.getElementById("tx-label") && !doc.getElementById("tx-file"));
+    check("It says to forward instead", /studyupdates@studypipeline\.com/.test(mainText(win)));
+    win.eval(`ingestTranscript(${JSON.stringify(TRANSCRIPT)}, "Weekly Research Meeting 9/28"); render();`);
     await wait(400);
-    check("Reading it creates the suggestions", suggestions(win).length === 3, suggestions(win).length);
-    check("The box is cleared for next time", win.document.getElementById("tx-body").value === "",
-      win.document.getElementById("tx-body").value);
-    check("The cards say where they came from", /from a meeting transcript/.test(mainText(win)),
-      mainText(win).slice(0, 1200));
-    dom.window.close();
-  }
-
-  console.log("\n-- Pasting nothing is refused --");
-  {
-    const dom = boot();
-    const win = await settings(dom);
-    win.document.getElementById("tx-add").click();
-    await wait(250);
-    check("Nothing created", suggestions(win).length === 0);
-    check("...and it says what to do", /Paste the transcript first/i.test(toastText(win)), toastText(win));
+    check("A transcript still becomes suggestions", suggestions(win).length === 3, suggestions(win).length);
+    check("The cards say where they came from", /from a meeting transcript/.test(mainText(win)), mainText(win).slice(0, 1200));
     dom.window.close();
   }
 

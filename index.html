@@ -588,7 +588,7 @@
     <button data-tab="tasks"><span class="icon">☑</span>Tasks</button>
     <button data-tab="worklist"><span class="icon">▦</span>Worklist</button>
     <button data-tab="notes"><span class="icon">🗒</span>Notes</button>
-    <button data-tab="research"><span class="icon">◎</span>Research</button>
+    <button data-tab="research"><span class="icon">◎</span>My Lab</button>
     <button data-tab="settings"><span class="icon">⚙</span>Settings</button>
   </nav>
   <button id="feedback-btn" title="Suggest a change or report a problem"
@@ -6504,8 +6504,114 @@ function researchWatchHTML(w){
 // two places and neither was obviously the real one. Everything that page drew is now built here,
 // by pubStatsHTML, and the standalone page survives only for OTHER people's publications — a
 // co-author's record genuinely is a drill-down, so it keeps its Back button.
+// ---------- Research-year CV (Adam, 27 Oct) ----------
+// "I use this throughout the year to help see what projects they are on and proposed authorship
+// order … first author, second author, other author, to get a sense of what they will likely end
+// up with." One page per person: every active project they're on, grouped by where the PROPOSED
+// author list puts them (authorsFor — the study's saved order, or the team with the PI last), then
+// what they've published this year. Built from state.studies, which the database has already
+// limited to what the viewer may see, so nobody learns of a project they couldn't open.
+//
+// Who appears at the top of My Lab: a PI sees their research team (admins who report to them);
+// anyone else sees themselves. A lab admin can open anyone on the roster.
+let cvPerson = "";
+function cvPeople() {
+  const team = adminsReportingToMe();
+  if (team.length) return team;
+  const mine = canonName(me());
+  return mine ? [mine] : [];
+}
+const CV_GROUPS = [
+  { key: "first", label: "First author" },
+  { key: "second", label: "Second author" },
+  { key: "other", label: "Other author" },
+  { key: "team", label: "On the team, not on the author list yet" },
+];
+function cvFor(name) {
+  const who = canonName(name);
+  const key = who.toLowerCase();
+  const onStudy = (s) => authorsFor(s).some(n => n.toLowerCase() === key)
+    || namesFromField(s.team).some(n => n.toLowerCase() === key) || canonName(s.pi).toLowerCase() === key;
+  const active = (state.studies || []).filter(s => !s.publication && s.phase !== "Published" && s.phase !== "On Hold" && onStudy(s));
+  const groups = { first: [], second: [], other: [], team: [] };
+  active.forEach(s => {
+    const list = authorsFor(s);
+    const i = list.findIndex(n => n.toLowerCase() === key);
+    const g = i === 0 ? "first" : i === 1 ? "second" : i > 1 ? "other" : "team";
+    groups[g].push({ s, pos: i, of: list.length });
+  });
+  // Closest to publication first: that's what will most likely be on this year's CV.
+  const rank = (s) => -Math.max(0, PHASES.indexOf(s.phase));
+  Object.values(groups).forEach(l => l.sort((a, b) => rank(a.s) - rank(b.s) || String(a.s.title).localeCompare(String(b.s.title))));
+  const year = String(new Date().getFullYear());
+  const ak = authorKeyForName(who);
+  const published = ak ? publishedPapers("").filter(({ p }) => String(p.year || "") === year).map(({ study, p }) => {
+    const authors = p.authors || [];
+    const i = authors.findIndex(a => authorKey(a) === ak);
+    return i < 0 ? null : { study, p, place: i === 0 ? "First" : i === authors.length - 1 ? "Senior" : i === 1 ? "Second" : "Middle" };
+  }).filter(Boolean) : [];
+  return { name: who, groups, published, year };
+}
+function nextMilestone(s) {
+  return (s.milestones || []).filter(m => !m.done && m.date).sort((a, b) => a.date.localeCompare(b.date))[0] || null;
+}
+function cvCardsHTML() {
+  const people = cvPeople();
+  if (!people.length) return "";
+  return `<div class="section-title">Research-year CV</div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+    ${people.map(n => { const c = cvFor(n);
+      return `<div class="card" style="flex:1;min-width:220px;margin:0;display:flex;align-items:center;gap:10px">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:15px;font-weight:700">${esc(n)}</div>
+          <div style="font-size:12.5px;color:var(--text2);margin-top:2px">${c.groups.first.length} first · ${c.groups.second.length} second · ${c.groups.other.length} other${c.published.length ? ` · ${c.published.length} published ${esc(c.year)}` : ""}</div>
+        </div>
+        <button class="btn secondary" data-cv-open="${esc(n)}" style="width:auto;padding:8px 12px;flex:none">Review CV</button>
+      </div>`; }).join("")}
+  </div>
+  ${(isAppAdmin() || adminsReportingToMe().length) ? `<div style="display:flex;align-items:center;gap:8px;margin:0 2px 14px 2px">
+    <span style="font-size:12.5px;color:var(--text2)">Someone else:</span>
+    <select id="cv-pick" style="flex:1;max-width:280px;border:none;background:var(--card);border-radius:8px;padding:7px 10px;font-size:14px;font-family:inherit;color:var(--text)">
+      <option value="">— pick a person —</option>
+      ${uniqNames(state.roster.concat(activeProfiles().map(p => p.name))).sort((a, b) => a.localeCompare(b)).map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join("")}
+    </select>
+  </div>` : ""}`;
+}
+function renderCv() {
+  const c = cvFor(cvPerson);
+  $title.textContent = c.name;
+  const row = ({ s, pos, of }) => { const m = nextMilestone(s);
+    return `<div class="task-row" data-open-study="${esc(s.id)}" style="padding:9px 0;gap:10px;cursor:pointer">
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14.5px;font-weight:600;line-height:1.35">${esc(s.nickname || s.title)}</div>
+        <div style="font-size:12px;color:var(--text2);margin-top:2px">${pos >= 0 ? `Author ${pos + 1} of ${of}` : "Team only"}${s.journal ? " · " + esc(s.journal) : ""}${m ? " · next: " + esc(m.name) + " " + fmtDate(m.date) : ""}</div>
+      </div>
+      <span class="badge" style="background:${PHASE_COLORS[s.phase] || "var(--text2)"};flex:none">${esc(s.phase || "")}</span>
+    </div>`; };
+  const tile = (n, l) => `<div class="card" style="flex:1;min-width:90px;margin:0;text-align:center;padding:10px 6px">
+      <div style="font-size:24px;font-weight:800">${n}</div><div style="font-size:11.5px;color:var(--text2)">${esc(l)}</div></div>`;
+  $main.innerHTML = `
+    <button class="btn secondary" id="cv-back" style="width:auto;padding:7px 12px;margin-bottom:10px">‹ My Lab</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+      ${tile(c.groups.first.length, "first author")}${tile(c.groups.second.length, "second author")}${tile(c.groups.other.length, "other author")}${tile(c.published.length, "published " + c.year)}
+    </div>
+    <div style="font-size:12px;color:var(--text2);line-height:1.45;margin:4px 2px 4px 2px">Active projects, from each study's proposed author order. Closest to publication first.</div>
+    ${CV_GROUPS.map(g => c.groups[g.key].length ? `<div class="section-title">${esc(g.label)} · ${c.groups[g.key].length}</div>
+      <div class="card" style="padding:4px 14px">${c.groups[g.key].map(row).join("")}</div>` : "").join("")}
+    ${!CV_GROUPS.some(g => c.groups[g.key].length) ? `<div class="card" style="color:var(--text2);font-size:14px">No active projects name ${esc(c.name)} yet.</div>` : ""}
+    <div class="section-title">Published in ${esc(c.year)} · ${c.published.length}</div>
+    <div class="card" style="padding:4px 14px">${c.published.length ? c.published.map(({ study, p, place }) => `
+      <div class="task-row" data-open-study="${esc(study.id)}" style="padding:9px 0;gap:10px;cursor:pointer">
+        <div style="flex:1;min-width:0"><div style="font-size:14px;font-weight:600;line-height:1.35">${esc(p.title || study.title)}</div>
+          <div style="font-size:12px;color:var(--text2);margin-top:2px">${esc(p.journal || "")}</div></div>
+        <span class="badge outline" style="flex:none">${esc(place)}</span>
+      </div>`).join("") : `<div style="color:var(--text2);font-size:14px;padding:8px 0">None yet this year.</div>`}</div>`;
+  document.getElementById("cv-back").onclick = () => { cvPerson = ""; render(); };
+  $main.querySelectorAll("[data-open-study]").forEach(el => el.onclick = () => { cvPerson = ""; openStudy(el.dataset.openStudy); tab = "studies"; render(); });
+}
 function renderResearch() {
-  $title.textContent = "Research";
+  if (cvPerson) { renderCv(); return; }
+  $title.textContent = "My Lab";
   const w = watchData || {};
   const dev = w.inDevelopment || [], newPapers = w.newPapers || [];
   const hasWatch = !!(dev.length || newPapers.length);
@@ -6536,7 +6642,8 @@ function renderResearch() {
 
   // Headline numbers across the top, then two columns the whole way down. Nothing breaks out to
   // full width partway through: a column that widens halfway down the page reads as a mistake.
-  $main.innerHTML = (stats.band || "")
+  $main.innerHTML = cvCardsHTML()
+    + (stats.band || "")
     + confirmPubsNudgeHTML()
     + exploreBoxHTML()
     + `<div class="rw-grid">${side}${main}</div>`
@@ -6549,6 +6656,9 @@ function renderResearch() {
   });
   wireExploreBox();
   wireConfirmPubsNudge($main);
+  $main.querySelectorAll("[data-cv-open]").forEach(b => b.onclick = () => { cvPerson = b.dataset.cvOpen; render(); window.scrollTo && window.scrollTo(0, 0); });
+  const pick = document.getElementById("cv-pick");
+  if (pick) pick.onchange = () => { if (pick.value) { cvPerson = pick.value; render(); } };
 }
 // ---------- Explore: ask now, answer now ----------
 //
@@ -9374,37 +9484,14 @@ function suggestionsSectionHTML() {
     .slice(0, 5);
   return `
   <div class="section-title">Suggested Updates${mine.length ? ` (${mine.length})` : ""}</div>
+  <!-- The paste-an-email and paste-a-transcript boxes were removed 27 Oct (Adam: "these should not
+       come from here, let's make people use the email route, I think it's better"). Everything now
+       arrives by forwarding; what it finds lands below. ingestEmail/ingestTranscript remain for
+       the forwarded path. -->
   <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
-    Paste a journal or IRB email below and the tracker will work out which study it's about and what
-    it says. Dates that fill an empty field are applied straight away; anything that would overwrite
-    a value, or change a decision, waits for you here.
-    <div style="margin-top:10px">
-      <input id="sugg-subject" placeholder="Subject line (optional)" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
-    </div>
-    <div style="margin-top:8px">
-      <textarea id="sugg-body" rows="4" placeholder="Paste the email here…" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14px;font-family:inherit;color:var(--text);outline:none"></textarea>
-    </div>
-    <button class="btn" id="sugg-add" style="margin-top:8px">Read this email</button>
-  </div>
-
-  <div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
-    <b style="color:var(--text)">Meeting transcript</b><br>
-    Paste or upload a transcript of a research meeting and the tracker will split it by study and
-    propose an update for each one it heard something about. Nothing from a transcript is applied
-    automatically — people speak less precisely than journals write, so every proposal waits for
-    someone who was in the room.
-    <div style="margin-top:10px">
-      <input id="tx-label" placeholder="Which meeting? e.g. Weekly Research Meeting 9/28" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
-    </div>
-    <div style="margin-top:8px">
-      <textarea id="tx-body" rows="4" placeholder="Paste the transcript here…" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14px;font-family:inherit;color:var(--text);outline:none"></textarea>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
-      <button class="btn" id="tx-add" style="flex:1;min-width:150px">Read this transcript</button>
-      <button class="btn secondary" id="tx-upload" style="flex:1;min-width:150px">Upload a file…</button>
-    </div>
-    <input type="file" id="tx-file" accept=".txt,.vtt,.srt,.md,text/plain" style="display:none">
-    <div style="font-size:12px;margin-top:8px">Takes a .txt, .vtt or .srt — what Zoom, Teams and most recorders export. Timestamps and speaker labels are ignored.</div>
+    Forward journal, IRB and meeting emails — transcripts and notes included — to
+    <b style="color:var(--text)">studyupdates@studypipeline.com</b> from the address you sign in with.
+    The tracker reads them, updates the studies, and lists what it did here.
   </div>
   ${meetingsSectionHTML()}
   ${mine.length ? mine.map(suggestionCardHTML).join("")
@@ -10209,7 +10296,30 @@ function foldSettingsSections(root) {
     }
     if (group) group.appendChild(el);
   }
+  // Then gather the groups under a few headings (Adam, 27 Oct: "create some headings to put more of
+  // these together, like Account and User Settings"). Anything not listed lands under "More".
+  const groups = [...root.querySelectorAll(":scope > details.settings-group")];
+  if (!groups.length) return;
+  const anchor = groups[0];
+  SETTINGS_CATEGORIES.concat([{ title: "More", keys: null }]).forEach(cat => {
+    const mine = groups.filter(g => cat.keys ? cat.keys.includes(g.dataset.sg)
+      : !SETTINGS_CATEGORIES.some(c => c.keys.includes(g.dataset.sg)));
+    if (!mine.length) return;
+    const h = document.createElement("div");
+    h.className = "settings-category";
+    h.dataset.cat = cat.title;
+    h.style.cssText = "font-size:15px;font-weight:800;margin:22px 2px 4px 2px;color:var(--text)";
+    h.textContent = cat.title;
+    root.insertBefore(h, anchor);
+    mine.forEach(g => { g.style.marginLeft = "6px"; root.insertBefore(g, anchor); });
+  });
 }
+const SETTINGS_CATEGORIES = [
+  { title: "Account & user settings", keys: ["Account", "Deadline Subscriptions", "Admin Access", "Linked Accounts"] },
+  { title: "People & access", keys: ["Team list", "Org Chart", "Invite a Teammate", "Invites Waiting"] },
+  { title: "Lab setup", keys: ["Study Tags", "Initiation Stages", "Merge Duplicate Names"] },
+  { title: "Help, data & about", keys: ["Help & tools", "Data", "About"] },
+];
 // Open whichever folded group holds this element, so a jump-to link lands on something visible.
 function revealInSettings(el) {
   for (let n = el; n; n = n.parentElement) if (n.tagName === "DETAILS") { n.open = true; if (n.dataset.sg) settingsOpenGroups[n.dataset.sg] = true; }

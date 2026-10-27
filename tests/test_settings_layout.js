@@ -46,6 +46,12 @@ function check(name, cond, detail) {
   const groups = [...d.querySelectorAll("details.settings-group")].map(g => g.dataset.sg);
   ["Help & tools", "Account", "Team list", "Study Tags", "Merge Duplicate Names", "Org Chart", "Deadline Subscriptions", "Data", "About"]
     .forEach(k => check(`"${k}" is its own folded group`, groups.includes(k), groups));
+  const cats = [...d.querySelectorAll(".settings-category")].map(c => c.dataset.cat);
+  check("groups sit under headings", ["Account & user settings", "People & access", "Lab setup", "Help, data & about"].every(c => cats.includes(c)), cats);
+  const under = (k) => { let n = d.querySelector(`details.settings-group[data-sg="${k}"]`); while (n && !(n.classList && n.classList.contains("settings-category"))) n = n.previousElementSibling; return n && n.dataset.cat; };
+  check("Account and Deadline Subscriptions are under Account & user settings", under("Account") === "Account & user settings" && under("Deadline Subscriptions") === "Account & user settings");
+  check("Org Chart and Invite are under People & access", under("Org Chart") === "People & access" && under("Invite a Teammate") === "People & access");
+  check("Study Tags and Merge names are under Lab setup", under("Study Tags") === "Lab setup" && under("Merge Duplicate Names") === "Lab setup");
   check("all start closed", [...d.querySelectorAll("details.settings-group")].every(g => !g.open));
   check("buttons inside still work (ids kept)", !!d.getElementById("sign-out-btn") && !!d.getElementById("settings-help").onclick);
   const org = d.querySelector('details.settings-group[data-sg="Org Chart"]');

@@ -225,35 +225,23 @@ American Journal of Sports Medicine`;
     dom.window.close();
   }
 
-  console.log("\n-- Pasting one in through the screen --");
+  // 27 Oct: the paste box is gone (Adam: "let's make people use the email route"). The card that a
+  // forwarded email produces is still checked, by reading the email the way the forward path does.
+  console.log("\n-- No paste box; a forwarded email still shows its card --");
   {
     const dom = boot();
     const win = await settings(dom);
     const doc = win.document;
-    check("There's somewhere to paste", !!doc.getElementById("sugg-body"));
-    doc.getElementById("sugg-subject").value = "Decision on AJSM-26-1234";
-    doc.getElementById("sugg-body").value = REVISION_EMAIL;
-    doc.getElementById("sugg-add").click();
+    check("There's no paste box any more", !doc.getElementById("sugg-body") && !doc.getElementById("sugg-add"));
+    check("...it says where to forward instead", /studyupdates@studypipeline\.com/.test(mainText(win)));
+    win.eval(`ingestEmail(${JSON.stringify(REVISION_EMAIL)}, "Decision on AJSM-26-1234", "paste", ""); render();`);
     await wait(400);
     check("It read it", suggestions(win).length === 1);
-    check("The boxes are cleared for the next one", win.document.getElementById("sugg-body").value === "",
-      win.document.getElementById("sugg-body").value);
     const t = mainText(win);
     check("The card names the study it matched", /Meniscus/.test(t), t.slice(0, 400));
     check("...and how it matched", /tracking ID/.test(t));
     check("...what it already applied", /ALREADY APPLIED/.test(t));
     check("...and what it's waiting on", /NEEDS YOUR DECISION/.test(t));
-    dom.window.close();
-  }
-
-  console.log("\n-- Pasting nothing is refused --");
-  {
-    const dom = boot();
-    const win = await settings(dom);
-    win.document.getElementById("sugg-add").click();
-    await wait(250);
-    check("Nothing was created", suggestions(win).length === 0);
-    check("...and it says what to do", /Paste the email first/i.test(toastText(win)), toastText(win));
     dom.window.close();
   }
 
