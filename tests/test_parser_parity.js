@@ -65,7 +65,12 @@ const STUDIES = [
     journal: "", journalTrackingId: "", submittedDate: "", decision: "", revisionsDeadline: "", irbExpiry: "" },
   { id: "s3", title: "Setting Tibial Tubercle Osteotomy Expectations: Development of the STABLE Index",
     nickname: "Clustering paper STABLE", irb: "", journal: "", journalTrackingId: "",
-    submittedDate: "", decision: "", revisionsDeadline: "", irbExpiry: "" }
+    submittedDate: "", decision: "", revisionsDeadline: "", irbExpiry: "" },
+  // Saddle Point MPFL as it stood on 26 Oct, when AJSM's .R1 receipt arrived and nothing happened.
+  { id: "s4", title: "The MPFL Saddle Point: Revisiting the Radiographic landmark for femoral tunnel placement",
+    nickname: "Saddle Point MPFL", irb: "", journal: "AJSM", journalTrackingId: "AJSM-26-0829",
+    submittedDate: "2026-05-04", decision: "Major revision", decisionDate: "2026-09-28",
+    phase: "Revisions Required", revisionsDeadline: "", irbExpiry: "" }
 ];
 // A fresh copy each time, so one run can't contaminate the next through a mutated study.
 const fresh = () => JSON.parse(JSON.stringify(STUDIES));
@@ -87,6 +92,7 @@ function runPHI(factory, text) {
   return { text: r.text, redacted: r.redacted, kinds: (r.kinds || []).slice().sort() };
 }
 
+const R1 = `From: The American Journal of Sports Medicine <onbehalfof@manuscriptcentral.com>\nDate: Monday, October 26, 2026 at 7:42 PM\nSubject: [BULK] The American Journal of Sports Medicine - Manuscript ID AJSM-26-0829.R1\n\nDear Dr. Yanke:\n\nYour revised manuscript entitled "The MPFL Saddle Point: Revisiting the Radiographic landmark for femoral tunnel placement" has been successfully submitted and is presently being given full consideration for publication in The American Journal of Sports Medicine.\n\nYour manuscript ID is AJSM-26-0829.R1. Please mention the above manuscript ID in all future correspondence.`;
 // ---- The fixtures. Add a case here whenever a real email surprises us. ----
 const CASES = [
   ["tracking id", `Manuscript AJSM-26-1234 has been reviewed. The reviewers recommend major revision. A revised manuscript is due by November 14, 2026.`, "Decision"],
@@ -105,7 +111,8 @@ const CASES = [
   ["unrelated", `Lunch is at noon in the conference room.`, ""],
   ["date formats", `AJSM-26-1234 revisions due by 14 Nov 2026.`, ""],
   ["us numeric date", `AJSM-26-1234 revisions due by 11/14/2026.`, ""],
-  ["iso date", `AJSM-26-1234 revisions due by 2026-11-14.`, ""]
+  ["iso date", `AJSM-26-1234 revisions due by 2026-11-14.`, ""],
+  ["revised manuscript received (.R1)", R1, "FW: [BULK] The American Journal of Sports Medicine - Manuscript ID AJSM-26-0829.R1"]
 ];
 
 (async () => {
@@ -115,6 +122,20 @@ const CASES = [
     const B = run(serverFactory, text, subject);
     check(name, JSON.stringify(A) === JSON.stringify(B), { app: A, server: B });
   });
+
+  console.log("\n-- A revised manuscript is a revision, not a new submission (27 Oct) --");
+  {
+    const r = run(appFactory, R1, "FW: [BULK] The American Journal of Sports Medicine - Manuscript ID AJSM-26-0829.R1");
+    const by = Object.fromEntries(r.changes.map(c => [c.field, c]));
+    check("matched to Saddle Point MPFL", r.studyId === "s4", r);
+    check("decision goes back to Awaiting decision, applied on its own", by.decision && by.decision.to === "Awaiting decision" && by.decision.safe === true, r.changes);
+    check("Revisions Required moves to Submitted, applied on its own", by.phase && by.phase.to === "Submitted" && by.phase.safe === true, r.changes);
+    check("a note records the round and the date", by.addNote && /Revised manuscript \(R1\) submitted to AJSM on 2026-10-26/.test(by.addNote.to) && by.addNote.safe, r.changes);
+    check("the original submitted date is never touched", !by.submittedDate, r.changes);
+    check("nothing waits for confirmation", r.changes.every(c => c.safe), r.changes);
+    const first = run(appFactory, `From: Arthroscopy Journal <em@editorialmanager.com>\nDate: Tuesday, September 29, 2026 at 8:11 AM\nSubject: Submission Confirmation\n\nYour submission entitled "Cartilage thickness mapping study" has been received by Arthroscopy: The Journal of Arthroscopic and Related Surgery.`, "Submission Confirmation");
+    check("a first submission is still read as one", first.changes.some(c => c.field === "submittedDate") && !first.changes.some(c => c.field === "phase"), first.changes);
+  }
 
   console.log("\n-- ...and strip the same things --");
   [

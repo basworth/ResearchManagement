@@ -17,7 +17,7 @@ export function setStudies(list: any[]) { STUDIES = list || []; }
 // so improving the parser re-reads everything it looked at before and got nothing from — otherwise
 // a message read by an older, dumber version stays permanently misjudged, which is exactly what
 // happened to the first Arthroscopy confirmation.
-export const PARSER_VERSION = 7;
+export const PARSER_VERSION = 8;
 
 // ---------- Protected health information ----------
 // The tracker is deliberately study-level and holds no PHI. A forwarded email might, so it is
@@ -420,6 +420,14 @@ function readSubmissionConfirmation(body) {
   }
   return { journal: "" };
 }
+// "Your revised manuscript … has been successfully submitted", or a manuscript id ending .R1/.R2.
+// Returns the round ("R1") when the id carries one.
+function readRevisionReceipt(body) {
+  const id = /\b[A-Z][A-Z0-9]{1,15}-\d{2,4}-\d{2,6}\.(R\d{1,2})\b/.exec(body);
+  const words = /\brevised (?:manuscript|submission|paper|version)\b|\brevision (?:has been|was) (?:received|submitted)/i.test(body);
+  if (!id && !words) return null;
+  return { round: id ? id[1] : "" };
+}
 // The date the email itself was sent, used as the submission date. Read from the forwarded header
 // block rather than from anywhere in the body, so a date mentioned in passing can't be mistaken
 // for the day it was submitted.
@@ -495,7 +503,26 @@ export function readEmail(text, subject) {
     // A submission confirmation, read before decisions: "has been received by Arthroscopy" is not
     // a decision, and reading it as one would be a serious mistake.
     const sub = readSubmissionConfirmation(body);
-    if (sub) {
+    // A REVISED manuscript received is not a new submission. The journal is telling us the
+    // revision is in and the paper is back under review — AJSM's ".R1" receipt for Saddle Point
+    // MPFL, 26 Oct, was read as a first submission and only offered to overwrite the original
+    // submitted date, so nothing happened. Adam: "how much more clear can it be than an email
+    // from the journal saying they have our re-submission". So for a revision: the decision goes
+    // back to Awaiting decision, a study in Revisions Required moves to Submitted, and a note
+    // records the round and the date. All three apply on their own; the original submitted date
+    // is never touched.
+    const rev = sub && readRevisionReceipt(body);
+    if (rev) {
+      const when = emailSentDate(body);
+      const pending = ["Major revision", "Minor revision", ""];
+      if (pending.indexOf(s.decision || "") >= 0) changes.push(proposal("decision", "Journal decision", "Awaiting decision", true, "the journal has the revision"));
+      if (s.phase === "Revisions Required") changes.push(proposal("phase", "Phase", "Submitted", true, "the revision is back with the journal"));
+      if (sub.journal && !(s.journal || "").trim()) changes.push(proposal("journal", "Journal", sub.journal, true, "named in the confirmation"));
+      const jn = (s.journal || sub.journal || "the journal").trim();
+      changes.push(proposal("addNote", "Note on the study",
+        `Revised manuscript${rev.round ? " (" + rev.round + ")" : ""} submitted to ${jn}${when ? " on " + when : ""}.`, true,
+        "a record of the revision round"));
+    } else if (sub) {
       const when = emailSentDate(body);
       const already = (s.journal || "").trim();
       const movedJournal = sub.journal && already && already.toLowerCase() !== sub.journal.toLowerCase();
