@@ -16,6 +16,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
+import { sendViaDomain } from "./warmup-mail.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -173,6 +174,8 @@ async function closeSmtp(): Promise<void> {
   smtp = null;
 }
 async function sendEmail(to: string, subject: string, html: string): Promise<void> {
+  // From studypipeline.com when that's switched on (warmup-mail.ts); Gmail otherwise or on failure.
+  if (await sendViaDomain({ kind: "task", fromName: FROM_NAME, to, subject, html, replyTo: SMTP_USER })) return;
   const client = await smtpClient();
   await client.send({
     from: `${FROM_NAME} <${SMTP_USER}>`,

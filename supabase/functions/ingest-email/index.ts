@@ -19,6 +19,7 @@
 // they drift apart. This function stores the message; the app reads it.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
+import { sendViaDomain } from "./warmup-mail.ts";
 import { setStudies, setMatchHints, setMeetings, stripPHI as stripPHIRules, readEmail, applyChangeTo, PARSER_VERSION } from "./rules.ts";
 import { looksLikeMeeting, studyContext, extractPrompt, callModel, applyMeeting, summaryEmail, threadRecipients, redactAll, tagVocabulary, MEETING_UNDO_HOURS } from "./meeting.ts";
 
@@ -72,7 +73,13 @@ async function sha256(text: string): Promise<string> {
 
 async function sendMail(opts: { to: string[]; cc?: string[]; subject: string; html: string; text: string;
                                 inReplyTo?: string; references?: string }) {
-  if (!SMTP_USER || !SMTP_PASSWORD || !opts.to.length) return false;
+  if (!opts.to.length) return false;
+  // From studypipeline.com when that's switched on (warmup-mail.ts), still threaded under the
+  // meeting email; replies go to the tracker's Gmail inbox. Gmail otherwise or on failure.
+  if (await sendViaDomain({ kind: "meeting", fromName: FROM_NAME, to: opts.to, cc: opts.cc, subject: opts.subject,
+        html: opts.html, text: opts.text, replyTo: SMTP_USER || undefined,
+        inReplyTo: opts.inReplyTo, references: opts.references })) return true;
+  if (!SMTP_USER || !SMTP_PASSWORD) return false;
   const smtp = new SMTPClient({
     connection: { hostname: SMTP_HOST, port: SMTP_PORT, tls: true, auth: { username: SMTP_USER, password: SMTP_PASSWORD } },
   });
@@ -232,6 +239,8 @@ async function notifyForwarder(to: string, name: string, subject: string, matche
   // space, which quoted-printable encodes as "=20" — and a mail client that doesn't decode it
   // renders a literal "=20" in the middle of the message. That showed up in the first real one.
   const wire = html.replace(/\s*\n\s*/g, "").replace(/ {2,}/g, " ");
+  if (await sendViaDomain({ kind: "meeting", fromName: FROM_NAME, to, subject: matched ? `Read: ${matched}` : "Read your forwarded email",
+        html: wire, replyTo: SMTP_USER || undefined })) return;
   const smtp = new SMTPClient({
     connection: { hostname: SMTP_HOST, port: SMTP_PORT, tls: true, auth: { username: SMTP_USER, password: SMTP_PASSWORD } },
   });
