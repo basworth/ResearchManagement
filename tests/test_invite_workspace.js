@@ -20,6 +20,17 @@ check("only an admin may invite into a different lab", /Only admins can invite i
 check("a workspace name is validated before it reaches a security rule",
   /\^\[a-z0-9\]\[a-z0-9-\]\{1,40\}\$/.test(fn));
 check("the lab is written onto the account", /user_metadata: \{ workspace \}/.test(fn));
+check("...in app_metadata too, the copy the user can't edit (017)", /app_metadata: \{ workspace \}/.test(fn));
+{
+  const sqlPath = PROJECT + "/supabase/migrations/017-invited-lab-before-profile.sql";
+  if (fs.existsSync(sqlPath)) {
+    const sql = fs.readFileSync(sqlPath, "utf8").replace(/--[^\n]*/g, "");
+    check("before a profile exists, the database uses the invited lab", /public\.invited_workspace\(\),\s*'sports-yanke'\)/.test(sql)
+      && (sql.match(/public\.invited_workspace\(\)/g) || []).length >= 2);
+    check("...read from app_metadata only, never user_metadata", /raw_app_meta_data->>'workspace'\) , ''\)|raw_app_meta_data->>'workspace'/.test(sql)
+      && !/invited_workspace[\s\S]*?raw_user_meta_data[\s\S]*?\$\$;/.test(sql.slice(0, sql.indexOf("create or replace function public.my_workspace()"))));
+  }
+}
 check("...at creation, not afterwards", /createUser\(\{\s*email, email_confirm: true, user_metadata/.test(fn.replace(/\n\s*/g, " ")));
 
 console.log("\n-- First sign-in, app side --");

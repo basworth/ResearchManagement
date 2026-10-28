@@ -308,8 +308,12 @@ Deno.serve(async (req) => {
     // the person still can't get in until they receive the code and choose a password.
     // The workspace travels on the account itself, so it is already decided before the person
     // first signs in and the app has something authoritative to stamp their profile with.
+    //
+    // app_metadata as well (28 Oct 2026, migration 017): until the person has a profile, the
+    // database places them in this lab, and only app_metadata can be trusted for that —
+    // user_metadata is editable by the user themselves.
     const { error: createErr } = await admin.auth.admin.createUser({
-      email, email_confirm: true, user_metadata: { workspace },
+      email, email_confirm: true, user_metadata: { workspace }, app_metadata: { workspace },
     });
     if (createErr) throw createErr;
 
