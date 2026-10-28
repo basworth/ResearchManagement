@@ -61,6 +61,8 @@ function makeMockSupabase(opts) {
         is(col, val) { q.rows = q.rows.filter(r => (r[col] ?? null) === val); return q; },
         eq(col, val) { q.rows = q.rows.filter(r => r[col] === val); return q; },
         gt(col, val) { q.rows = q.rows.filter(r => r[col] > val); return q; },
+        order(col, o) { const asc = !(o && o.ascending === false); q.rows.sort((a, b) => (a[col] > b[col] ? 1 : a[col] < b[col] ? -1 : 0) * (asc ? 1 : -1)); return q; },
+        limit(n) { q.rows = q.rows.slice(0, n); return q; },
         maybeSingle: () => Promise.resolve(session ? { data: q.rows[0] ?? null, error: null } : { data: null, error: authError }),
         then: (res, rej) => Promise.resolve(session ? { data: q.rows, error: null } : { data: null, error: authError }).then(res, rej),
       };

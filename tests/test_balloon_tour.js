@@ -66,7 +66,7 @@ const title = (w) => { const h = w.document.querySelector("#balloon h3"); return
   check("it walks every section", JSON.stringify(seen) === JSON.stringify(["Dashboard", "Studies", "Tasks", "Worklist",
     "Meeting notes", "My Lab", "Settings", "Add", "Help", "Suggest a change"]), seen);
   check("every step tells you how to customize it", w.eval("balloonSteps().every(s => s.what && s.custom)"));
-  check("Done records it on the profile", w.eval(`(profileFor("${USER}") || {}).balloonsSeen`) === 1);
+  check("Done records it on the profile", w.eval(`(profileFor("${USER}") || {}).balloonsSeen`) === w.eval("balloonsVersion()"));
   check("the + it revealed on My Lab is hidden again", w.eval('tab') !== "research" || w.document.getElementById("add-btn").style.visibility === "hidden", w.eval('tab'));
   check("the tour never changes your tab", w.eval('tab') === "research", w.eval('tab'));
   check("...and the ring is gone", !w.document.getElementById("balloon-ring") && !w.document.getElementById("balloon-catch"));
@@ -87,17 +87,17 @@ const title = (w) => { const h = w.document.querySelector("#balloon h3"); return
   check("the count leaves it out", /3 of 9/.test(w2.document.querySelector(".bl-count").textContent), w2.document.querySelector(".bl-count").textContent);
   w2.document.getElementById("bl-skip").click();
   check("Skip closes it", !w2.document.getElementById("balloon"));
-  check("...and counts as seen", w2.eval(`(profileFor("${USER}") || {}).balloonsSeen`) === 1);
+  check("...and counts as seen", w2.eval(`(profileFor("${USER}") || {}).balloonsSeen`) === w2.eval("balloonsVersion()"));
 
   console.log("\n-- Escape counts as seen --");
   const w3 = boot([profile({ tourSeen: 1 })]);
   await wait(800);
   w3.document.dispatchEvent(new w3.KeyboardEvent("keydown", { key: "Escape" }));
   check("Escape closes it", !w3.document.getElementById("balloon"));
-  check("...and records it", w3.eval(`(profileFor("${USER}") || {}).balloonsSeen`) === 1);
+  check("...and records it", w3.eval(`(profileFor("${USER}") || {}).balloonsSeen`) === w3.eval("balloonsVersion()"));
 
   console.log("\n-- Already seen: nothing --");
-  const w4 = boot([profile({ tourSeen: 1, balloonsSeen: 1 })]);
+  const w4 = boot([profile({ tourSeen: 1, balloonsSeen: 99 })]);
   await wait(800);
   check("no balloon", !w4.document.getElementById("balloon"));
   console.log("\n-- Brought back from Help --");

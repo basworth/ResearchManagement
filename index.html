@@ -5339,6 +5339,97 @@ let studySectionState = {};
 let sectionStateForStudy = null;
 // A collapsed section that holds something says so, so you don't have to open each one to find
 // out where the content is.
+/* ============ Change history (migration 018) ============
+ * Adam, 28 Oct: "can you keep an audit history of who changed what?" The database records every
+ * real change to items in audit_log — who, when, and only the fields that changed. These read it.
+ * What a person can read follows what they can see: a study's history for anyone who can see the
+ * study, the whole lab's for its managers.
+ */
+const AUDIT_FIELD_LABELS = {
+  title: "Title", phase: "Phase", pi: "PI", team: "Team", authors: "Authors", design: "Design",
+  priority: "Priority", irb: "IRB #", nct: "NCT #", notes: "Notes", milestones: "Milestones",
+  tags: "Tags", tagSuggestion: "Suggested tags", enrollCurrent: "Enrolled", enrollTarget: "Enrollment target",
+  done: "Done", due: "Due date", assignee: "Assigned to", journal: "Journal", decision: "Decision",
+  abstracts: "Abstracts", publication: "Publication", admin: "Lab admin", position: "Position",
+  reportsTo: "Reports to", name: "Name", alertEmail: "Alerts to", _lab: "Lab",
+};
+function auditFieldLabel(k) {
+  if (AUDIT_FIELD_LABELS[k]) return AUDIT_FIELD_LABELS[k];
+  if (/^reviewed:/.test(k)) return "Approved an item";
+  return String(k).replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, c => c.toUpperCase());
+}
+function auditValue(v) {
+  if (v === null || v === undefined || v === "") return "blank";
+  if (typeof v === "boolean") return v ? "yes" : "no";
+  if (typeof v === "number") return String(v);
+  if (typeof v === "string") return v.length > 70 ? v.slice(0, 67) + "…" : v;
+  if (Array.isArray(v) && v.every(x => typeof x === "string")) {
+    const j = v.join(", ");
+    return j ? (j.length > 70 ? j.slice(0, 67) + "…" : j) : "none";
+  }
+  return null;   // structured — say it changed rather than print it
+}
+function auditActorName(row) {
+  if (!row.actor) return "Email reader / admin";
+  const p = (state.profiles || []).find(x => x.id === row.actor);
+  return (p && p.name) || row.actor_email || "Someone";
+}
+function auditSubject(row) {
+  const d = (row.changes && (row.changes._created || row.changes._deleted)) || {};
+  const rec = d.to || d.from || {};
+  if (row.kind === "study") {
+    const s = studyById(row.item_id);
+    return s ? s.title : (rec.title || "a study");
+  }
+  if (row.kind === "task") {
+    const t = (state.tasks || []).find(x => x.id === row.item_id);
+    return "task “" + ((t && t.title) || rec.title || "untitled") + "”";
+  }
+  if (row.kind === "profile") {
+    const p = (state.profiles || []).find(x => x.id === row.item_id);
+    return "profile of " + ((p && p.name) || rec.name || "someone");
+  }
+  if (row.kind === "meta") return "lab settings";
+  if (row.kind === "suggestion") return "a suggested update";
+  return row.kind || "an item";
+}
+function auditLines(row) {
+  const c = row.changes || {};
+  if (row.action === "insert") return ["created"];
+  if (row.action === "delete") return ["deleted"];
+  return Object.keys(c).map(k => {
+    const f = auditValue(c[k] && c[k].from), t = auditValue(c[k] && c[k].to);
+    if (/^reviewed:/.test(k)) return "approved an item";
+    if (f === null || t === null) return "changed " + auditFieldLabel(k).toLowerCase();
+    return auditFieldLabel(k) + ": " + f + " → " + t;
+  });
+}
+function auditRowsHTML(rows, showSubject) {
+  if (!rows.length) return `<div style="color:var(--text2);font-size:13.5px;padding:6px 0">No changes recorded yet. History starts from 28 Oct 2026.</div>`;
+  return rows.map(r => {
+    const when = new Date(r.at);
+    const lines = auditLines(r);
+    return `<div style="padding:8px 0;border-bottom:1px solid var(--line)">
+      <div style="font-size:12.5px;color:var(--text2)"><b style="color:var(--text)">${esc(auditActorName(r))}</b> · ${esc(when.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }))}${showSubject ? ` · ${esc(auditSubject(r))}` : (r.kind && r.kind !== "study" ? ` · ${esc(auditSubject(r))}` : "")}</div>
+      ${lines.map(l => `<div style="font-size:13.5px;margin-top:2px">${esc(l)}</div>`).join("")}
+    </div>`;
+  }).join("");
+}
+async function loadAuditInto(el, studyId) {
+  if (!el) return;
+  if (!sb) { el.innerHTML = `<div style="color:var(--text2);font-size:13.5px">History needs a connection.</div>`; return; }
+  el.innerHTML = `<div style="color:var(--text2);font-size:13.5px;padding:6px 0">Loading…</div>`;
+  try {
+    let q = sb.from("audit_log").select("*").order("at", { ascending: false }).limit(studyId ? 100 : 200);
+    if (studyId) q = q.eq("study_id", studyId);
+    else q = q.eq("workspace", viewWorkspace || myWorkspace);
+    const { data, error } = await q;
+    if (error) throw error;
+    el.innerHTML = auditRowsHTML(data || [], !studyId);
+  } catch (e) {
+    el.innerHTML = `<div style="color:var(--text2);font-size:13.5px;padding:6px 0">Couldn't load the history just now.</div>`;
+  }
+}
 function collapsibleSection(id, title, bodyHTML, badge) {
   const open = !!studySectionState[id];
   const hint = (!open && badge) ? `<span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text2);font-size:11px;margin-left:6px">${esc(String(badge))}</span>` : "";
@@ -7423,6 +7514,7 @@ function renderStudyDetail() {
     <button class="btn secondary" id="add-task-here" style="margin:12px 0 0 0;padding:10px">+ Add Task</button>
   </div>
   ${studyMeetingHistoryHTML(s)}
+  ${collapsibleSection("history", "Change history", `<div id="study-history-body" data-study-history="${esc(s.id)}"></div>`)}
   <button class="btn danger" id="del-study-btn">Delete Study</button>`;
 
   $main.innerHTML = html;
@@ -7939,6 +8031,14 @@ function renderStudyDetail() {
   bindAuthorsSection($main, s);
   bindTaskRows();
   bindCollapsibleSections($main);
+  // Loaded only when opened (and when it's already open on render) — it's a network read.
+  const histToggle = $main.querySelector('[data-sec-toggle="history"]');
+  const histBody = $main.querySelector("#study-history-body");
+  if (histBody) {
+    const load = () => { if (studySectionState.history && !histBody.dataset.loaded) { histBody.dataset.loaded = "1"; loadAuditInto(histBody, histBody.dataset.studyHistory); } };
+    if (histToggle) histToggle.addEventListener("click", load);
+    load();
+  }
 }
 
 function taskRowHTML(t) {
@@ -10348,7 +10448,7 @@ const SETTINGS_CATEGORIES = [
   { title: "Account & user settings", keys: ["Account", "Deadline Subscriptions", "Admin Access", "Linked Accounts"] },
   { title: "People & access", keys: ["Team list", "Org Chart", "Invite a Teammate", "Invites Waiting"] },
   { title: "Lab setup", keys: ["Study Tags", "Initiation Stages", "Merge Duplicate Names"] },
-  { title: "Help, data & about", keys: ["Help & tools", "Data", "About"] },
+  { title: "Help, data & about", keys: ["Help & tools", "Change History", "Data", "About"] },
 ];
 // Open whichever folded group holds this element, so a jump-to link lands on something visible.
 function revealInSettings(el) {
@@ -10858,6 +10958,13 @@ function renderSettings() {
   <div id="meeting-search-empty" style="display:none;color:var(--text2);font-size:14px;text-align:center;padding:16px 12px">No meetings match your search.</div>
   <button class="btn secondary" id="add-meeting-btn">+ Add Meeting Deadline</button>` : ""}
 
+  ${isAdmin() ? `<div class="section-title">Change History</div>
+  <div class="card" id="lab-history" style="padding:10px 14px">
+    <div style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:8px">Every change to your lab's studies, tasks and settings — who made it and when. Recorded from 28 Oct 2026.</div>
+    <button class="mini-btn" id="lab-history-load" style="margin:0">Show recent changes</button>
+    <div id="lab-history-body"></div>
+  </div>` : ""}
+
   <div class="section-title">Data</div>
   <button class="btn secondary" id="export-btn">Export Data (JSON backup)</button>
   <button class="btn secondary" id="import-btn">Import Data</button>
@@ -10872,6 +10979,8 @@ function renderSettings() {
     Tip: in Safari tap Share → <b>Add to Home Screen</b> to use this as an app.
   </div>`;
 
+  const labHist = document.getElementById("lab-history-load");
+  if (labHist) labHist.onclick = () => { labHist.style.display = "none"; loadAuditInto(document.getElementById("lab-history-body"), null); };
   document.getElementById("me-name").onchange = (e) => {
     upsertProfile(e.target.value.trim());
     personFilter = "mine";
@@ -13583,6 +13692,9 @@ function markTourSeen() {
 function balloonNews() {
   return [
     // { since: 2, tab: "research", sel: ["#some-new-button"], title: "…", what: "…", custom: "…" },
+    { since: 2, sel: ['nav.tabbar [data-tab="settings"]'], title: "Change history",
+      what: "Every change to a study, task or lab setting is now recorded: who made it, when, and what it was before.",
+      custom: "Open <b>Change history</b> at the bottom of any study. Lab admins see the whole lab's under <b>Settings › Help, data &amp; about › Change History</b>." },
   ];
 }
 function balloonsVersion() {
