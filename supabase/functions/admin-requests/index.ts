@@ -80,8 +80,43 @@ Deno.serve(async (req) => {
         throw insErr;
       }
 
-      const { data: prof } = await db.from("items").select("data").eq("kind", "profile").eq("id", callerId).maybeSingle();
+      const { data: prof } = await db.from("items").select("data, workspace").eq("kind", "profile").eq("id", callerId).maybeSingle();
       const name = (prof?.data as any)?.name || callerEmail;
+
+      // The lab rule decides, not a second approval (Adam, 29 Oct: "why would I do a separate
+      // approval when there was already specific wording … saying who can be an admin on a given
+      // lab?"). Lab admin = the PI and their research team — the same in every lab. So a research
+      // assistant, a coordinator / research manager, or the lab's own PI (as named in lab_pis) is
+      // made lab admin of THEIR OWN lab at once; Adam gets an FYI, not a task. Anyone else (students,
+      // residents, fellows, other clinicians) still waits for Adam. The lab is the one their profile
+      // is in, which the invite fixed (017) — choosing a position can't move anyone between labs.
+      const pos = String((prof?.data as any)?.position ?? "");
+      const ws = String((prof as any)?.workspace ?? "");
+      const { data: piRow } = ws ? await db.from("lab_pis").select("pi_name").eq("workspace", ws).maybeSingle() : { data: null };
+      const isLabPi = !!piRow && String(piRow.pi_name).trim().toLowerCase() === String(name).trim().toLowerCase();
+      const isResearchStaff = /^research assistant$/i.test(pos) || /\bCRCM?\b|coordinator|research manager/i.test(pos);
+      if (prof && ws && (isLabPi || isResearchStaff)) {
+        const nowIso = new Date().toISOString();
+        await db.from("admin_requests").update({ status: "approved", decided_at: nowIso })
+          .eq("user_id", callerId).eq("status", "pending");
+        const { error: setErr } = await db.from("items")
+          .update({ data: { ...(prof.data as any), admin: true }, updated_at: nowIso })
+          .eq("kind", "profile").eq("id", callerId);
+        if (setErr) throw setErr;
+        const why = isLabPi ? "the lab's PI" : `${pos.toLowerCase()} in the lab`;
+        await sendMail(APPROVER, `${name} is now a lab admin (${ws})`, `
+          <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px">
+            <h2 style="font-size:17px;margin:0 0 10px">Lab admin added — nothing for you to do</h2>
+            <p style="font-size:14px;color:#3a3a3c;line-height:1.5">
+              <b>${esc(name)}</b> (${esc(callerEmail)}) is ${esc(why)} <b>${esc(ws)}</b>, so under your lab rule
+              they're now its lab admin: they see and edit that lab's studies, and no other lab's.
+            </p>
+            <p style="font-size:12.5px;color:#8e8e93;line-height:1.45">If that's wrong, remove it from the Org Chart in Settings.</p>
+          </div>`).catch((e) => console.error("fyi failed", e));
+        console.log(`admin request from ${callerEmail} approved by the lab rule (${why}, ${ws})`);
+        return json({ ok: true, auto: true, message: "Done — research staff are lab admins of their own lab. Reload to see every study in your lab." });
+      }
+
       await sendMail(APPROVER, `Admin access requested by ${name}`, `
         <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px">
           <h2 style="font-size:17px;margin:0 0 10px">Admin access requested</h2>
