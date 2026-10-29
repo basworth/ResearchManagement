@@ -9792,6 +9792,10 @@ function suggestionsSectionHTML() {
     Forward journal, IRB and meeting emails — transcripts and notes included — to
     <b style="color:var(--text)">studyupdates@studypipeline.com</b> from the address you sign in with.
     The tracker reads them, updates the studies, and lists what it did here.
+    <div style="margin-top:8px"><b style="color:var(--text)">Files too:</b> photos, screenshots, infographics,
+    PDFs, Word, Excel, PowerPoint and CSV files on the email are read and saved to the study's Documents.
+    Each one is checked first — anything that might identify a patient is never saved. If it can't
+    tell which study a file is for, it waits below with a <b style="color:var(--text)">File under…</b> menu.</div>
   </div>
   ${meetingsSectionHTML()}
   ${mine.length ? mine.map(suggestionCardHTML).join("")
@@ -13764,6 +13768,20 @@ function tourSteps() {
         task goes away again.</p>
         <p>The calendar itself is shared across the whole department. <b>Which projects you've
         tagged to it is not</b> — only your own lab sees those.</p>`,
+    },
+    {
+      title: "Forwarding emails and files",
+      body: `<p>Forward journal, IRB and meeting emails to <b>studyupdates@studypipeline.com</b>
+        from the address you sign in with. The tracker reads them, updates the right study, and
+        replies with what it did. You can undo or edit anything in <b>Settings</b>.</p>
+        <p><b>Files on the email are read too</b> — photos, screenshots, infographics, PDFs, Word,
+        Excel, PowerPoint and CSV files. What's in them counts just like text you'd typed, and the
+        file is saved to the study's <b>Documents</b>. If it can't tell which study a file belongs
+        to, it waits in Settings with a <b>File under…</b> menu and a red number.</p>
+        <p class="tour-rule">Every file is checked for patient information before anything is
+        saved. Anything that might identify a patient — names, MRNs, dates of birth, clinic photos,
+        chart screenshots — is never saved, and the reply says so. Still: keep patient information
+        out of what you forward.</p>`,
     },
     {
       title: "Who sees what",
