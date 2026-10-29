@@ -68,7 +68,8 @@ async function send(to: string, subject: string, html: string) {
   // From studypipeline.com when that's switched on (warmup-mail.ts); Gmail otherwise or on failure.
   if (await sendViaDomain({ kind: "stage", fromName: FROM_NAME, to, subject, html, replyTo: REPLY_TO || SMTP_USER })) return;
   const msg: Record<string, unknown> = {
-    from: `${FROM_NAME} <${SMTP_USER}>`, to, subject, html,
+    // One line, single spaces — otherwise Gmail's SMTP path shows "=20" in some clients.
+    from: `${FROM_NAME} <${SMTP_USER}>`, to, subject, html: html.replace(/\s*\n\s*/g, " ").replace(/ {2,}/g, " "),
     content: html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
   };
   if (REPLY_TO) msg.replyTo = REPLY_TO;

@@ -31,7 +31,10 @@ const json = (b: unknown, s = 200) =>
 const esc = (s: string) => String(s ?? "").replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
 
+// One line, single spaces: indented HTML leaves lines ending in a space, which Gmail's SMTP path
+// quoted-printable-encodes as "=20" and some mail clients print literally (28 Oct 2026).
 async function sendMail(to: string, subject: string, html: string) {
+  html = html.replace(/\s*\n\s*/g, " ").replace(/ {2,}/g, " ");
   const smtp = new SMTPClient({
     connection: { hostname: SMTP_HOST, port: SMTP_PORT, tls: true, auth: { username: SMTP_USER, password: SMTP_PASSWORD } },
   });
@@ -87,7 +90,7 @@ Deno.serve(async (req) => {
           </p>
           ${reason ? `<p style="font-size:13.5px;color:#3a3a3c;background:#f2f2f7;border-radius:9px;padding:11px 13px">${esc(reason)}</p>` : ""}
           <p style="font-size:14px;color:#3a3a3c;line-height:1.5">
-            Approve or decline it in <a href="${SITE_URL}">Settings &rsaquo; Admin Requests</a>. Nothing changes until you do.
+            Approve or decline it in <a href="${SITE_URL}">Settings &rsaquo; Account &amp; user settings &rsaquo; Admin Access</a>. Nothing changes until you do.
           </p>
           <p style="font-size:11.5px;color:#8e8e93;line-height:1.45;margin-top:18px">
             Only you can approve admin requests. Admin rights can't be granted any other way.
@@ -133,7 +136,7 @@ Deno.serve(async (req) => {
           approve ? "You now have admin access" : "Admin access request declined",
           `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px">
              <p style="font-size:14px;color:#3a3a3c;line-height:1.5">${approve
-               ? `Your request for admin access on the Research Tracker was approved. Reload the app and you'll see every project.`
+               ? `Your request for admin access on the Research Tracker was approved. Reload the app and you'll see every project in your lab.`
                : `Your request for admin access on the Research Tracker was declined. Nothing about your account has changed.`}</p>
            </div>`).catch((e) => console.error("notify failed", e));
       }
@@ -187,7 +190,7 @@ Deno.serve(async (req) => {
           makeAdmin ? "You now have admin access" : "Your admin access was removed",
           `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px">
              <p style="font-size:14px;color:#3a3a3c;line-height:1.5">${makeAdmin
-               ? "You've been given admin access on the Research Tracker. Reload the app and you'll see every project."
+               ? "You've been given admin access on the Research Tracker. Reload the app and you'll see every project in your lab."
                : "Your admin access on the Research Tracker was removed. Your account and your own projects are unchanged."}</p>
            </div>`).catch((e) => console.error("notify failed", e));
       }

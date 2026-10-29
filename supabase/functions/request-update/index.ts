@@ -99,7 +99,10 @@ async function loadProfiles(db: any, workspace: string): Promise<Map<string, Pro
   return byName;
 }
 
+// One line, single spaces: indented HTML leaves lines ending in a space, which Gmail's SMTP path
+// quoted-printable-encodes as "=20" and some mail clients print literally (28 Oct 2026).
 async function sendMail(to: string, replyTo: string, subject: string, html: string) {
+  html = html.replace(/\s*\n\s*/g, " ").replace(/ {2,}/g, " ");
   const smtp = new SMTPClient({
     connection: { hostname: SMTP_HOST, port: SMTP_PORT, tls: true, auth: { username: SMTP_USER, password: SMTP_PASSWORD } },
   });

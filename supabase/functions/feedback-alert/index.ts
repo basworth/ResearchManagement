@@ -80,7 +80,8 @@ Deno.serve(async (req) => {
         </p>
       </div>`;
     const msg: Record<string, unknown> = {
-      from: `${FROM_NAME} <${SMTP_USER}>`, to: TO, subject, html,
+      // One line, single spaces — otherwise Gmail's SMTP path shows "=20" in some clients.
+      from: `${FROM_NAME} <${SMTP_USER}>`, to: TO, subject, html: html.replace(/\s*\n\s*/g, " ").replace(/ {2,}/g, " "),
       content: html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
     };
     // So hitting Reply reaches the person who reported it, not a mailbox nobody reads.

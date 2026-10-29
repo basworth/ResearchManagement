@@ -86,7 +86,8 @@ async function sendMail(opts: { to: string[]; cc?: string[]; subject: string; ht
   try {
     await smtp.send({
       from: `${FROM_NAME} <${SMTP_USER}>`, to: opts.to, cc: opts.cc && opts.cc.length ? opts.cc : undefined,
-      subject: opts.subject, html: opts.html, content: opts.text,
+      // One line, single spaces — otherwise Gmail's SMTP path shows "=20" in some clients.
+      subject: opts.subject, html: opts.html.replace(/\s*\n\s*/g, " ").replace(/ {2,}/g, " "), content: opts.text,
       // Threading. With the original Message-ID in both headers, Gmail and Outlook file the summary
       // under the meeting email for everyone on it, instead of starting a new conversation.
       inReplyTo: opts.inReplyTo || undefined, references: opts.references || opts.inReplyTo || undefined,
