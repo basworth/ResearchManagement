@@ -95,7 +95,9 @@ Deno.serve(async (req) => {
       const { data: piRow } = ws ? await db.from("lab_pis").select("pi_name").eq("workspace", ws).maybeSingle() : { data: null };
       const isLabPi = !!piRow && String(piRow.pi_name).trim().toLowerCase() === String(name).trim().toLowerCase();
       const isResearchStaff = /^research assistant$/i.test(pos) || /\bCRCM?\b|coordinator|research manager/i.test(pos);
-      if (prof && ws && (isLabPi || isResearchStaff)) {
+      // Off unless LAB_RULE_AUTO_ADMIN=on (29 Oct): a role chosen at sign-up isn't who the PI says
+      // the research team is — Adam's lab lists nine research assistants and two are its team.
+      if (Deno.env.get("LAB_RULE_AUTO_ADMIN") === "on" && prof && ws && (isLabPi || isResearchStaff)) {
         const nowIso = new Date().toISOString();
         await db.from("admin_requests").update({ status: "approved", decided_at: nowIso })
           .eq("user_id", callerId).eq("status", "pending");
