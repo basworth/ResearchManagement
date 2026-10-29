@@ -264,6 +264,12 @@
     font-family: inherit;
   }
   nav.tabbar button.active { color: var(--blue); }
+  /* Things waiting on you (Adam, 29 Oct): a red count on Settings, and on each heading inside it. */
+  nav.tabbar button { position: relative; }
+  .act-badge { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 18px;
+    padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: var(--red); color: #fff;
+    font-size: 11px; font-weight: 800; line-height: 1; letter-spacing: 0; text-transform: none; }
+  nav.tabbar .act-badge { position: absolute; top: 0; left: calc(50% + 6px); }
   nav.tabbar .icon { font-size: 22px; line-height: 1.1; }
 
   /* Working Study List — spreadsheet-style table */
@@ -819,6 +825,7 @@ function upsertProfile(name, extra) {
   if (name != null) p.name = name;
   if (extra) Object.assign(p, extra);
   saveLocal(); pushProfileKeepingOrgChart(p);
+  if (extra && extra.position) setTimeout(maybeAutoRequestAdmin, 1500);
 }
 // Same hazard as deadline links, different record. A profile row carries two kinds of field:
 // yours (name, alert address) and the org chart's (position, who you report to, linked accounts,
@@ -2359,6 +2366,8 @@ async function handleAuthChange(event, session) {
       // and maybeShowTour stands down while any sheet is open. It gets its chance on the next
       // sign-in, by which point the person has a name and a role and the tour can talk to them.
       maybeShowTour();
+      maybeAutoRequestAdmin();
+      refreshAdminRequestCount();
       // Someone who met the tour before this existed, or skipped it. Stands down if the tour or
       // the setup prompt is already on screen.
       maybeAskFields();
@@ -3960,6 +3969,7 @@ function render() {
   else renderSettings();
   renderSupportBanner();
   renderSidebar(); // desktop-only collapsible dashboard panel, kept in sync with every render
+  updateActionBadge();
   restoreDrafts(document);
 }
 
@@ -9012,6 +9022,99 @@ function upsertSuggestion(g) {
   if (i >= 0) state.suggestions[i] = g; else state.suggestions.push(g);
   saveLocal(); pushItem("suggestion", g);
 }
+/* ============ Things waiting on you ============
+ * Adam, 29 Oct: "if something like this comes up for me, there needs to be some notification that
+ * there is an action item for me, like a little red circle with a number on it next to the
+ * settings area. And as I click through, I see which items require attention."
+ * Counted: suggested updates waiting on you, meeting cards still to review, and (for the approver)
+ * admin requests. Tag suggestions are left out — hundreds of them, none urgent.
+ */
+let pendingAdminRequests = 0;
+async function refreshAdminRequestCount() {
+  if (!sb || !isAppAdmin()) { pendingAdminRequests = 0; return; }
+  try {
+    const { data, error } = await sb.from("admin_requests").select("id").eq("status", "pending");
+    if (error) return;
+    const n = (data || []).length;
+    if (n !== pendingAdminRequests) { pendingAdminRequests = n; updateActionBadge(); if (tab === "settings") render(); }
+  } catch (e) { /* the badge is a convenience; never let it break a page */ }
+}
+// Re-checked when the window regains focus and whenever Settings is opened — not on a timer, which
+// would keep a background page (and every jsdom test) awake for nothing.
+window.addEventListener("focus", () => { if (currentUser) refreshAdminRequestCount(); });
+function openMeetingCards() {
+  return (state.suggestions || []).filter(g => g.source === "meeting" && canUndoMeeting(g)
+    && meetingUndoOpen(g) && !meetingReplaced(g) && !meetingAllReviewed(g));
+}
+function mySuggestions() {
+  return pendingSuggestions().filter(g => g.source !== "meeting" && (!g.forwardedBy || (currentUser && g.forwardedBy === currentUser.id)));
+}
+function actionCounts() {
+  let updates = 0;
+  try { updates = mySuggestions().length + openMeetingCards().length; } catch (e) { updates = 0; }
+  const adminRequests = isAppAdmin() ? pendingAdminRequests : 0;
+  return { updates, adminRequests, total: updates + adminRequests };
+}
+// Which folded Settings group each count belongs to, so the badge can lead you to it.
+function actionCountForGroup(key) {
+  const c = actionCounts();
+  if (key === "Admin Access") return c.adminRequests;
+  return 0;
+}
+// Everyone, not just Adam (29 Oct: "not just for me, but really anybody … should have notifications
+// that there's something to do"): their own tasks that are due today or overdue get the same red
+// count on the Tasks tab.
+function myDueTasks() {
+  const mine = (me() || "").trim().toLowerCase();
+  if (!mine) return [];
+  const today = todayStr();
+  return (state.tasks || []).filter(t => !t.done && t.due && t.due <= today
+    && (t.assignees || []).some(a => String(a || "").trim().toLowerCase() === mine));
+}
+function actBadgeHTML(n, title) {
+  return n > 0 ? `<span class="act-badge" title="${esc(title || (n + " waiting on you"))}">${n > 99 ? "99+" : n}</span>` : "";
+}
+function updateActionBadge() {
+  const put = (tabKey, n, title) => {
+    const btn = document.querySelector(`nav.tabbar [data-tab="${tabKey}"]`);
+    if (!btn) return;
+    const old = btn.querySelector(".act-badge");
+    if (old) old.remove();
+    if (n > 0) btn.insertAdjacentHTML("beforeend", actBadgeHTML(n, title));
+  };
+  const n = actionCounts().total;
+  put("settings", n, n + " thing" + (n === 1 ? "" : "s") + " waiting on you in Settings");
+  let due = 0;
+  try { due = myDueTasks().length; } catch (e) { due = 0; }
+  put("tasks", due, due + " of your tasks " + (due === 1 ? "is" : "are") + " due today or overdue");
+}
+// Research staff are lab admins of their own lab — the rule Adam set for every lab. Ask once, on
+// their behalf, as soon as their role says so; the server applies the rule (admin-requests).
+const AUTO_ADMIN_POSITION = /^research assistant$|\bCRCM?\b|coordinator|research manager/i;
+let autoAdminTried = false;   // once per page load; the profile flag makes it once ever
+async function maybeAutoRequestAdmin() {
+  if (!sb || !currentUser || autoAdminTried) return;
+  const p = profileFor(currentUser.id);
+  if (!p || !p.name || p.admin || p.adminAutoAsked || !AUTO_ADMIN_POSITION.test(p.position || "")) return;
+  autoAdminTried = true;
+  try {
+    const { data: sess } = await sb.auth.getSession();
+    const tok = sess && sess.session && sess.session.access_token;
+    if (!tok) return;
+    const res = await fetch(SUPABASE_URL + "/functions/v1/admin-requests", {
+      method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
+      body: JSON.stringify({ action: "request", reason: "Automatic: research staff are lab admins of their own lab" }),
+    });
+    const out = await res.json().catch(() => ({}));
+    if (out && out.auto) {
+      toast("You're set up as a lab admin — you can now see every study in your lab");
+      if (typeof pullAll === "function") { await pullAll().catch(() => {}); render(); }
+    }
+    // Remembered only once the server has answered (and after the reload above, which would
+    // otherwise replace it), so a dropped connection gets another try.
+    if (res.ok) upsertProfile(null, { adminAutoAsked: true });
+  } catch (e) { /* they can still ask by hand from Settings */ }
+}
 function pendingSuggestions() {
   return (state.suggestions || []).filter(g => g.status === "pending")
     .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
@@ -9613,7 +9716,7 @@ function suggestionsSectionHTML() {
     .sort((a, b) => String(b.decidedAt || b.createdAt || "").localeCompare(String(a.decidedAt || a.createdAt || "")))
     .slice(0, 5);
   return `
-  <div class="section-title">Suggested Updates${mine.length ? ` (${mine.length})` : ""}</div>
+  <div class="section-title" style="display:flex;align-items:center;gap:8px">Suggested Updates ${actBadgeHTML(actionCounts().updates, "Waiting on you")}</div>
   <!-- The paste-an-email and paste-a-transcript boxes were removed 27 Oct (Adam: "these should not
        come from here, let's make people use the email route, I think it's better"). Everything now
        arrives by forwarding; what it finds lands below. ingestEmail/ingestTranscript remain for
@@ -10411,14 +10514,16 @@ function foldSettingsSections(root) {
       const g = document.createElement("details");   // its own const: the toggle handler must see THIS group
       g.className = "settings-group";
       g.dataset.sg = key;
-      if (settingsOpenGroups[key]) g.open = true;
+      const waiting = actionCountForGroup(key);
+      if (settingsOpenGroups[key] || waiting) g.open = true;
+      g.dataset.waiting = String(waiting);
       g.addEventListener("toggle", () => { settingsOpenGroups[key] = g.open; });
       group = g;
       const sum = document.createElement("summary");
       sum.className = "section-title";
       sum.style.cssText = "cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none";
       if (el.id) sum.id = el.id;
-      sum.innerHTML = `<span>${esc(key)}</span><span style="font-size:11px;color:var(--text2)">▸</span>`;
+      sum.innerHTML = `<span style="display:flex;align-items:center;gap:8px">${esc(key)} ${actBadgeHTML(waiting)}</span><span style="font-size:11px;color:var(--text2)">▸</span>`;
       group.appendChild(sum);
       root.insertBefore(group, el);
       el.remove();
@@ -10439,7 +10544,9 @@ function foldSettingsSections(root) {
     h.className = "settings-category";
     h.dataset.cat = cat.title;
     h.style.cssText = "font-size:15px;font-weight:800;margin:22px 2px 4px 2px;color:var(--text)";
-    h.textContent = cat.title;
+    const waiting = mine.reduce((n, g) => n + Number(g.dataset.waiting || 0), 0);
+    h.style.display = "flex"; h.style.alignItems = "center"; h.style.gap = "8px";
+    h.innerHTML = `${esc(cat.title)} ${actBadgeHTML(waiting)}`;
     root.insertBefore(h, anchor);
     mine.forEach(g => { g.style.marginLeft = "6px"; root.insertBefore(g, anchor); });
   });
@@ -10593,6 +10700,7 @@ async function loadPendingInvites() {
 /* ============ Settings ============ */
 function renderSettings() {
   $title.textContent = "Settings";
+  refreshAdminRequestCount();
   const currentSubs = subs();
   const currentFieldSubs = fieldSubs();
   const allMeetings = state.meetings.slice().sort((a, b) => (a.deadline || "9999").localeCompare(b.deadline || "9999"));
@@ -10767,7 +10875,7 @@ function renderSettings() {
   <div class="section-title">Admin Access</div>
   ${isAdmin()
     ? `<div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
-         You're an admin. Requests from others are emailed to Adam and appear below for him to approve — admin rights can't be handed out any other way, including from the org chart.
+         You're an admin. Research assistants, coordinators and a lab's PI become lab admins of their own lab automatically — that's the rule for every lab. Anyone else's request appears below for Adam to approve.
        </div>
        <div id="admin-req-list" class="card" style="padding:6px 14px"><div style="color:var(--text2);font-size:14px">Checking for requests…</div></div>`
     : `<div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
@@ -11327,6 +11435,7 @@ function renderSettings() {
             const out = await callAdminFn({ action: "decide", requestId: id, approve });
             toast(out.message || "Done");
             await pullAll();
+            await refreshAdminRequestCount();
             render();
           } catch (e) { toast(e.message || "Could not save that decision"); }
         };
@@ -13695,6 +13804,9 @@ function balloonNews() {
     { since: 2, sel: ['nav.tabbar [data-tab="settings"]'], title: "Change history",
       what: "Every change to a study, task or lab setting is now recorded: who made it, when, and what it was before.",
       custom: "Open <b>Change history</b> at the bottom of any study. Lab admins see the whole lab's under <b>Settings › Help, data &amp; about › Change History</b>." },
+    { since: 3, sel: ['nav.tabbar [data-tab="settings"]'], title: "Red counts = something for you",
+      what: "A red number on Settings means something is waiting on you: an update to confirm, a meeting to review, or a request. On Tasks it's your own tasks due today or overdue.",
+      custom: "Open Settings and follow the red numbers down to the item. They clear as you deal with them." },
   ];
 }
 function balloonsVersion() {
