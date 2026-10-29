@@ -20,6 +20,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
 import { sendViaDomain } from "./warmup-mail.ts";
+import { readAttachment, studyByGuess } from "./attachments.ts";
 import { setStudies, setMatchHints, setMeetings, stripPHI as stripPHIRules, readEmail, applyChangeTo, PARSER_VERSION } from "./rules.ts";
 import { looksLikeMeeting, studyContext, extractPrompt, callModel, applyMeeting, summaryEmail, threadRecipients, redactAll, tagVocabulary, MEETING_UNDO_HOURS } from "./meeting.ts";
 
@@ -117,7 +118,20 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
   const replyTo = threadRecipients([payload?.from, payload?.to, payload?.cc].filter(Boolean),
     TRACKER_MAILBOXES.concat([SMTP_USER.toLowerCase()]));
   const reSubject = "Re: " + String(payload?.originalSubject || subject).replace(/^\s*(re|fw|fwd):\s*/i, "");
+  const atts: any[] = Array.isArray(payload?.attachments) ? payload.attachments.slice(0, 8) : [];
+  const files: any[] = [];
   try {
+    // Files first, so what's in them reaches the reader. A file that may identify a patient adds
+    // nothing to the text and is never stored.
+    for (const a of atts) {
+      try { files.push(await readAttachment(ANTHROPIC_KEY, MEETING_MODEL, a)); }
+      catch (e) { files.push({ name: String(a?.name || "file"), ok: false, phi: true, why: "couldn't be read", text: "" }); }
+    }
+    if (files.length) {
+      raw = (raw.trim() ? raw : "(no message text — the content is in the attached files)") +
+        "\n\nThis is a forwarded email, not a meeting transcript; treat its content and its attached files the same way." +
+        files.filter((f) => f.ok && !f.phi && f.text).map((f) => `\n\n--- Attached file: ${f.name} ---\n${f.text}`).join("");
+    }
     const scrubbed = stripPHIRules(raw);
     const { data: studyRows } = await db.from("items").select("id, data").eq("kind", "study").eq("workspace", ws);
     const studies = (studyRows ?? []).map((r: any) => r.data).filter(Boolean);
@@ -158,6 +172,29 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
       .filter((a: any) => record.applied.indexOf(a) < 0)
       .map((a: any) => ({ text: a.label + ": " + a.to, why: "couldn't be saved — try again or enter it by hand", evidence: a.evidence })));
     record.studyIds = [...new Set(record.applied.map((a: any) => a.studyId))];
+
+    // File each clean attachment under its study: the one study this email changed, or the study
+    // the file itself names. Otherwise it's stored and listed on this record to be filed by hand.
+    record.files = [];
+    const allStudies = studies.concat(result.newStudies);
+    for (const f of files) {
+      if (!f.ok || f.phi) { record.files.push({ name: f.name, stored: false, why: f.ok ? "may contain patient information — not saved" : f.why }); continue; }
+      if (!f.worthFiling) { record.files.push({ name: f.name, stored: false, why: "looked like a logo or decoration — not filed" }); continue; }
+      const target = record.studyIds.length === 1 ? allStudies.find((x: any) => x.id === record.studyIds[0]) : studyByGuess(f.studyGuess, allStudies);
+      const fid = crypto.randomUUID();
+      const { error: fErr } = await db.from("items").insert({ id: fid, kind: "file", workspace: ws,
+        updated_at: new Date().toISOString(), data: { name: f.name, content: f.dataUrl } });
+      if (fErr) { record.files.push({ name: f.name, stored: false, why: "couldn't be saved" }); continue; }
+      let filedTo = "";
+      if (target) {
+        if (!Array.isArray(target.docs)) target.docs = [];
+        target.docs.push({ id: fid, kind: "file", name: f.name, label: "From email", by: sender.name, date: today, size: f.size });
+        const { error } = await db.from("items").update({ data: target, updated_at: new Date().toISOString() }).eq("id", target.id).eq("workspace", ws);
+        if (!error) filedTo = target.id;
+      }
+      record.files.push({ id: fid, name: f.name, size: f.size, stored: true, studyId: filedTo,
+        study: filedTo ? (target.nickname || target.title) : "", why: f.why });
+    }
     // What is stored of the meeting itself: scrubbed of numbers by the rules AND of every patient
     // identifier the model found.
     record.text = redactAll(scrubbed.text, extracted.patientIdentifiers || []).slice(0, 20000);
@@ -189,6 +226,15 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
     ? { html: `<p>The tracker couldn't read this meeting, so nothing was changed.</p><p style="color:#8e8e93">${record.error ? String(record.error).replace(/[<>&]/g, "") : ""}</p>`,
         text: "The tracker couldn't read this meeting, so nothing was changed. " + (record.error || "") }
     : summaryEmail({ applied: record.applied, notApplied: record.notApplied, undoUntil: record.undoUntil, link, subject, by: sender.name });
+  if ((record.files || []).length) {
+    const escH = (v: unknown) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+    const lines = record.files.map((f: any) => f.stored
+      ? (f.studyId ? `${f.name} — filed under ${f.study}` : `${f.name} — saved; choose its study in the tracker`)
+      : `${f.name} — ${f.why}`);
+    mail.html += `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:11px;font-weight:700;color:#8e8e93;letter-spacing:.4px;margin:16px 0 4px">ATTACHED FILES</div>` +
+      lines.map((l: string) => `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;padding:2px 0">${escH(l)}</div>`).join("");
+    mail.text += "\n\nAttached files:\n" + lines.join("\n");
+  }
   try {
     record.replied = await sendMail({ to, cc, subject: reSubject, html: mail.html, text: mail.text,
       inReplyTo: payload?.messageId || "", references: payload?.references || payload?.messageId || "" });
@@ -293,7 +339,10 @@ Deno.serve(async (req) => {
     const from = bareAddress(payload?.from ?? "");
     const subject = String(payload?.subject ?? "").slice(0, 200);
     const raw = String(payload?.body ?? "");
-    if (!raw.trim()) return json({ error: "Empty message" }, 400);
+    // Files on the email (29 Oct 2026). Sent by the Gmail script as base64; read in processMeeting.
+    const atts = (Array.isArray(payload?.attachments) ? payload.attachments : [])
+      .filter((a: any) => a && typeof a.data === "string" && a.data.length).slice(0, 8);
+    if (!raw.trim() && !atts.length) return json({ error: "Empty message" }, 400);
 
     const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
@@ -338,8 +387,10 @@ Deno.serve(async (req) => {
     // action item and replies on the thread. Only for a sender we know: a stranger's "meeting"
     // would be an open channel for editing studies. Without a model key it falls through to the
     // ordinary rules, which at worst file a note.
-    if (sender && ANTHROPIC_KEY && looksLikeMeeting(subject, raw)) {
-      const hash = await sha256(subject + "\n" + raw);
+    // An email with files goes the same way: the files are read and then treated like notes, so a
+    // "new study idea" infographic or a data sheet is understood rather than skipped.
+    if (sender && ANTHROPIC_KEY && (atts.length || looksLikeMeeting(subject, raw))) {
+      const hash = await sha256(subject + "\n" + raw + atts.map((a: any) => "\n[file] " + a.name + " " + String(a.data).length).join(""));
       // The Apps Script retries anything it didn't get a 200 for, and a long transcript can outlast
       // its patience. The same meeting must never be applied twice.
       const { data: dup } = await db.from("items").select("id").eq("kind", "suggestion")
