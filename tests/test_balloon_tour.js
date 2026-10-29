@@ -123,15 +123,15 @@ const title = (w) => { const h = w.document.querySelector("#balloon h3"); return
 
   console.log("\n-- New features: existing users get only what's new, once --");
   const NEWS = `balloonNews = () => [
-    { since: 2, sel: ['nav.tabbar [data-tab="tasks"]'], title: "Old news", what: "w", custom: "c" },
-    { since: 3, tab: "settings", sel: ['nav.tabbar [data-tab="settings"]'], title: "Fresh thing", what: "Does a new thing.", custom: "Turn it on in Settings." },
-    { since: 3, tab: "notes", sel: ["#not-on-the-page"], title: "Gone", what: "w", custom: "c" },
+    { since: 100, sel: ['nav.tabbar [data-tab="tasks"]'], title: "Old news", what: "w", custom: "c" },
+    { since: 101, tab: "settings", sel: ['nav.tabbar [data-tab="settings"]'], title: "Fresh thing", what: "Does a new thing.", custom: "Turn it on in Settings." },
+    { since: 101, tab: "notes", sel: ["#not-on-the-page"], title: "Gone", what: "w", custom: "c" },
   ]`;
-  const w7 = boot([profile({ tourSeen: 1, balloonsSeen: 2 })]);
+  const w7 = boot([profile({ tourSeen: 1, balloonsSeen: 100 })]);
   await wait(800);
   check("nothing before a release", !w7.document.getElementById("balloon"));
   w7.eval(NEWS);
-  check("a release bumps the version", w7.eval("balloonsVersion()") === 3);
+  check("a release bumps the version", w7.eval("balloonsVersion()") === 101);
   w7.eval("maybeShowTour()");
   check("only the newer entry shows", title(w7) === "New · Fresh thing", title(w7));
   check("...marked New", /New ·/.test(w7.document.querySelector("#balloon h3").textContent));
@@ -139,7 +139,7 @@ const title = (w) => { const h = w.document.querySelector("#balloon h3"); return
   w7.document.getElementById("bl-next").click();
   check("an entry whose control is missing is skipped, so that was the last", !w7.document.getElementById("balloon"));
   check("...and you're back on the tab you started on", w7.eval("tab") === "research", w7.eval("tab"));
-  check("seen at the new version", w7.eval(`(profileFor("${USER}") || {}).balloonsSeen`) === 3);
+  check("seen at the new version", w7.eval(`(profileFor("${USER}") || {}).balloonsSeen`) === 101);
   w7.eval("maybeShowTour()");
   check("not shown twice", !w7.document.getElementById("balloon"));
 
@@ -150,7 +150,7 @@ const title = (w) => { const h = w.document.querySelector("#balloon h3"); return
   await wait(800);
   check("the section tour, not the news", title(w9) === "Dashboard" || !!w9.eval("(profileFor('" + USER + "')||{}).balloonsSeen"), title(w9));
   w9.document.dispatchEvent(new w9.KeyboardEvent("keydown", { key: "Escape" }));
-  check("...and they're marked current, news included", w9.eval(`(profileFor("${USER}") || {}).balloonsSeen`) === 3,
+  check("...and they're marked current, news included", w9.eval(`(profileFor("${USER}") || {}).balloonsSeen`) === 101,
     w9.eval(`(profileFor("${USER}") || {}).balloonsSeen`));
 
   console.log(`\n${fail ? "FAILED" : "ALL CLEAR"} — ${pass} passed, ${fail} failed`);
