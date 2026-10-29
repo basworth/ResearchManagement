@@ -90,11 +90,9 @@ const badge = (w, t) => { const b = w.document.querySelector(`nav.tabbar [data-t
   console.log("\n-- Research staff become lab admins without anyone approving --");
   await wait(1700);
   const asks = log.filter(x => /admin-requests/.test(x.url));
-  check("a research assistant's app asks for lab admin by itself", asks.length === 1 && /"action":"request"/.test(asks[0].body), asks);
-  await wait(300);
-  check("...once, remembered on the profile", w2.eval(`profileFor("${ME}").adminAutoAsked`) === true, w2.eval(`JSON.stringify(profileFor("${ME}"))`));
-  w2.eval("maybeAutoRequestAdmin()"); await wait(50);
-  check("...and not again", log.filter(x => /admin-requests/.test(x.url)).length === 1);
+  // Switched off the same day (Adam: RAs listed in a lab are not all its research team).
+  check("an RA's app does NOT ask for lab admin by itself", asks.length === 0, asks);
+  check("...the switch is off", w2.eval("AUTO_ADMIN_ON") === false);
   const log3 = [];
   const w3 = boot({ fetchLog: log3, items: [prof(ME, "Sam Resident", { position: "Orthopedic resident" })] });
   await wait(2500);
@@ -107,7 +105,7 @@ const badge = (w, t) => { const b = w.document.querySelector(`nav.tabbar [data-t
     const fn = fs.readFileSync(fnPath, "utf8");
     check("research assistants and coordinators qualify", /\/\^research assistant\$\/i\.test\(pos\)/.test(fn) && /CRCM\?\\b\|coordinator\|research manager/.test(fn));
     check("so does the lab's own PI, from lab_pis", /from\("lab_pis"\)\.select\("pi_name"\)\.eq\("workspace", ws\)/.test(fn));
-    check("only for their own lab (the profile's), and Adam gets an FYI, not a task", /if \(prof && ws && \(isLabPi \|\| isResearchStaff\)\)/.test(fn) && /nothing for you to do/.test(fn));
+    check("...but only when LAB_RULE_AUTO_ADMIN=on — off by default", /Deno\.env\.get\("LAB_RULE_AUTO_ADMIN"\) === "on" && prof && ws && \(isLabPi \|\| isResearchStaff\)/.test(fn));
     check("everyone else still waits for Adam", /Admin access requested by \$\{name\}/.test(fn));
   }
 

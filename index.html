@@ -9092,8 +9092,12 @@ function updateActionBadge() {
 // their behalf, as soon as their role says so; the server applies the rule (admin-requests).
 const AUTO_ADMIN_POSITION = /^research assistant$|\bCRCM?\b|coordinator|research manager/i;
 let autoAdminTried = false;   // once per page load; the profile flag makes it once ever
+// SWITCHED OFF 29 Oct, same day: Adam's lab has nine people listed as research assistants and only
+// two (Will, TJ) are its research team. A role picked at sign-up is not who the PI says the team is.
+// Lab admin stays an explicit decision; the red count on Settings makes a request impossible to miss.
+const AUTO_ADMIN_ON = false;
 async function maybeAutoRequestAdmin() {
-  if (!sb || !currentUser || autoAdminTried) return;
+  if (!AUTO_ADMIN_ON || !sb || !currentUser || autoAdminTried) return;
   const p = profileFor(currentUser.id);
   if (!p || !p.name || p.admin || p.adminAutoAsked || !AUTO_ADMIN_POSITION.test(p.position || "")) return;
   autoAdminTried = true;
@@ -10875,7 +10879,7 @@ function renderSettings() {
   <div class="section-title">Admin Access</div>
   ${isAdmin()
     ? `<div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
-         You're an admin. Research assistants, coordinators and a lab's PI become lab admins of their own lab automatically — that's the rule for every lab. Anyone else's request appears below for Adam to approve.
+         You're an admin. Requests from others appear below for Adam to approve, with a red count on Settings so none sit unseen.
        </div>
        <div id="admin-req-list" class="card" style="padding:6px 14px"><div style="color:var(--text2);font-size:14px">Checking for requests…</div></div>`
     : `<div class="card" style="font-size:13px;color:var(--text2);line-height:1.5">
