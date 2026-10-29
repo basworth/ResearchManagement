@@ -9070,7 +9070,13 @@ function mySuggestions() {
 }
 function actionCounts() {
   let updates = 0;
-  try { updates = mySuggestions().length + openMeetingCards().length; } catch (e) { updates = 0; }
+  try {
+    const cards = openMeetingCards();
+    // A meeting whose items are all reviewed but still has a file to file is still waiting on you.
+    const fileOnly = (state.suggestions || []).filter(g => g.source === "meeting" && canUndoMeeting(g)
+      && unfiledMeetingFiles(g).length && cards.indexOf(g) < 0);
+    updates = mySuggestions().length + cards.length + fileOnly.length;
+  } catch (e) { updates = 0; }
   const adminRequests = isAppAdmin() ? pendingAdminRequests : 0;
   return { updates, adminRequests, total: updates + adminRequests };
 }
@@ -9613,6 +9619,43 @@ function editMeetingChange(gId, changeId) {
   }, 60);
   toast(`Opened ${s.nickname || s.title}${sec ? " — " + a.label : ""}. Edit it here; Undo is still on the meeting card.`);
 }
+// Files that came on the email (29 Oct 2026). The server files each clean one under its study when
+// it can tell which; the rest wait here with a picker. Anything that may identify a patient was
+// never stored, and says so.
+function unfiledMeetingFiles(g) {
+  return (g && Array.isArray(g.files) ? g.files : []).filter(f => f.stored && f.id && !f.studyId);
+}
+function meetingFilesHTML(g, can) {
+  const files = Array.isArray(g.files) ? g.files : [];
+  if (!files.length) return "";
+  const studies = visibleStudies().slice().sort((a, b) => String(a.title).localeCompare(String(b.title)));
+  return `<div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:12px 2px 4px 2px">ATTACHED FILES</div>
+    ${files.map((f, i) => {
+      if (!f.stored) return `<div style="font-size:13.5px;padding:3px 0"><span style="color:var(--orange);font-weight:700">⊘</span> ${esc(f.name)} <span style="font-size:11.5px;color:var(--text2)">— ${esc(f.why || "not saved")}</span></div>`;
+      if (f.studyId) return `<div style="font-size:13.5px;padding:3px 0"><span style="color:var(--green);font-weight:700">📎</span> ${esc(f.name)} <span style="font-size:11.5px;color:var(--text2)">— filed under</span> <a href="#" class="mtg-file-link" data-open-study="${esc(f.studyId)}" style="color:var(--blue);text-decoration:none;font-size:13px">${esc(f.study || (studyById(f.studyId) || {}).title || "its study")}</a></div>`;
+      return `<div class="frow" style="gap:8px;padding:4px 0;border-bottom:none;align-items:center">
+        <div style="flex:1;min-width:0;font-size:13.5px"><span style="color:var(--orange);font-weight:700">📎</span> ${esc(f.name)} <span style="font-size:11.5px;color:var(--text2)">— which study is it for?</span></div>
+        ${can ? `<select data-mtg-file="${esc(g.id)}" data-mtg-file-i="${i}" style="flex:0 1 220px;min-width:0;border:none;background:var(--bg);border-radius:8px;padding:6px 8px;font-size:13px;font-family:inherit;color:var(--text)">
+          <option value="">File under…</option>
+          ${studies.map(st => `<option value="${esc(st.id)}">${esc(st.title)}</option>`).join("")}
+        </select>` : ""}
+      </div>`;
+    }).join("")}`;
+}
+function fileMeetingAttachment(gId, i, studyId) {
+  const g = (state.suggestions || []).find(x => x.id === gId);
+  const s = studyById(studyId);
+  const f = g && Array.isArray(g.files) ? g.files[i] : null;
+  if (!g || !s || !f || !f.id || f.studyId) return;
+  if (blockOfflineEdit("Filing that file")) return;
+  s.docs = Array.isArray(s.docs) ? s.docs : [];
+  if (!s.docs.some(d => d.id === f.id)) s.docs.push({ id: f.id, kind: "file", name: f.name, label: "From email", by: me(), date: todayStr(), size: f.size || 0 });
+  upsertStudy(s);
+  f.studyId = s.id; f.study = s.title;
+  upsertSuggestion(g);
+  render();
+  toast(`${f.name} filed under ${s.title} — it's in the study's Documents`);
+}
 function meetingCardHTML(g) {
   const when = g.createdAt ? fmtDate(String(g.createdAt).slice(0, 10)) : "";
   const open = meetingUndoOpen(g);
@@ -9661,6 +9704,7 @@ function meetingCardHTML(g) {
       </div>`;
       }).join("")}`;
     }).join("")}
+    ${meetingFilesHTML(g, can)}
     ${(() => {
       const all = [].concat(...groups.map(x => x.items));
       const done = all.filter(a => meetingItemDealtWith(g, a)).length;
@@ -9693,7 +9737,7 @@ function meetingsSectionHTML() {
   // its replacement exists — showing both up front is what made three struck-through lines look
   // like a fault on 27 Oct. It stays in the full history, labelled.
   // ...and so does a meeting where every item has been approved, undone or marked done.
-  const openOnes = list.filter(g => meetingUndoOpen(g) && !meetingReplaced(g) && !meetingAllReviewed(g));
+  const openOnes = list.filter(g => (meetingUndoOpen(g) && !meetingReplaced(g) && !meetingAllReviewed(g)) || unfiledMeetingFiles(g).length);
   const shown = showAllMeetings ? list : openOnes;
   return `<div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;margin:16px 2px 4px 2px">MEETING UPDATES</div>
     ${shown.length ? shown.map(meetingCardHTML).join("") : `<div style="font-size:12.5px;color:var(--text2);margin:0 2px 6px 2px">Nothing from the last two days.</div>`}
@@ -9858,6 +9902,12 @@ function bindSuggestions(root) {
   root.querySelectorAll("[data-mtg-undo]").forEach(b => b.onclick = () => undoMeetingChanges(b.dataset.mtgUndo, [b.dataset.mtgChange]));
   root.querySelectorAll("[data-mtg-edit]").forEach(b => b.onclick = (e) => { e.stopPropagation(); editMeetingChange(b.dataset.mtgEdit, b.dataset.mtgChange); });
   root.querySelectorAll("[data-mtg-review]").forEach(b => b.onchange = () => setMeetingReviewed(b.dataset.mtgReview, b.dataset.mtgRid, b.checked));
+  root.querySelectorAll("[data-mtg-files] [data-open-study], .mtg-file-link").forEach(a => a.onclick = (e) => {
+    e.preventDefault(); openStudy(a.dataset.openStudy); tab = "studies"; render();
+  });
+  root.querySelectorAll("[data-mtg-file]").forEach(sel => sel.onchange = () => {
+    if (sel.value) fileMeetingAttachment(sel.dataset.mtgFile, Number(sel.dataset.mtgFileI), sel.value);
+  });
   root.querySelectorAll("[data-mtg-show-reviewed]").forEach(b => b.onclick = () => {
     const id = b.dataset.mtgShowReviewed; showReviewedFor[id] = !showReviewedFor[id]; render();
   });
@@ -13830,6 +13880,9 @@ function balloonNews() {
     { since: 3, sel: ['nav.tabbar [data-tab="settings"]'], title: "Red counts = something for you",
       what: "A red number on Settings means something is waiting on you: an update to confirm, a meeting to review, or a request. On Tasks it's your own tasks due today or overdue.",
       custom: "Open Settings and follow the red numbers down to the item. They clear as you deal with them." },
+    { since: 4, sel: ['nav.tabbar [data-tab="settings"]'], title: "Email files are read too",
+      what: "Forward an email with a photo, infographic, PDF, spreadsheet or Word file to studyupdates@studypipeline.com and the tracker reads the file, checks it for patient information, and files it under the right study.",
+      custom: "If it can't tell which study a file belongs to, it waits on the meeting card in Settings with a \"File under…\" picker. Anything that might identify a patient is never saved." },
   ];
 }
 function balloonsVersion() {
