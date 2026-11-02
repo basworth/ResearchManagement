@@ -1,6 +1,6 @@
 {
   "_comment": "Abstract-deadline feed for Research Tracker. The biweekly scheduled task rewrites this file after checking each society. The app fetches it on load and merges any entry whose verifiedOn is newer. 'key' must stay stable so updates match the right meeting. Set unconfirmed=false only when a date is verified from the society's official call for abstracts.",
-  "updatedOn": "2026-11-02T10:00",
+  "updatedOn": "2026-11-02T12:00",
   "removedKeys": [
     "ICRS|8th ICRS Summit (Porto)"
   ],
@@ -50,7 +50,7 @@
       "location": "Las Vegas, NV",
       "link": "https://www.aaos.org/annual/explore-the-program/abstracts-applications/",
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "AANA|2027 Annual Meeting",
@@ -61,7 +61,7 @@
       "location": "Hollywood, FL",
       "link": "https://web.cvent.com/event/14a07b9b-1fe3-4f8d-9377-4cdd6a804855/websitePage:92cf4c18-4b3c-4abe-b68a-7f514fd7a643",
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "ISHA|18th ISHA Annual Scientific Meeting",
@@ -133,7 +133,7 @@
       "location": "Sydney, Australia",
       "link": "https://isakos-congress.com/abstract-submission/",
       "unconfirmed": false,
-      "verifiedOn": "2026-08-09T17:05"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "ICRS|19th World Congress",
@@ -156,7 +156,7 @@
       "location": "",
       "link": "https://www.sportsmed.org/education/abstract-and-instructional-course-submissions",
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "IPSG|2026 Annual Meeting",
@@ -259,7 +259,7 @@
       "criteria": "$300,000 over three years. An orthopaedic surgeon must serve as PI, co-investigator, or MPI, licensed to practice and working in a U.S. institution; a PhD may serve as co-PI/MPI if holding a faculty appointment in a U.S. orthopaedic department. LOI due 8/13/2026; application deadline 10/15/2026. Full eligibility on the RFA via proposalCENTRAL.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00",
+      "verifiedOn": "2026-11-02T12:00",
       "loiDeadline": "2026-08-13"
     },
     {
@@ -275,7 +275,7 @@
       "criteria": "$100,000. PI must be an early-stage investigator (completed terminal research degree or post-graduate clinical training within the past 10 years, no prior successful NIH R01-equivalent as PI). An orthopaedic surgeon must be part of the project as PI, co-PI, co-I, or MPI. LOI due 8/13/2026; application deadline 10/15/2026.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00",
+      "verifiedOn": "2026-11-02T12:00",
       "loiDeadline": "2026-08-13"
     },
     {
@@ -291,7 +291,7 @@
       "criteria": "$50,000. PI must be an orthopaedic surgeon licensed and working in a U.S. institution; residents, fellows, and surgeons who completed formal training within the last 4 years may apply. LOI due 8/13/2026; application deadline 10/15/2026.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00",
+      "verifiedOn": "2026-11-02T12:00",
       "loiDeadline": "2026-08-13"
     },
     {
@@ -307,7 +307,7 @@
       "criteria": "$45,000. PI or co-PI must be a Certified Registered Nurse Anesthetist (CRNA) in good standing with NBCRNA, optionally with a collaborating PhD and/or MD; a PhD may serve as PI if a CRNA serves as co-PI. LOI due 8/13/2026; application deadline 10/15/2026.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00",
+      "verifiedOn": "2026-11-02T12:00",
       "loiDeadline": "2026-08-13"
     },
     {
@@ -323,7 +323,7 @@
       "criteria": "Open to orthopaedic residents in PGY3–PGY5, orthopaedic fellows, and orthopaedic surgeons less than two years in practice, with a demonstrated career interest in orthopaedic clinical research. No LOI; application deadline 11/10/2026. Apply via proposalCENTRAL.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "AOSSM|AF Hip Osteoarthritis Grant",
@@ -342,7 +342,7 @@
         "Mechanical Loading Effects in OA Progression Following ACL Reconstruction — Camila B. Carballo, PT, PhD (2019)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00",
+      "verifiedOn": "2026-11-02T12:00",
       "loiDeadline": "2026-04-17"
     },
     {
@@ -362,7 +362,7 @@
         "Evaluating the Efficacy of Erector Spinae Block in Routine Hip Arthroscopy — Benjamin Coobs, MD (2022)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "AOSSM|JRF Ortho Allograft Grant",
@@ -381,7 +381,7 @@
         "Nonorthotopic osteochondral allograft transplantation to the femoral head — Christopher Nagelli, PhD (2023)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "AOSSM|Arnoczky Young Investigator Grant",
@@ -395,12 +395,12 @@
       "aim": "Supports early-career principal investigators leading an orthopaedic sports medicine research project, with mentorship.",
       "criteria": "Up to $40,000 each for one clinical and one basic science project ($80,000 total). A Young Investigator is an orthopaedic surgeon who has graduated from or is currently in an approved residency program; the PI must perform the primary project role, remain at the parent institution for the project period, and have received less than $25,000 in external funding. Pre-proposals due 5/15; full proposals due 9/20/2026.",
       "funded": [
-        "Artificial Intelligence for Data and Insights in Young Hip (AIDY) — Yining Lu, MD (2024, Clinical)",
-        "Analysis of Noninvasive Biomarkers for ACL Reconstruction — Luke Troyer, MD (2024, Basic)",
-        "Sex Differences in FAIS Hip Synovium Leading to Differences in Outcomes — Stephanie Wong, MD (2023, Basic)"
+        "Towards Individualized Glenoid Track Assessment for Shoulder Instability — Ting Cong, MD (2025, Basic)",
+        "Multidisciplinary approach to understanding anterior knee pain — Morgan Angotti, MD (2025, Clinical)",
+        "Artificial Intelligence for Data and Insights in Young Hip (AIDY) — Yining Lu, MD (2024, Clinical)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "AOSSM|Playmaker Grant Lab",
@@ -414,12 +414,12 @@
       "aim": "Provides start-up, seed, bridge/gap, or supplemental funding to advance exploratory projects on emerging or novel technology in orthopaedic sports medicine.",
       "criteria": "Sponsored by The Aircast Foundation and Haslam Sports Innovation Center. Three-phase process: 2-page LOI (Phase 1, due 5/15/2026), a ≤15-minute presentation to the AOSSM Research Committee at the Annual Meeting (Phase 2), then a formal AOSSM-format grant application for funded projects (Phase 3). Studies involving human subjects receive priority.",
       "funded": [
-        "Virtual Reality as a Prevention Tool for Anterior Cruciate Ligament Injury — Estephania Nunez, DAT (2025)",
-        "Dislocation- and Surgery-Induced Plasticity of the Glenoid Track — Jonathan Hughes, MD (2025)",
-        "Valgus Force on the UCL During Batter's Swing and Hitting Motion — Bradley A. Lezak, MD (2025)"
+        "Utility of Platelet Composition in Platelet-Rich Plasma Injections — Kristin Barton, MD, PhD (2026)",
+        "IMU Biofeedback on Tibia Angle to Augment Quadriceps Force after ACLR — Megan Graham, DPT, PhD (2026)",
+        "Predicting Running Adaptability to Real-Time Biofeedback Following ACLR — Keith Knurr, DPT, PhD (2026)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "AOSSM|MAST Research Initiative Grant",
@@ -448,12 +448,12 @@
       "aim": "Funds high-quality clinical and basic science research advancing arthroscopic surgery and disorders amenable to arthroscopic treatment.",
       "criteria": "All orthopaedic research projects welcome. For 2027, AANA will offer multiple awards ranging from $25,000 to $50,000 per funded project. Evaluated on significance/impact, scientific approach, investigative team/environment, feasibility, and budget. Application deadline Wednesday, September 30, 2026, 11:59pm CT. Apply via AANA research grants portal.",
       "funded": [
-        "Do Arthrocentesis and PRP for Acute ACL Tears with Hemarthrosis Decrease Inflammatory Cytokines at Time of Surgery: A Prospective Randomized Control Trial — Adam B. Yanke, MD, PhD (2025)",
-        "RehAbilitatioN Versus Early Medial PateLlofemoral LIGament Reconstruction in Patients with Acute First-Time Patellar Dislocation: A Pilot RCT (ANTI-GLIDE) — Olufemi R. Ayeni, MD, PhD, MSc (2025)",
-        "Oral Losartan to Decrease the Risk of Postoperative Arthrofibrosis Following Primary and Revision Anterior Cruciate Ligament Reconstruction — Andrew S. Bi, MD (2025)"
+        "Postoperative MRI Characterization of UCL Repair versus Reconstruction — Nikhil N. Verma, MD, FAANA (2026, $100,000)",
+        "A Prospective Randomized Controlled Trial Comparing Arthroscopic Rotator Cuff Repair With and Without Biceps Tendon Autograft Patch Augmentation — Joseph Galvin, DO (2026, $50,000)",
+        "Electroencephalography-Derived Neuromuscular Control During Return to Sport After ACL Reconstruction — David L. Bernholt, MD (2026, $25,000)"
       ],
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "AAOS|OREF Clinical Gaps Research Grant",
@@ -483,22 +483,22 @@
       "criteria": "No topic restriction. Standard NIH eligibility — domestic and foreign higher-ed, nonprofit, for-profit, and government organizations; any PI with the expertise/resources to lead the work. No hard budget cap, but detailed (non-modular) budgets are required above $500,000 direct costs/year and need prior IC approval. Confirm your target institute (e.g., NIAMS) is listed as a participating organization before submitting. Apply via NIH ASSIST or Grants.gov Workspace.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-10-15T09:15"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "NIH|Parent R21 (Exploratory/Developmental)",
       "society": "NIH",
       "type": "grant",
       "name": "NIH Exploratory/Developmental Research Project Grant (Parent R21)",
-      "deadline": "2026-10-16",
-      "dates": "Standard NIH due dates, 3 cycles/year — new applications: Feb 16, Jun 16, Oct 16; renewal/resubmission/revision: Mar 16, Jul 16, Nov 16. Next new-application deadline Oct 16, 2026 (renewal/resubmission Nov 16, 2026). Two companion FOAs: PA-25-306 (clinical trial required) and PA-25-304 (clinical trial not allowed); both expire 1/8/2028. NIAMS (musculoskeletal/orthopaedic) is a participating institute.",
+      "deadline": "2027-02-16",
+      "dates": "Standard NIH due dates, 3 cycles/year — new applications: Feb 16, Jun 16, Oct 16; renewal/resubmission/revision: Mar 16, Jul 16, Nov 16. Oct 16, 2026 new-application cycle has passed; next new-application deadline Feb 16, 2027 (renewal/resubmission Nov 16, 2026). Two companion FOAs: PA-25-306 (clinical trial required) and PA-25-304 (clinical trial not allowed); both expire 1/8/2028. NIAMS (musculoskeletal/orthopaedic) is a participating institute.",
       "location": "",
       "link": "https://grants.nih.gov/grants/guide/parent_announcements.htm",
       "aim": "Supports early-stage, high-risk/high-reward exploratory or developmental research (e.g., pilot or proof-of-concept MSK/orthopaedic studies) that doesn't yet have the preliminary data needed for an R01.",
       "criteria": "Combined direct costs may not exceed $275,000 over the project period, with no more than $200,000 in any single year; project period capped at 2 years. Standard NIH eligibility (same organization types as the parent R01). Confirm your target institute (e.g., NIAMS) is listed as a participating organization before submitting.",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-10-15T09:15"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "NIAMS|Clinical Observational Studies in MSK Rheumatic Skin Disease (R01)",
@@ -513,7 +513,7 @@
       "criteria": "R01; direct costs capped at $475,000 over up to 4 years, no more than $250,000 in any single year. New and resubmission applications only. Only observational (non-interventional) studies are responsive — basic/animal research, disease-mechanism studies, any NIH-defined clinical trial, and early-stage biomarker discovery are non-responsive and returned without review. U.S. domestic organizations only (foreign components allowed within a U.S. award; foreign organizations cannot apply directly). NIAMS has a dedicated Orthopaedics scientific contact (Chuck Washabaugh, PhD, washabac@mail.nih.gov).",
       "funded": [],
       "unconfirmed": false,
-      "verifiedOn": "2026-08-05T16:35"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "ORS|2027 Annual Meeting",
@@ -525,7 +525,7 @@
       "location": "San Francisco, CA",
       "link": "https://www.ors.org/2027-call-for-abstracts/",
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "ORS|2027 Late-Breaking Abstracts",
@@ -537,7 +537,7 @@
       "location": "San Francisco, CA",
       "link": "https://www.ors.org/futureannualmeetings/",
       "unconfirmed": false,
-      "verifiedOn": "2026-11-02T10:00"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "ISHA|2027 Annual Scientific Meeting",
@@ -570,11 +570,11 @@
       "field": "Spine",
       "name": "ISSLS 2027 Annual Meeting",
       "deadline": "2026-11-15",
-      "dates": "Montréal, Canada, 2027. Abstract deadline Sunday 15 Nov 2026. International Society for the Study of the Lumbar Spine — the oldest and most selective lumbar spine research society; also awards the ISSLS Prize for Lumbar Spine Research.",
+      "dates": "Montréal, Canada, May 16–20, 2027 (held with SpineWeek, Palais des Congrès). Abstract deadline Sunday 15 Nov 2026 via the SpineWeek call for abstracts (acceptance notices by 31 Jan 2027). International Society for the Study of the Lumbar Spine — the oldest and most selective lumbar spine research society; also awards the ISSLS Prize for Lumbar Spine Research.",
       "location": "Montréal, Canada",
-      "link": "https://www.issls.org/2027-annual-meeting",
+      "link": "https://spineweek.org/call-for-abstracts/",
       "unconfirmed": false,
-      "verifiedOn": "2026-10-15T16:30"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "LSRS|20th Annual Meeting",
@@ -583,11 +583,11 @@
       "field": "Spine",
       "name": "LSRS 20th Annual Meeting",
       "deadline": "2027-01-04",
-      "dates": "Chicago (Sofitel), instructional course + annual meeting 5–7 May 2027. Call for abstracts opens 4 Nov 2026, closes 4 Jan 2027; disclosures due the same day. 350-word limit with Background/Methods/Results/Conclusion sections. Lumbar Spine Research Society — held in Chicago.",
+      "dates": "Chicago (Sofitel), annual meeting 6–7 May 2027 (instructional course the day before). Call for abstracts opens 4 Nov 2026, closes 4 Jan 2027 11:59 PST; disclosures due the same day. 350-word limit with Background/Methods/Results/Conclusion sections. Lumbar Spine Research Society — held in Chicago.",
       "location": "Chicago, IL",
       "link": "https://www.lsrs.org/abstract-submission",
       "unconfirmed": false,
-      "verifiedOn": "2026-10-15T16:30"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "NASS|42nd Annual Meeting",
@@ -596,11 +596,24 @@
       "field": "Spine",
       "name": "NASS 42nd Annual Meeting",
       "deadline": "2027-02-03",
-      "dates": "Boston, 22–25 Sept 2027. Submissions open 2 Dec 2026, abstract deadline 3 Feb 2027. NASS membership not required to submit, but every author needs a NASS database record and disclosures on file within one year of the deadline — an author who can't disclose in time has to be removed before submitting.",
+      "dates": "Boston, 23–25 Sept 2027. Submissions open 2 Dec 2026, abstract deadline 3 Feb 2027. NASS membership not required to submit, but every author needs a NASS database record and disclosures on file within one year of the deadline — an author who can't disclose in time has to be removed before submitting.",
       "location": "Boston, MA",
       "link": "https://www.spine.org/Education/Submit-Proposals",
       "unconfirmed": false,
-      "verifiedOn": "2026-10-15T16:30"
+      "verifiedOn": "2026-11-02T12:00"
+    },
+    {
+      "key": "NASS|Spine Across the Sea 2027",
+      "society": "NASS",
+      "type": "abstract",
+      "field": "Spine",
+      "name": "NASS Spine Across the Sea 2027",
+      "deadline": "2027-01-04",
+      "dates": "Maui, Hawaii, 25–29 July 2027. Submissions open 1 Sept 2026, close 4 Jan 2027 (per spine.org Submit Proposals page).",
+      "location": "Maui, HI",
+      "link": "https://www.spine.org/Education/Submit-Proposals",
+      "unconfirmed": false,
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "AANS/CNS|2027 Spine Summit",
@@ -613,7 +626,7 @@
       "location": "Orlando, FL",
       "link": "https://dspnspinesummit.org/abstract-center/",
       "unconfirmed": false,
-      "verifiedOn": "2026-10-15T16:30"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "AO Spine|Global Spine Congress 2027",
@@ -626,7 +639,7 @@
       "location": "Yokohama, Japan",
       "link": "https://globalspinecongress.org/abstract-submission/",
       "unconfirmed": false,
-      "verifiedOn": "2026-10-15T16:30"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "SRS|34th IMAST",
@@ -639,7 +652,7 @@
       "location": "Copenhagen, Denmark",
       "link": "https://www.srs.org/Meetings-Conferences/IMAST/IMAST2027",
       "unconfirmed": false,
-      "verifiedOn": "2026-10-15T16:30"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "SRS|62nd Annual Meeting",
@@ -648,11 +661,11 @@
       "field": "Spine",
       "name": "SRS 62nd Annual Meeting",
       "deadline": "",
-      "dates": "New Orleans, 14–18 Sept 2027. Abstract deadline NOT YET PUBLISHED — the 61st Annual Meeting closed 2 Feb 2026, so expect early Feb 2027. Scoliosis Research Society. Check srs.org once the call is posted.",
+      "dates": "SRS's site (read 2 Nov 2026) lists the 62nd Annual Meeting as 14–18 Sept 2026 in New Orleans (already held) and shows no later meeting or call yet — the 2027 annual meeting dates and abstract deadline are NOT YET PUBLISHED (the 61st closed 2 Feb 2026, so expect early Feb 2028 or similar; confirm). Scoliosis Research Society. Check srs.org once the call is posted.",
       "location": "New Orleans, LA",
       "link": "https://www.srs.org/Meetings-Conferences/Annual-Meeting",
       "unconfirmed": true,
-      "verifiedOn": "2026-10-15T16:30"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "CSRS|55th Annual Meeting",
@@ -661,11 +674,11 @@
       "field": "Spine",
       "name": "CSRS 55th Annual Meeting",
       "deadline": "",
-      "dates": "2027 meeting and abstract window NOT YET ANNOUNCED. The 54th (Austin, 2–5 Dec 2026) ran its call 4 Mar – 15 Apr 2026, so expect a spring 2027 window. Cervical Spine Research Society — note CSRS-Europe and CSRS-AP are separate meetings with their own calls. Check csrs.org/meetings/future-meetings for the 2027 call.",
-      "location": "TBA",
+      "dates": "2027 Annual Meeting and Instructional Course: 8–11 Dec 2027, Marriott Marquis San Diego Marina, San Diego, CA (per csrs.org). Abstract window NOT YET ANNOUNCED. The 54th (Austin, 2–5 Dec 2026) ran its call 4 Mar – 15 Apr 2026, so expect a spring 2027 window. Cervical Spine Research Society — note CSRS-Europe and CSRS-AP are separate meetings with their own calls. Check csrs.org/meetings/future-meetings for the 2027 call.",
+      "location": "San Diego, CA",
       "link": "https://www.csrs.org/meetings/future-meetings",
       "unconfirmed": true,
-      "verifiedOn": "2026-10-15T16:30"
+      "verifiedOn": "2026-11-02T12:00"
     },
     {
       "key": "ISASS|ISASS27",
@@ -687,11 +700,11 @@
       "field": "Spine",
       "name": "SMISS 2027 Annual Forum",
       "deadline": "",
-      "dates": "The Bellagio, Las Vegas, 30 Sept – 1 Oct 2027. Abstract deadline NOT YET PUBLISHED; the 2026 call closed 25 May 2026 and the 2025 call 13 June 2025, so expect late spring 2027. Society for Minimally Invasive Spine Surgery; 400-word limit, medical-device employees may not be primary or submitting author. Check smiss.org for the 2027 call.",
+      "dates": "The Bellagio, Las Vegas, 30 Sept – 2 Oct 2027 (per smiss.org; SMISS Asia/Pacific meeting is separate, Beijing 18–20 June 2027). Abstract deadline NOT YET PUBLISHED; the 2026 call closed 25 May 2026 and the 2025 call 13 June 2025, so expect late spring 2027. Society for Minimally Invasive Spine Surgery; 400-word limit, medical-device employees may not be primary or submitting author. Check smiss.org for the 2027 call.",
       "location": "Las Vegas, NV",
       "link": "https://smiss.org/upcoming-meetings/",
       "unconfirmed": true,
-      "verifiedOn": "2026-10-15T16:30"
+      "verifiedOn": "2026-11-02T12:00"
     }
   ]
 }
