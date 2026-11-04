@@ -1666,8 +1666,14 @@ function migrateDocSlots(s) {
     s.docSlots[k].sort((a, b) => String(b.date || "").localeCompare(String(a.date || "")));
   });
 }
-function slotEntries(s, key) {
+// Removed entries (William Lee, 4 Nov 2026: "Can we add the ability to delete uploaded files") stay
+// in the study record with who removed them and when, and the file itself is kept, so Undo — or an
+// admin later — can bring one back. Every list reads through here, so removed ones vanish from all.
+function slotEntriesAll(s, key) {
   return (s.docSlots && Array.isArray(s.docSlots[key])) ? s.docSlots[key] : [];
+}
+function slotEntries(s, key) {
+  return slotEntriesAll(s, key).filter(e => e && !e.removedAt);
 }
 function slotCurrent(s, key) { return slotEntries(s, key)[0] || null; }
 // New entries go to the front, which is what makes them "current" and pushes the previous one
@@ -5264,6 +5270,15 @@ const NOTE_ICON_BTN = "border:none;background:none;color:var(--text2);cursor:poi
 
 // A note being edited in place. View state only, and only ever one at a time — an id, or "".
 let editingNoteId = "";
+// Who wrote it (William Lee, 4 Nov 2026: "authors on notes would be good to see who wrote those
+// updates"). Recorded on every new note; a note the meeting reader wrote says so; older notes from
+// before this have no author and show none rather than a guess.
+function noteAuthor(n) {
+  if (!n) return "";
+  if (n.by) return n.by;
+  if (/^From the meeting:|^From email “/.test(n.text || "")) return "from a meeting email";
+  return "";
+}
 function noteRowHTML(n, actions) {
   // Editing in place rather than in a sheet: a note is usually a sentence, and putting a sentence
   // behind a modal makes fixing a typo feel like filing paperwork. The date is editable too,
@@ -5283,7 +5298,7 @@ function noteRowHTML(n, actions) {
   return `
     <div class="milestone-row" style="align-items:flex-start">
       <div style="flex:1;min-width:0">
-        ${n.date ? `<div style="font-size:12px;color:var(--text2);font-weight:600">${fmtDate(n.date)}</div>` : ""}
+        ${n.date || noteAuthor(n) ? `<div style="font-size:12px;color:var(--text2);font-weight:600">${[n.date ? fmtDate(n.date) : "", esc(noteAuthor(n))].filter(Boolean).join(" · ")}</div>` : ""}
         <div data-note-open="${esc(n.id)}" title="Tap to edit" style="font-size:14.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;cursor:text">${esc(n.text || "")}</div>
       </div>
       <button data-note-open="${esc(n.id)}" title="Edit this note" style="${NOTE_ICON_BTN};font-size:13px;font-weight:700;color:var(--blue)">Edit</button>
@@ -5661,12 +5676,15 @@ function docEntryRowHTML(e, opts) {
     ? `<a href="${esc(e.url)}" target="_blank" rel="noopener" style="flex:none;color:var(--blue);font-size:13px;font-weight:700;text-decoration:none;padding:8px 4px">Open ↗</a>
        <button type="button" data-copy-link="${esc(e.url)}" data-copy-label="${esc(title)}" style="flex:none;border:none;background:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:8px 4px">Copy</button>`
     : `<button type="button" data-slot-dl="${esc(e.id)}" style="flex:none;border:none;background:none;color:var(--blue);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:8px 4px">Download</button>`;
+  const rm = opts.removable && e.id
+    ? `<button type="button" data-slot-rm="${esc(e.id)}" title="Remove from this study" style="flex:none;border:none;background:none;color:var(--text2);font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;padding:8px 4px">Remove</button>`
+    : "";
   return `<div class="milestone-row" style="gap:8px">
     <div style="flex:1;min-width:0">
       <div style="font-size:14.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${icon} ${esc(title)}</div>
       ${meta ? `<div style="font-size:12px;color:var(--text2)">${esc(meta)}</div>` : ""}
     </div>
-    ${actions}
+    ${actions}${rm}
   </div>`;
 }
 // A whole slot: the current document, its history folded away, and the two ways to add a new one.
@@ -5918,14 +5936,14 @@ function docSlotHTML(s, key, opts) {
   const older = multi ? [] : entries.slice(1);
   return `<div class="card doc-slot" data-slot-drop="${esc(key)}" style="padding:10px 14px;margin-bottom:8px;transition:background .12s,box-shadow .12s">
     <div style="font-size:12px;color:var(--text2);font-weight:600;letter-spacing:.02em">${esc(label)}</div>
-    ${shown.length ? shown.map(e => docEntryRowHTML(e, { fallbackLabel: label })).join("")
+    ${shown.length ? shown.map(e => docEntryRowHTML(e, { fallbackLabel: label, removable: true })).join("")
       : `<div style="color:var(--text2);font-size:13.5px;padding:6px 0">${esc(opts.empty || "Nothing here yet — paste a link or upload it.")}
            <span style="opacity:.8">You can also drop a file here.</span></div>`}
     ${older.length ? `
       <button type="button" data-slot-hist="${esc(key)}" style="border:none;background:none;color:var(--blue);font-size:12.5px;font-weight:700;cursor:pointer;font-family:inherit;padding:4px 0">
         ${open ? "Hide" : "Show"} ${older.length} earlier version${older.length === 1 ? "" : "s"}
       </button>
-      ${open ? `<div style="border-left:2px solid var(--bg);padding-left:8px;margin-left:2px">${older.map(e => docEntryRowHTML(e, { fallbackLabel: label })).join("")}</div>` : ""}` : ""}
+      ${open ? `<div style="border-left:2px solid var(--bg);padding-left:8px;margin-left:2px">${older.map(e => docEntryRowHTML(e, { fallbackLabel: label, removable: true })).join("")}</div>` : ""}` : ""}
     <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
       <input data-slot-link="${esc(key)}" placeholder="Paste a link…" style="flex:1;min-width:140px;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
       <button type="button" data-slot-save="${esc(key)}" style="border:none;background:var(--blue);color:#fff;border-radius:8px;padding:0 14px;font-weight:700;font-size:14px;cursor:pointer">Add link</button>
@@ -7966,6 +7984,20 @@ function renderStudyDetail() {
   });
   // Download works off the file id, wherever the entry now lives — including entries that were
   // moved here by the migration, which kept their original ids for exactly this reason.
+  const setSlotRemoved = (id, on) => {
+    let hit = null;
+    ALL_SLOT_KEYS.forEach(k => slotEntriesAll(s, k).forEach(e => { if (e && e.id === id) hit = e; }));
+    if (!hit) { toast("That document couldn't be found"); return; }
+    if (blockOfflineEdit("Removing a document")) return;
+    if (on) { hit.removedAt = new Date().toISOString(); hit.removedBy = me(); }
+    else { delete hit.removedAt; delete hit.removedBy; }
+    upsertStudy(s);
+    render();
+    const name = hit.kind === "link" ? (hit.label || "the link") : hit.name;
+    if (on) toastAction(`Removed ${name}`, "Undo", () => setSlotRemoved(id, false));
+    else toast(`${name} is back`);
+  };
+  $main.querySelectorAll("[data-slot-rm]").forEach(b => b.onclick = (ev) => { ev.stopPropagation(); setSlotRemoved(b.dataset.slotRm, true); });
   $main.querySelectorAll("[data-slot-dl]").forEach(b => b.onclick = () => {
     const id = b.dataset.slotDl;
     let hit = null;
@@ -8038,7 +8070,7 @@ function renderStudyDetail() {
     if (!text) { toast("Type something first"); return; }
     if (blockOfflineEdit("Adding a note")) return;
     s.noteEntries = s.noteEntries || [];
-    s.noteEntries.push({ id: uid(), text, date: document.getElementById("note-date").value || todayStr(), archivedOn: "" });
+    s.noteEntries.push({ id: uid(), text, date: document.getElementById("note-date").value || todayStr(), archivedOn: "", by: me() });
     studySectionState.notes = true;
     upsertStudy(s);
     toast("Note added");
@@ -9811,7 +9843,7 @@ function placeMeetingItem(gId, rid, studyId) {
   const noteId = uid();
   if (!Array.isArray(s.noteEntries)) s.noteEntries = [];
   s.noteEntries.push({ id: noteId, text: `From email “${g.subject || "meeting"}”: ${it.text}${it.evidence ? " — heard: “" + it.evidence + "”" : ""}`,
-    date: todayStr(), archivedOn: "" });
+    date: todayStr(), archivedOn: "", by: me() });
   upsertStudy(s);
   g[reviewKey(rid)] = { by: me(), at: new Date().toISOString(), placedIn: s.id, placedTitle: s.title, noteId };
   upsertSuggestion(g);
@@ -14105,6 +14137,9 @@ function balloonNews() {
     { since: 6, tab: "worklist", sel: ['nav.tabbar [data-tab="worklist"]'], title: "Smelly, stale, rotten — by real work",
       what: "The Worklist now counts days since someone actually worked on a study: an edit, a task, a note, a file, or a meeting email that updated it. Tagging and bulk fixes no longer reset the clock. A week is <b>SMELLY</b>, two weeks <b>STALE</b>, four <b>ROTTEN</b>.",
       custom: "Give a task or milestone a date and the study won't be flagged before then; the count starts once that date passes. <b>Going off</b> lists everything that has turned." },
+    { since: 7, tab: "studies", sel: ['nav.tabbar [data-tab="studies"]'], title: "Remove documents · note authors",
+      what: "Every document in a study's Working Documents now has <b>Remove</b>, and each note shows who wrote it.",
+      custom: "Removing takes it off the study but keeps it on the record — press <b>Undo</b> straight away if it was a mistake. Older notes from before today have no author recorded." },
   ];
 }
 function balloonsVersion() {
