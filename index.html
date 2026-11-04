@@ -5724,6 +5724,7 @@ function workingDocsBodyHTML(s) {
 // `store` is passed in because storeUploadedFile is scoped to the render closure, not global.
 // Calling it from here by name worked only because every caller happened to sit inside that same
 // closure, which is the sort of thing that breaks the first time somebody adds a caller elsewhere.
+const UPLOAD_MAX_MB = 8;
 function openAddDocSheet(s, opts) {
   opts = opts || {};
   const store = opts.store || (typeof storeUploadedFile === "function" ? storeUploadedFile : null);
@@ -5790,10 +5791,20 @@ function openAddDocSheet(s, opts) {
       const toOther = spill ? staged.slice(1) : [];
       // The upload is slow enough to need its own closing — the sheet stays put until the files
       // are actually stored, so a failure is seen rather than hidden behind a closed sheet.
+      const saveBtn = document.getElementById("sheet-save");
+      if (saveBtn && saveBtn.dataset.busy) return false;          // already uploading — a second press would upload twice
+      const total = toSlot.length + toOther.length;
+      const busy = (n) => { if (saveBtn) { saveBtn.dataset.busy = "1"; saveBtn.disabled = true; saveBtn.textContent = total > 1 ? `Uploading ${n} of ${total}…` : "Uploading…"; } };
+      const idle = () => { if (saveBtn) { delete saveBtn.dataset.busy; saveBtn.disabled = false; saveBtn.textContent = "Add"; } };
+      // William Lee, 4 Nov 2026: "when I clicked the add button nothing happened". The upload ran
+      // with no sign it had started, and anything that went wrong inside it vanished. Now the button
+      // says it's uploading, and every failure ends in a message and a usable button.
       (async () => {
-        let ok = 0, failed = 0;
+        let ok = 0, failed = 0, n = 0;
+        try {
         for (const [files, target] of [[toSlot, key], [toOther, "other"]]) {
           for (const f of files) {
+            busy(++n);
             const entry = await store(f);
             if (!entry) { failed++; continue; }     // store has already said why
             // One description, every file in this batch — that is what "same instance" means.
@@ -5801,6 +5812,13 @@ function openAddDocSheet(s, opts) {
             ok++;
           }
         }
+        } catch (err) {
+          console.warn("upload failed", err);
+          toast("Upload failed — " + ((err && err.message) || "something went wrong") + ". Nothing was added; try again.");
+          idle();
+          return;
+        }
+        idle();
         if (!ok) return;                            // nothing stored, sheet stays open with the reason
         closeSheet();
         render();
@@ -5829,7 +5847,7 @@ function openAddDocSheet(s, opts) {
           <div class="milestone-row" style="gap:8px">
             <div style="flex:1;min-width:0">
               <div style="font-size:14px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">📄 ${esc(f.name)}</div>
-              <div style="font-size:12px;color:var(--text2)">${esc(fmtSize(f.size))}</div>
+              <div style="font-size:12px;color:${f.size > UPLOAD_MAX_MB * 1048576 ? "var(--red, #c0392b)" : "var(--text2)"}">${esc(fmtSize(f.size))}${f.size > UPLOAD_MAX_MB * 1048576 ? ` — over ${UPLOAD_MAX_MB} MB, too large to upload here. Add it as a link instead (OneDrive, Box, Google Drive).` : ""}</div>
             </div>
             <button type="button" data-unstage="${i}" title="Remove from this batch"
               style="flex:none;border:none;background:none;color:var(--text2);font-size:18px;line-height:1;cursor:pointer;font-family:inherit;padding:6px 8px">×</button>
@@ -7782,14 +7800,24 @@ function renderStudyDetail() {
   // failed — callers must not record anything on a null, or the study would list a document that
   // isn't there.
   async function storeUploadedFile(f) {
-    const maxMB = sb ? 8 : 2.5;
-    if (f.size > maxMB * 1024 * 1024) { toast(`File too large (max ${maxMB} MB${sb ? "" : " until Team Sync is on"})`); return null; }
-    const dataUrl = await new Promise((res, rej) => {
-      const r = new FileReader();
-      r.onload = () => res(r.result);
-      r.onerror = () => rej(new Error("read failed"));
-      r.readAsDataURL(f);
-    });
+    const maxMB = sb ? UPLOAD_MAX_MB : 2.5;
+    if (f.size > maxMB * 1024 * 1024) { toast(`${f.name} is too large (${fmtSize(f.size)}; max ${maxMB} MB${sb ? "" : " until Team Sync is on"}) — add it as a link instead`); return null; }
+    if (sb) toast(`Uploading ${f.name}…`);
+    // A read failure used to throw out of here unhandled, and the person saw nothing at all (William
+    // Lee, 4 Nov 2026: "when I clicked the add button nothing happened"). A file still in OneDrive
+    // or iCloud, or opened straight from an email, can fail to read until it's saved locally.
+    let dataUrl;
+    try {
+      dataUrl = await new Promise((res, rej) => {
+        const r = new FileReader();
+        r.onload = () => res(r.result);
+        r.onerror = () => rej(new Error("read failed"));
+        r.readAsDataURL(f);
+      });
+    } catch (err) {
+      toast(`Couldn't read ${f.name} — save it to your computer first (not straight from email or OneDrive), then try again`);
+      return null;
+    }
     const id = uid();
     if (!sb) {
       try { localStorage.setItem("rt-file-" + id, dataUrl); }
@@ -7800,7 +7828,10 @@ function renderStudyDetail() {
       // put on by hand. Without it the database refuses the row outright — which is exactly what
       // happened from 9 Oct, when the stamp became compulsory: every upload was rejected and the
       // only sign was a toast blaming the connection.
-      const { error } = await sb.from("items").upsert({ id, kind: "file", data: { name: f.name, content: dataUrl }, updated_at: new Date().toISOString(), workspace: activeWorkspace() });
+      let error = null;
+      try {
+        ({ error } = await sb.from("items").upsert({ id, kind: "file", data: { name: f.name, content: dataUrl }, updated_at: new Date().toISOString(), workspace: activeWorkspace() }));
+      } catch (err) { error = err || new Error("network"); }
       if (error) {
         // A refusal and a dropped connection are different problems and must not read the same.
         if (isServerRefusal(error)) toast("That upload was refused — " + refusalReason(error));
