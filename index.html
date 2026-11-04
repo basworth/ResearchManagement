@@ -10235,9 +10235,19 @@ function renderWorkingList() {
     });
   } else {
     // Default: active studies first, then by workflow phase order, then by nickname/title.
+    // Published (Adam, 4 Nov 2026: "sorted older publications at the bottom"): newest first by
+    // publication year, then PubMed ID, which rises with time, so within a year the latest is first.
+    const pubKey = (x) => {
+      const y = parseInt((x.publication && x.publication.year) || "", 10) || 0;
+      const id = parseInt((x.publication && x.publication.pmid) || "", 10) || 0;
+      return y * 1e9 + id;
+    };
     studies.sort((a, b) =>
       (isActive(a) ? 0 : 1) - (isActive(b) ? 0 : 1) ||
+      // On Hold before Published, so the publications form the bottom of the list, oldest last.
+      ((a.phase === "Published") - (b.phase === "Published")) ||
       PHASES.indexOf(a.phase) - PHASES.indexOf(b.phase) ||
+      (a.phase === "Published" && b.phase === "Published" ? pubKey(b) - pubKey(a) : 0) ||
       (a.nickname || a.title).localeCompare(b.nickname || b.title));
   }
 
