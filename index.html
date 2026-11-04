@@ -1719,6 +1719,9 @@ function openPendingStudy() {
 }
 
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2));
+// The meeting-reader rules are shared character-for-character with the server, which calls it newId.
+// It was never defined here, so applying an abstract, note or new-submission change in the app threw.
+const newId = uid;
 // LOCAL date, deliberately not toISOString(). toISOString() reports UTC, so in Chicago every
 // evening from 7pm (6pm in winter) it already returns TOMORROW — which made "today" arrive five
 // hours early and pushed anything due today one day into the past. That silently shifted the
@@ -9677,6 +9680,59 @@ function fileMeetingAttachment(gId, i, studyId) {
   render();
   toast(`${f.name} filed under ${s.title} — it's in the study's Documents`);
 }
+// "No study matched" (Adam, 4 Nov 2026): "we should have an option to delete them, or assign them
+// to a study via a dropdown/search field". Assigning adds what was heard to that study's Notes —
+// the item is free text, so a note is the one place it can go without guessing at a field.
+// Remove takes it off the card; like Approve it's recorded on the meeting, never erased, and can
+// be undone.
+function meetingHeldPlaceHTML(g, a) {
+  const studies = visibleStudies().slice().sort((x, y) => String(x.title).localeCompare(String(y.title)));
+  if (!studies.length) return "";
+  const dl = "dl-mtg-" + g.id + "-" + a.rid;
+  return `<div style="display:flex;gap:6px;align-items:center;margin:5px 0 2px 16px;flex-wrap:wrap">
+    <input list="${esc(dl)}" data-mtg-place="${esc(g.id)}" data-mtg-rid="${esc(a.rid)}" placeholder="Add to a study… (type to search)"
+      style="flex:1 1 200px;min-width:0;border:none;background:var(--bg);border-radius:8px;padding:6px 8px;font-size:13px;font-family:inherit;color:var(--text)">
+    <datalist id="${esc(dl)}">${studies.map(st => `<option value="${esc(st.title)}">${st.nickname ? esc(st.nickname) : ""}</option>`).join("")}</datalist>
+    <button class="mini-btn" data-mtg-dismiss="${esc(g.id)}" data-mtg-rid="${esc(a.rid)}" style="margin:0;flex:0 0 auto">Remove</button>
+  </div>`;
+}
+function studyByTypedTitle(v) {
+  const t = String(v || "").trim().toLowerCase();
+  if (!t) return null;
+  const pool = visibleStudies();
+  return pool.find(s => String(s.title || "").trim().toLowerCase() === t)
+    || pool.find(s => String(s.nickname || "").trim().toLowerCase() === t) || null;
+}
+function placeMeetingItem(gId, rid, studyId) {
+  const g = (state.suggestions || []).find(x => x.id === gId);
+  const s = studyById(studyId);
+  const it = g && [].concat(...meetingGroups(g).map(x => x.items)).find(x => x.rid === rid);
+  if (!g || !s || !it || !it.held || g[reviewKey(rid)]) return;
+  if (blockOfflineEdit("Adding that to a study")) return;
+  if (!canUndoMeeting(g)) { toast("Only whoever forwarded it, the people it was sent to, or an admin can do this"); return; }
+  const noteId = uid();
+  if (!Array.isArray(s.noteEntries)) s.noteEntries = [];
+  s.noteEntries.push({ id: noteId, text: `From email “${g.subject || "meeting"}”: ${it.text}${it.evidence ? " — heard: “" + it.evidence + "”" : ""}`,
+    date: todayStr(), archivedOn: "" });
+  upsertStudy(s);
+  g[reviewKey(rid)] = { by: me(), at: new Date().toISOString(), placedIn: s.id, placedTitle: s.title, noteId };
+  upsertSuggestion(g);
+  render();
+  toastAction(`Added to ${s.nickname || s.title}'s notes`, "Open", () => { openStudy(s.id); tab = "studies"; render(); });
+}
+function dismissMeetingItem(gId, rid, undo) {
+  const g = (state.suggestions || []).find(x => x.id === gId);
+  if (!g) return;
+  if (blockOfflineEdit("Removing that item")) return;
+  if (!canUndoMeeting(g)) { toast("Only whoever forwarded it, the people it was sent to, or an admin can do this"); return; }
+  if (undo) delete g[reviewKey(rid)];
+  else g[reviewKey(rid)] = { by: me(), at: new Date().toISOString(), dismissed: true };
+  upsertSuggestion(g);
+  render();
+  if (undo) toast("Back on the list");
+  else toastAction(meetingAllReviewed(g) ? "Removed — that was the last one; the meeting moves to the history" : "Removed from the list",
+    "Undo", () => dismissMeetingItem(gId, rid, true));
+}
 function meetingCardHTML(g) {
   const when = g.createdAt ? fmtDate(String(g.createdAt).slice(0, 10)) : "";
   const open = meetingUndoOpen(g);
@@ -9707,11 +9763,12 @@ function meetingCardHTML(g) {
         const rv = g[reviewKey(a.rid)];
         const box = can && !(a.undoneAt && !a.held) ? `<label style="display:flex;align-items:center;gap:4px;font-size:11.5px;color:var(--text2);flex:0 0 auto;cursor:pointer;margin-top:2px">
             <input type="checkbox" data-mtg-review="${esc(g.id)}" data-mtg-rid="${esc(a.rid)}" ${rv ? "checked" : ""}>${a.held ? "Done" : "Approve"}</label>` : "";
-        const who = rv ? ` · ${a.held ? "done" : "approved"} by ${esc(rv.by || "")} ${esc(fmtDate(String(rv.at || "").slice(0, 10)))}` : "";
+        const who = rv ? ` · ${rv.dismissed ? "removed" : rv.placedIn ? "added to " + esc(rv.placedTitle || "a study") + "'s notes" : a.held ? "done" : "approved"} by ${esc(rv.by || "")} ${esc(fmtDate(String(rv.at || "").slice(0, 10)))}` : "";
         return a.held ? `<div class="frow" style="gap:8px;padding:4px 0;border-bottom:none;align-items:flex-start">
           <div style="flex:1;min-width:0;${rv ? "color:var(--text2)" : ""}">
             <div style="font-size:13.5px"><span style="color:var(--orange);font-weight:700">○</span> ${esc(a.text)} <span style="font-size:11.5px;color:var(--text2)">— ${esc(a.why || "")}</span></div>
             ${a.evidence || who ? `<div style="font-size:11.5px;color:var(--text2);margin:1px 0 0 16px">${a.evidence ? `Heard: “${esc(a.evidence)}”` : ""}${who}</div>` : ""}
+            ${can && !rv && !a.studyId ? meetingHeldPlaceHTML(g, a) : ""}
           </div>
           ${box}
         </div>` : `<div class="frow" style="gap:8px;padding:4px 0;border-bottom:none;align-items:flex-start">
@@ -9930,6 +9987,12 @@ function bindSuggestions(root) {
   root.querySelectorAll("[data-mtg-files] [data-open-study], .mtg-file-link").forEach(a => a.onclick = (e) => {
     e.preventDefault(); openStudy(a.dataset.openStudy); tab = "studies"; render();
   });
+  root.querySelectorAll("[data-mtg-place]").forEach(inp => inp.onchange = () => {
+    const st = studyByTypedTitle(inp.value);
+    if (st) placeMeetingItem(inp.dataset.mtgPlace, inp.dataset.mtgRid, st.id);
+    else if (inp.value.trim()) toast("Pick a study from the list");
+  });
+  root.querySelectorAll("[data-mtg-dismiss]").forEach(b => b.onclick = () => dismissMeetingItem(b.dataset.mtgDismiss, b.dataset.mtgRid));
   root.querySelectorAll("[data-mtg-file]").forEach(sel => sel.onchange = () => {
     if (sel.value) fileMeetingAttachment(sel.dataset.mtgFile, Number(sel.dataset.mtgFileI), sel.value);
   });
@@ -13923,6 +13986,9 @@ function balloonNews() {
     { since: 4, sel: ['nav.tabbar [data-tab="settings"]'], title: "Email files are read too",
       what: "Forward an email with a photo, infographic, PDF, spreadsheet or Word file to studyupdates@studypipeline.com and the tracker reads the file, checks it for patient information, and files it under the right study.",
       custom: "If it can't tell which study a file belongs to, it waits on the meeting card in Settings with a \"File under…\" picker. Anything that might identify a patient is never saved." },
+    { since: 5, sel: ['nav.tabbar [data-tab="settings"]'], title: "Sort out \"No study matched\"",
+      what: "When an email mentions something the tracker couldn't tie to a study, it waits on the meeting card under <b>No study matched</b>.",
+      custom: "Type a study's name in <b>Add to a study…</b> to put it in that study's Notes, or press <b>Remove</b> to take it off the list. Both can be undone." },
   ];
 }
 function balloonsVersion() {
