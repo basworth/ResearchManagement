@@ -2366,7 +2366,10 @@ async function handleAuthChange(event, session) {
     // because on a first sign-in there is no profile row yet to read it from and the app would
     // otherwise stamp them with the default lab. Set by invite-user at account creation.
     currentUser = { id: session.user.id, email: session.user.email,
-                    invitedWorkspace: (session.user.user_metadata || {}).workspace || "" };
+                    invitedWorkspace: (session.user.user_metadata || {}).workspace || "",
+                    // "named" = trainees, prior team, postdoc: the server sends only the studies
+                    // they're on (migration 019), so the app mustn't filter again by name.
+                    access: (session.user.app_metadata || {}).access || "" };
     hideLoginScreen();
     setSyncPill(false, "Connecting…");
     unsubscribeRealtime();
@@ -3603,20 +3606,36 @@ function namesIManage() {
   if (!state.orgPermissions || !currentUser) return [];
   return orgReportsOf(currentUser.id).map(p => canonName(p.name || "")).filter(Boolean);
 }
+// Named-only access (trainees, prior team, postdoc). The server has already narrowed what they
+// receive to the studies naming them, using its own looser match (surname, aliases, authors).
+// Matt Kingery, 4 Nov 2026: profile "Matthew T. Kingery", studies "Matt Kingery" — the server sent
+// him the studies and the app's stricter name check then hid every one of them.
+function namedOnly() { return !!(currentUser && currentUser.access === "named"); }
+// The same surname rule the server uses (my_names, migration 011), so the app never hides a study
+// the database has decided someone is on.
+function onStudyBySurname(s, name) {
+  const parts = String(stripDegrees(name || "")).trim().toLowerCase().split(/\s+/);
+  const last = parts.length > 1 ? parts[parts.length - 1] : "";
+  if (last.length <= 2) return false;
+  return namesFromField(s.pi).concat(Array.isArray(s.team) ? s.team : namesFromField(s.team || ""))
+    .some(x => String(x || "").toLowerCase().includes(last));
+}
 // The set of studies the signed-in person is allowed to see anywhere in the app.
 function visibleStudies() {
   if (isAdmin()) return state.studies.slice();
+  if (namedOnly()) return state.studies.slice();
   const myName = me();
   if (!myName) return state.studies.slice(); // no identity yet — don't hide everything and confuse them
   const managed = namesIManage();
-  return state.studies.filter(s => studyInvolvesPerson(s, myName) || managed.some(n => studyInvolvesPerson(s, n)));
+  return state.studies.filter(s => studyInvolvesPerson(s, myName) || onStudyBySurname(s, myName) || managed.some(n => studyInvolvesPerson(s, n)));
 }
 function canSeeStudy(s) {
   if (!s) return false;
   if (isAdmin()) return true;
+  if (namedOnly()) return true;
   const myName = me();
   if (!myName) return true;
-  if (studyInvolvesPerson(s, myName)) return true;
+  if (studyInvolvesPerson(s, myName) || onStudyBySurname(s, myName)) return true;
   return namesIManage().some(n => studyInvolvesPerson(s, n));
 }
 function studyById(id) { return state.studies.find(s => s.id === id); }
@@ -3630,7 +3649,9 @@ function studyInvolvesPerson(s, name) {
   // "Adam Yanke". The substring checks below stay as a fallback for anything the alias map
   // doesn't cover (e.g. a team entry written as "Chen (postdoc)").
   const canon = canonName(name).toLowerCase();
-  const people = namesFromField(s.pi).concat(s.team || []).map(x => x.toLowerCase());
+  // Both sides through the alias map, so "Matt Kingery" on a study and "Matthew T. Kingery" on a
+  // profile meet once an admin has merged them.
+  const people = namesFromField(s.pi).concat(s.team || []).map(x => canonName(x).toLowerCase());
   if (people.includes(canon)) return true;
   if ((s.pi || "").toLowerCase().includes(n)) return true;
   if ((Array.isArray(s.team) ? s.team.join(", ") : (s.team || "")).toLowerCase().includes(n)) return true;
