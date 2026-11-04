@@ -74,7 +74,7 @@ const rowOf = (id) => doc.querySelector(`tr[data-open-study="${id}"]`);
 
   console.log("\n-- The thresholds land exactly where they should --");
   check("2 days is fresh", level("fresh") === "fresh", level("fresh"));
-  check("13 days is still fresh", level("edge13") === "fresh", level("edge13"));
+  check("13 days is smelly (7+), not yet stale", level("edge13") === "smelly", level("edge13"));
   check("14 days is stale", level("stale14") === "stale", level("stale14"));
   check("20 days is stale", level("stale20") === "stale", level("stale20"));
   check("27 days is still only stale", level("edge27") === "stale", level("edge27"));
@@ -168,8 +168,8 @@ const rowOf = (id) => doc.querySelector(`tr[data-open-study="${id}"]`);
   window.eval('worklistStatus = "going"; render();');
   await wait(250);
   const goingRows = Array.from(doc.querySelectorAll("tr[data-open-study]")).map(r => r.dataset.openStudy).sort();
-  check("Shows only stale and rotten studies",
-    goingRows.join(",") === "edge27,notmine,rotten28,rotten60,stale14,stale20", goingRows);
+  check("Shows only smelly, stale and rotten studies",
+    goingRows.join(",") === "edge13,edge27,notmine,rotten28,rotten60,stale14,stale20", goingRows);
   check("Fresh studies are excluded", goingRows.indexOf("fresh") < 0);
   check("On Hold is excluded even though it's ancient", goingRows.indexOf("held") < 0);
   check("Published is excluded even though it's ancient", goingRows.indexOf("published") < 0);
@@ -201,7 +201,7 @@ const rowOf = (id) => doc.querySelector(`tr[data-open-study="${id}"]`);
   })(); worklistStatus = "going"; render();`);
   await wait(250);
   const emptyHTML = doc.getElementById("main").innerHTML;
-  check("Says nothing is stale or rotten", /Nothing is stale or rotten/.test(emptyHTML));
+  check("Says nothing has gone off", /Nothing has gone off/.test(emptyHTML));
   check("...and not the generic 'no studies yet'", !/No active studies yet/.test(emptyHTML));
 
   console.log("\n-- Quiet-but-not-stale rows show their age --");
@@ -210,10 +210,11 @@ const rowOf = (id) => doc.querySelector(`tr[data-open-study="${id}"]`);
     remoteMeta["edge13"].updated_at = ${JSON.stringify(ago(3))};
   })(); worklistStatus = "active"; render();`);
   await wait(250);
-  check("A 9-day-old study is labelled quiet", /quiet 9d/.test(rowOf("fresh").innerHTML),
-    (rowOf("fresh").innerHTML.match(/quiet \d+d/) || [])[0]);
-  check("...but not tinted", rowOf("fresh").className === "", rowOf("fresh").className);
-  check("A 3-day-old study stays clean", !/quiet/.test(rowOf("edge13").innerHTML));
+  // 4 Nov 2026: a week quiet is now SMELLY (it used to be a grey "quiet 9d" note).
+  check("A 9-day-old study is tagged smelly", /SMELLY · 9d/.test(rowOf("fresh").innerHTML),
+    (rowOf("fresh").innerHTML.match(/SMELLY[^<]*/) || [])[0]);
+  check("...with the faint smelly tint", rowOf("fresh").className === "wl-smelly", rowOf("fresh").className);
+  check("A 3-day-old study stays clean", !/SMELLY|quiet/.test(rowOf("edge13").innerHTML));
 
   console.log(`\n${pass} passed, ${fail} failed`);
   if (fail) process.exit(1);

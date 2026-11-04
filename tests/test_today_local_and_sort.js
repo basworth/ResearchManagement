@@ -108,7 +108,7 @@ const rowIds = () => Array.from(doc.querySelectorAll("tr[data-open-study]")).map
   window.eval('tab = "worklist"; worklistLayout = "default"; personFilter = "all"; worklistPerson = "all"; render();');
   await wait(250);
   const btn = Array.from(doc.querySelectorAll('.seg button')).find(b => b.dataset.wl === "going");
-  check("The button is labelled Stale & Rotten", btn && /Stale & Rotten/.test(btn.textContent), btn && btn.textContent);
+  check("The button is labelled Going off (smelly, stale and rotten since 4 Nov 2026)", btn && /Going off/.test(btn.textContent), btn && btn.textContent);
   btn.click();
   await wait(250);
   check("Entering the tab sets the staleness sort",
