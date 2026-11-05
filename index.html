@@ -121,7 +121,7 @@
     .sidebar-resizer:hover::after, .sidebar-resizer.dragging::after { background: var(--blue); width: 2px; }
     .sidebar.collapsed + .sidebar-resizer { display: none; }
     .layout > main { flex: 1; min-width: 0; max-width: none; padding: 16px 32px 80px 32px; overflow-y: auto; height: 100%; }
-    nav.tabbar { max-width: 480px; margin: 0 auto; border-radius: 20px 20px 0 0; }
+    nav.tabbar { max-width: 560px; margin: 0 auto; border-radius: 20px 20px 0 0; }
     /* Dashboard now lives permanently in the sidebar, so drop it from the desktop tab bar. */
     nav.tabbar button[data-tab="dashboard"] { display: none; }
     table.wl .wl-title { max-width: 340px; }
@@ -616,6 +616,7 @@
     <button data-tab="studies"><span class="icon">⚗</span>Studies</button>
     <button data-tab="tasks"><span class="icon">☑</span>Tasks</button>
     <button data-tab="worklist"><span class="icon">▦</span>Worklist</button>
+    <button data-tab="conferences"><span class="icon">🎤</span>Meetings</button>
     <button data-tab="notes"><span class="icon">🗒</span>Notes</button>
     <button data-tab="research"><span class="icon">◎</span>My Lab</button>
     <button data-tab="settings"><span class="icon">⚙</span>Settings</button>
@@ -1465,7 +1466,7 @@ function setFieldSub(field, on) {
 function daysUntil(d) { return Math.round((new Date(d + "T00:00:00") - new Date(todayStr() + "T00:00:00")) / 864e5); }
 
 /* ============ State ============ */
-let state = { tagLists: { region: [], topic: [] }, studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], mtgTags: [], teamNotes: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [], watchConfig: null, watchVotes: null, watchKeeps: [] };
+let state = { tagLists: { region: [], topic: [] }, studies: [], tasks: [], roster: [], rosterDegrees: {}, meetings: [], mtgTags: [], teamNotes: [], confItems: [], userPrefs: [], profiles: [], filterSets: [], suggestions: [], matchHints: [], orgPermissions: false, initiationStages: null, nameAliases: {}, stageAdds: [], watchConfig: null, watchVotes: null, watchKeeps: [] };
 // Which tab you land on.
 //
 // Research is the first thing you see each day: it's the page you read rather than edit, and the
@@ -1480,7 +1481,7 @@ let state = { tagLists: { region: [], topic: [] }, studies: [], tasks: [], roste
 // Deliberately only the tab, not the sub-view: restoring a half-open study detail or a co-author
 // drill-down after a refresh would be disorienting, and one of those is another person's record.
 const LAST_TAB_KEY = "rt-last-tab";
-const REAL_TABS = ["dashboard", "studies", "tasks", "worklist", "notes", "research", "settings"];
+const REAL_TABS = ["dashboard", "studies", "tasks", "worklist", "conferences", "notes", "research", "settings"];
 // todayStr is declared further down with const, so it isn't callable yet — this duplicates the
 // one line of it rather than reordering the file around a startup detail.
 function localDayStr() {
@@ -1885,6 +1886,7 @@ function migrate() {
     if (s.irbExpiry == null) s.irbExpiry = "";
   });
   if (!Array.isArray(state.teamNotes)) state.teamNotes = [];
+  if (!Array.isArray(state.confItems)) state.confItems = [];
   if (!Array.isArray(state.userPrefs)) state.userPrefs = [];
   if (!Array.isArray(state.profiles)) state.profiles = [];
   if (!Array.isArray(state.filterSets)) state.filterSets = [];
@@ -2640,6 +2642,7 @@ async function pullAll() {
     state.mtgTags = rows.filter(r => r.kind === "mtgTag").map(r => r.data);
     deadlineTagsLoaded = true;
     state.teamNotes = rows.filter(r => r.kind === "teamNote").map(r => r.data);
+    state.confItems = rows.filter(r => r.kind === "confItem").map(r => r.data);
     state.userPrefs = rows.filter(r => r.kind === "userPref").map(r => r.data);
     state.profiles = rows.filter(r => r.kind === "profile").map(r => r.data);
     state.filterSets = rows.filter(r => r.kind === "filterSet").map(r => r.data);
@@ -3073,7 +3076,7 @@ function applyRealtimeRow(kind, id, data, updatedAt, ws) {
     }
     return;
   }
-  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "mtgTag" ? state.mtgTags : kind === "teamNote" ? state.teamNotes : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : kind === "filterSet" ? state.filterSets : kind === "suggestion" ? state.suggestions : kind === "matchHint" ? state.matchHints : null;
+  const arr = kind === "study" ? state.studies : kind === "task" ? state.tasks : kind === "meeting" ? state.meetings : kind === "mtgTag" ? state.mtgTags : kind === "teamNote" ? state.teamNotes : kind === "confItem" ? (state.confItems = state.confItems || []) : kind === "userPref" ? state.userPrefs : kind === "profile" ? state.profiles : kind === "filterSet" ? state.filterSets : kind === "suggestion" ? state.suggestions : kind === "matchHint" ? state.matchHints : null;
   if (!arr) return;
   // Match on the payload's own id, not the row id: for userPref the two differ (see
   // prefRowId), and matching on the row id would never find the existing entry — so every
@@ -3093,7 +3096,8 @@ function applyRealtimeRow(kind, id, data, updatedAt, ws) {
 function applyRealtimeDelete(id) {
   if (!id) return;
   let hitOpenRecord = false;
-  ["studies", "tasks", "meetings", "mtgTags", "teamNotes", "userPrefs", "profiles", "filterSets", "suggestions", "matchHints"].forEach(key => {
+  ["studies", "tasks", "meetings", "mtgTags", "teamNotes", "confItems", "userPrefs", "profiles", "filterSets", "suggestions", "matchHints"].forEach(key => {
+    if (!Array.isArray(state[key])) return;
     const before = state[key].length;
     // userPref rows live under a derived row id, so also check that mapping — otherwise a
     // deleted preferences row would linger in local state forever.
@@ -4006,7 +4010,7 @@ function render() {
   rememberTab();
   document.querySelectorAll("nav.tabbar button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
   const addBtn = document.getElementById("add-btn");
-  addBtn.style.visibility = (tab === "settings" || tab === "notes" || tab === "research") ? "hidden" : "visible";
+  addBtn.style.visibility = (tab === "settings" || tab === "notes" || tab === "research" || tab === "conferences") ? "hidden" : "visible";
   if (tab === "research") renderResearch();
   else if (tab === "dashboard") renderDashboard();
   else if (tab === "studies") {
@@ -4018,6 +4022,7 @@ function render() {
   else if (tab === "tasks") renderTasks();
   else if (tab === "worklist") renderWorkingList();
   else if (tab === "notes") renderTeamNotes();
+  else if (tab === "conferences") renderConferences();
   else renderSettings();
   renderSupportBanner();
   renderSidebar(); // desktop-only collapsible dashboard panel, kept in sync with every render
@@ -10659,6 +10664,246 @@ function renderWorkingList() {
 }
 
 /* ============ Meeting Notes (weekly, all-studies) ============ */
+/* ============ Meetings: conference planning ============
+ * Adam, 5 Nov 2026: "a conference planning tab with a summary of all the upcoming conferences,
+ * accepted items, rejected, podium, poster, who's making the poster, who's presenting the poster,
+ * who's giving the podium … any planned talks … separated based on conference, they should hide
+ * once a week past the last date of the conference." Agreed in chat: roles are picked on each
+ * abstract; "talks" are invited lectures / ICLs / panels, kept as their own list; only meetings
+ * where the lab has a submission or a talk are shown.
+ *
+ * Nothing new is asked of anyone to make this page work: submissions come from what studies
+ * already record (the per-deadline status and the Abstracts list the acceptance emails update).
+ * Presenter / poster-maker are two more fields on the same per-deadline record. Talks and a
+ * meeting's picture are "confItem" rows, one per talk, one per picture.
+ */
+const CONF_HIDE_AFTER_DAYS = 7;
+const TALK_KINDS = ["Invited lecture", "Instructional course (ICL)", "Panel", "Moderator", "Symposium", "Other"];
+const MONTHS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11 };
+// When the meeting itself happens, read from the catalogue's free text ("Moscone West, San
+// Francisco, CA, Feb 19–23, 2027. Abstract submission deadline Aug 31, 2026 …"). A date RANGE
+// after the abstract deadline is the meeting; failing that, the latest single date after it.
+function conferenceDates(m) {
+  const text = String((m && m.dates) || "") + " " + String((m && m.name) || "");
+  const re = /\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)[a-z]*\.?\s+(\d{1,2})(?:\s*[–—-]\s*(?:(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sept?|Oct|Nov|Dec)[a-z]*\.?\s+)?(\d{1,2}))?,?\s+(20\d\d)\b/gi;
+  const after = (m && m.deadline) || "";
+  const iso = (y, mo, d) => `${y}-${String(mo + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  const found = [];
+  let x;
+  while ((x = re.exec(text))) {
+    const y = +x[5], m1 = MONTHS[x[1].toLowerCase().slice(0, 4)] ?? MONTHS[x[1].toLowerCase().slice(0, 3)];
+    const m2 = x[3] ? (MONTHS[x[3].toLowerCase().slice(0, 4)] ?? MONTHS[x[3].toLowerCase().slice(0, 3)]) : m1;
+    // "Dec 30 – Jan 2, 2027": the year written is the END's year.
+    const start = iso(y - (x[4] && m2 < m1 ? 1 : 0), m1, +x[2]);
+    const end = x[4] ? iso(y, m2, +x[4]) : start;
+    found.push({ start, end, range: !!x[4] });
+  }
+  const later = found.filter(f => !after || f.start > after);
+  const pick = later.find(f => f.range) || later.sort((a, b) => b.start.localeCompare(a.start))[0] || null;
+  return pick;
+}
+function confItems(meetingId, type) {
+  return (state.confItems || []).filter(c => c && !c.removedAt && c.meetingId === meetingId && (!type || c.type === type));
+}
+function saveConfItem(c) {
+  state.confItems = state.confItems || [];
+  const i = state.confItems.findIndex(x => x.id === c.id);
+  if (i >= 0) state.confItems[i] = c; else state.confItems.push(c);
+  saveLocal(); pushItem("confItem", c); render();
+}
+// Every study with something at this meeting: a per-deadline status other than Not Submitted, or
+// an Abstracts entry naming this meeting.
+function conferenceSubmissions(m) {
+  return visibleStudies().map(s => {
+    const linked = s.abstractDeadlineInfo && s.abstractDeadlineInfo[m.id];
+    const entry = abstractEntryForDeadline(s, m);
+    if (!linked && !entry) return null;
+    const info = abstractLinkInfo(s, m.id);
+    if (info.status === "Not Submitted" && !entry) return null;
+    const format = info.status === "Accepted" ? (info.acceptedFormat || info.format || (entry && entry.format) || "") : (info.format || (entry && entry.format) || "");
+    return { s, info, format };
+  }).filter(Boolean);
+}
+function conferencesToPlan() {
+  const today = todayStr();
+  return (state.meetings || []).filter(m => m && m.type !== "grant").map(m => {
+    const when = conferenceDates(m);
+    const subs = conferenceSubmissions(m);
+    const talks = confItems(m.id, "talk");
+    if (!subs.length && !talks.length) return null;
+    let showUntil;
+    const plus = (ymd, n) => { const d = new Date(ymd + "T12:00:00"); d.setDate(d.getDate() + n); const p2 = (n) => String(n).padStart(2, "0"); return d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate()); };
+    if (when) showUntil = plus(when.end, CONF_HIDE_AFTER_DAYS);
+    else if (m.deadline) showUntil = plus(m.deadline, 300);
+    if (showUntil && showUntil < today) return null;
+    return { m, when, subs, talks };
+  }).filter(Boolean).sort((a, b) => String((a.when && a.when.start) || "9999").localeCompare(String((b.when && b.when.start) || "9999")));
+}
+function peopleForStudy(s) {
+  const team = namesFromField(s.pi).concat(Array.isArray(s.team) ? s.team : namesFromField(s.team || ""));
+  const all = team.concat(state.roster || []);
+  return all.filter((n, i) => n && all.findIndex(x => String(x).toLowerCase() === String(n).toLowerCase()) === i);
+}
+const CONF_GRADIENTS = ["linear-gradient(135deg,#1e3c72,#2a5298)", "linear-gradient(135deg,#0f766e,#14b8a6)", "linear-gradient(135deg,#7c2d12,#ea580c)",
+  "linear-gradient(135deg,#4c1d95,#8b5cf6)", "linear-gradient(135deg,#9d174d,#ec4899)", "linear-gradient(135deg,#1f2937,#4b5563)"];
+function confFmtRange(w) {
+  if (!w) return "";
+  return w.start === w.end ? fmtDate(w.start) : `${fmtDate(w.start)} – ${fmtDate(w.end)}`;
+}
+function confSubRowHTML(m, row, kind) {
+  const { s, info, format } = row;
+  const people = peopleForStudy(s);
+  const sel = (field, label, val) => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2)">${label}
+      <select data-conf-role="${esc(s.id)}" data-conf-mtg="${esc(m.id)}" data-conf-field="${field}" style="border:none;background:var(--bg);border-radius:8px;padding:5px 8px;font-size:12.5px;font-family:inherit;color:var(--text);max-width:170px">
+        <option value="">— pick —</option>
+        ${people.map(n => `<option value="${esc(n)}"${val === n ? " selected" : ""}>${esc(n)}</option>`).join("")}
+        ${val && people.indexOf(val) < 0 ? `<option value="${esc(val)}" selected>${esc(val)}</option>` : ""}
+      </select></label>`;
+  const isPoster = /poster/i.test(format);
+  return `<div class="milestone-row" style="flex-direction:column;align-items:stretch;gap:6px">
+    <div style="display:flex;gap:8px;align-items:flex-start">
+      ${format ? `<span class="badge" style="flex:none;background:${/podium/i.test(format) ? "var(--blue)" : "var(--green)"};font-size:10px;padding:2px 7px">${esc(format)}</span>` : ""}
+      <a href="#" data-open-study="${esc(s.id)}" style="flex:1;min-width:0;color:var(--text);text-decoration:none;font-size:14px;font-weight:600;line-height:1.35">${esc(s.nickname || s.title)}</a>
+    </div>
+    ${kind === "accepted" ? `<div style="display:flex;gap:10px;flex-wrap:wrap;padding-left:2px">
+      ${sel("presenter", /podium/i.test(format) ? "Giving the talk" : "Presenting", info.presenter || "")}
+      ${isPoster ? sel("posterBy", "Making the poster", info.posterBy || "") : ""}
+    </div>` : ""}
+  </div>`;
+}
+function conferenceCardHTML(c, i) {
+  const { m, when, subs, talks } = c;
+  const pic = confItems(m.id, "picture").slice(-1)[0];
+  const accepted = subs.filter(r => r.info.status === "Accepted");
+  const rejected = subs.filter(r => r.info.status === "Rejected");
+  const pending = subs.filter(r => r.info.status !== "Accepted" && r.info.status !== "Rejected");
+  const podium = accepted.filter(r => /podium/i.test(r.format));
+  const posters = accepted.filter(r => !/podium/i.test(r.format));
+  const days = when ? daysUntil(when.start) : null;
+  const countdown = when ? (days > 1 ? `in ${days} days` : days === 1 ? "tomorrow" : days === 0 ? "starts today" : (daysUntil(when.end) >= 0 ? "happening now" : "just finished")) : "";
+  const needsPeople = accepted.filter(r => !r.info.presenter || (/poster/i.test(r.format) && !r.info.posterBy)).length;
+  const chip = (n, label, color) => n ? `<span style="display:inline-flex;align-items:center;gap:5px;background:var(--bg);border-radius:999px;padding:4px 10px;font-size:12.5px;font-weight:600"><span style="width:8px;height:8px;border-radius:50%;background:${color}"></span>${n} ${label}</span>` : "";
+  const section = (title, rows, kind, open) => rows.length ? `
+    <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin:14px 2px 2px 2px">${esc(title)} · ${rows.length}</div>
+    ${open ? rows.map(r => confSubRowHTML(m, r, kind)).join("") : `<details><summary style="cursor:pointer;font-size:12.5px;color:var(--blue);padding:4px 2px">Show</summary>${rows.map(r => confSubRowHTML(m, r, kind)).join("")}</details>`}` : "";
+  return `<div class="card" style="padding:0;overflow:hidden;margin-bottom:16px">
+    <div style="position:relative;min-height:118px;background:${pic && pic.url ? `#000 url('${esc(pic.url)}') center/cover` : CONF_GRADIENTS[i % CONF_GRADIENTS.length]};color:#fff;padding:16px 18px;display:flex;flex-direction:column;justify-content:flex-end">
+      ${pic && pic.url ? `<div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.05),rgba(0,0,0,.7))"></div>` : ""}
+      <div style="position:relative">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <span style="background:rgba(255,255,255,.22);border-radius:6px;padding:2px 8px;font-size:11px;font-weight:800;letter-spacing:.5px">${esc(m.society || "")}</span>
+          ${countdown ? `<span style="background:rgba(0,0,0,.25);border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700">${esc(countdown)}</span>` : ""}
+        </div>
+        <div style="font-size:20px;font-weight:800;margin-top:6px;line-height:1.2">${esc(m.name)}</div>
+        <div style="font-size:13px;opacity:.92;margin-top:3px">${esc([confFmtRange(when), m.location].filter(Boolean).join(" · "))}</div>
+      </div>
+    </div>
+    <div style="padding:12px 16px 14px 16px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${chip(podium.length, "podium", "var(--blue)")}${chip(posters.length, posters.length === 1 ? "poster" : "posters", "var(--green)")}
+        ${chip(pending.length, "awaiting decision", "var(--orange)")}${chip(rejected.length, "not accepted", "var(--red)")}
+        ${chip(talks.length, talks.length === 1 ? "talk" : "talks", "#8b5cf6")}
+      </div>
+      ${needsPeople ? `<div style="font-size:12.5px;color:var(--orange);margin-top:8px">${needsPeople} accepted ${needsPeople === 1 ? "item needs" : "items need"} a presenter or poster maker.</div>` : ""}
+      ${section("PODIUM", podium, "accepted", true)}
+      ${section("POSTERS", posters, "accepted", true)}
+      ${section("AWAITING DECISION", pending, "pending", true)}
+      ${talks.length || true ? `<div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.5px;margin:14px 2px 2px 2px">PLANNED TALKS${talks.length ? " · " + talks.length : ""}</div>
+        ${talks.slice().sort((a, b) => String(a.when || "").localeCompare(String(b.when || ""))).map(t => `<div class="milestone-row" style="gap:8px;align-items:flex-start">
+          <span class="badge" style="flex:none;background:#8b5cf6;font-size:10px;padding:2px 7px">${esc(t.kind || "Talk")}</span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:14px;font-weight:600">${esc(t.title || "Untitled talk")}</div>
+            <div style="font-size:12px;color:var(--text2)">${esc([t.speaker, t.when ? fmtDate(t.when) : "", t.time, t.room].filter(Boolean).join(" · "))}</div>
+          </div>
+          <button class="mini-btn" data-conf-talk-edit="${esc(t.id)}" style="margin:0">Edit</button>
+        </div>`).join("") || `<div style="font-size:13px;color:var(--text2);padding:4px 2px">None yet.</div>`}` : ""}
+      ${section("NOT ACCEPTED", rejected, "rejected", false)}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <button class="mini-btn" data-conf-talk-add="${esc(m.id)}" style="margin:0">＋ Add a talk</button>
+        <button class="mini-btn" data-conf-pic="${esc(m.id)}" style="margin:0">${pic ? "Change picture" : "Add a picture"}</button>
+        ${m.link ? `<a href="${esc(m.link)}" target="_blank" rel="noopener" class="mini-btn" style="margin:0;text-decoration:none">Meeting site ↗</a>` : ""}
+      </div>
+    </div>
+  </div>`;
+}
+function openConfTalkSheet(meetingId, talk) {
+  if (blockOfflineEdit("Adding a talk")) return;
+  const t = talk || { id: uid(), type: "talk", meetingId, title: "", speaker: me(), kind: TALK_KINDS[0], when: "", time: "", room: "" };
+  const m = (state.meetings || []).find(x => x.id === meetingId);
+  const inp = "width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none";
+  const people = (state.roster || []).slice().sort();
+  openSheet(talk ? "Edit talk" : `Talk at ${m ? (m.society || m.name) : "this meeting"}`, `
+    <div class="fld"><label>Title</label><input id="ct-title" value="${esc(t.title)}" placeholder="e.g. Patellar instability: when to add a TTO" style="${inp}"></div>
+    <div class="fld"><label>Type</label><select id="ct-kind" style="${inp}">${TALK_KINDS.map(k => `<option${k === t.kind ? " selected" : ""}>${esc(k)}</option>`).join("")}</select></div>
+    <div class="fld"><label>Speaker</label><input id="ct-speaker" list="ct-people" value="${esc(t.speaker)}" style="${inp}">
+      <datalist id="ct-people">${people.map(n => `<option value="${esc(n)}">`).join("")}</datalist></div>
+    <div style="display:flex;gap:8px">
+      <div class="fld" style="flex:1"><label>Day</label><input id="ct-when" type="date" value="${esc(t.when)}" style="${inp}"></div>
+      <div class="fld" style="flex:1"><label>Time</label><input id="ct-time" value="${esc(t.time)}" placeholder="e.g. 2:30 pm" style="${inp}"></div>
+    </div>
+    <div class="fld"><label>Room</label><input id="ct-room" value="${esc(t.room)}" style="${inp}"></div>
+    ${talk ? `<button type="button" id="ct-remove" class="mini-btn" style="margin-top:6px">Remove this talk</button>` : ""}`,
+    () => {
+      const title = document.getElementById("ct-title").value.trim();
+      if (!title) { toast("Give the talk a title"); return false; }
+      Object.assign(t, { title, kind: document.getElementById("ct-kind").value, speaker: document.getElementById("ct-speaker").value.trim(),
+        when: document.getElementById("ct-when").value, time: document.getElementById("ct-time").value.trim(), room: document.getElementById("ct-room").value.trim(),
+        by: t.by || me(), updatedBy: me() });
+      saveConfItem(t);
+      toast(talk ? "Talk updated" : "Talk added");
+      return true;
+    },
+    (sh) => {
+      const rm = sh.querySelector("#ct-remove");
+      if (rm) rm.onclick = () => {
+        t.removedAt = new Date().toISOString(); t.removedBy = me();
+        closeSheet(); saveConfItem(t);
+        toastAction("Talk removed", "Undo", () => { delete t.removedAt; delete t.removedBy; saveConfItem(t); });
+      };
+    });
+}
+function openConfPictureSheet(meetingId) {
+  if (blockOfflineEdit("Adding a picture")) return;
+  const cur = confItems(meetingId, "picture").slice(-1)[0];
+  const inp = "width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:15px;font-family:inherit;color:var(--text);outline:none";
+  openSheet("Meeting picture", `
+    <div style="font-size:13px;color:var(--text2);line-height:1.5;margin-bottom:10px">On the meeting's website, right-click a photo (the venue or the city) and choose <b>Copy Image Address</b>, then paste it here.</div>
+    <div class="fld"><label>Image address</label><input id="cp-url" value="${esc((cur && cur.url) || "")}" placeholder="https://…/photo.jpg" style="${inp}"></div>
+    ${cur ? `<div style="font-size:12px;color:var(--text2)">Clear the box and save to go back to the coloured banner.</div>` : ""}`,
+    () => {
+      const url = document.getElementById("cp-url").value.trim();
+      if (url && !/^https:\/\//i.test(url)) { toast("Paste an address starting with https://"); return false; }
+      if (cur) { cur.removedAt = new Date().toISOString(); cur.removedBy = me(); saveConfItem(cur); }
+      if (url) saveConfItem({ id: uid(), type: "picture", meetingId, url, by: me(), at: new Date().toISOString() });
+      toast(url ? "Picture set" : "Back to the coloured banner");
+      return true;
+    });
+}
+function renderConferences() {
+  $title.textContent = "Meetings";
+  const list = conferencesToPlan();
+  let html = `<div style="font-size:13px;color:var(--text2);line-height:1.5;margin:0 2px 14px 2px">
+    Every upcoming meeting where the lab has something: what was accepted, who's presenting and making each poster, and any talks.
+    A meeting drops off a week after it ends. Statuses come from each study's abstracts, including acceptance emails you forward.</div>`;
+  if (!list.length) html += `<div class="empty"><div class="big">🎤</div>No upcoming meetings with submissions or talks yet.<br><span style="font-size:13px">Link a study to an abstract deadline, or forward an acceptance email, and it appears here.</span></div>`;
+  else html += list.map((c, i) => conferenceCardHTML(c, i)).join("");
+  $main.innerHTML = html;
+  $main.querySelectorAll("[data-open-study]").forEach(el => el.onclick = (e) => { e.preventDefault(); openStudy(el.dataset.openStudy); tab = "studies"; render(); });
+  $main.querySelectorAll("[data-conf-role]").forEach(sel => sel.onchange = () => {
+    const s = studyById(sel.dataset.confRole);
+    if (!s || blockOfflineEdit("Saving that")) return;
+    setAbstractLinkField(s, sel.dataset.confMtg, sel.dataset.confField, sel.value);
+    render();
+    toast(sel.value ? `${sel.value} — ${sel.dataset.confField === "posterBy" ? "making the poster" : "presenting"}` : "Cleared");
+  });
+  $main.querySelectorAll("[data-conf-talk-add]").forEach(b => b.onclick = () => openConfTalkSheet(b.dataset.confTalkAdd));
+  $main.querySelectorAll("[data-conf-talk-edit]").forEach(b => b.onclick = () => {
+    const t = (state.confItems || []).find(x => x.id === b.dataset.confTalkEdit);
+    if (t) openConfTalkSheet(t.meetingId, t);
+  });
+  $main.querySelectorAll("[data-conf-pic]").forEach(b => b.onclick = () => openConfPictureSheet(b.dataset.confPic));
+}
+
 function renderTeamNotes() {
   $title.textContent = "Meeting Notes";
   const notes = (state.teamNotes || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
@@ -14172,6 +14417,9 @@ function balloonNews() {
     { since: 7, tab: "studies", sel: ['nav.tabbar [data-tab="studies"]'], title: "Remove documents · note authors",
       what: "Every document in a study's Working Documents now has <b>Remove</b>, and each note shows who wrote it.",
       custom: "Removing takes it off the study but keeps it on the record — press <b>Undo</b> straight away if it was a mistake. Older notes from before today have no author recorded." },
+    { since: 8, tab: "conferences", sel: ['nav.tabbar [data-tab="conferences"]'], title: "Meetings: your conference plan",
+      what: "One card per upcoming meeting where the lab has something: podium and poster acceptances, what's still awaiting a decision, what wasn't accepted, and any invited talks. Each card disappears a week after the meeting ends.",
+      custom: "Pick who's <b>presenting</b> and who's <b>making the poster</b> on each accepted abstract, add talks with <b>＋ Add a talk</b>, and give a meeting a photo with <b>Add a picture</b>." },
   ];
 }
 function balloonsVersion() {
