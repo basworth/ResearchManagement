@@ -10726,7 +10726,7 @@ function conferenceSubmissions(m) {
 }
 function conferencesToPlan() {
   const today = todayStr();
-  return (state.meetings || []).filter(m => m && m.type !== "grant").map(m => {
+  const list = (state.meetings || []).filter(m => m && m.type !== "grant").map(m => {
     const when = conferenceDates(m);
     const subs = conferenceSubmissions(m);
     const talks = confItems(m.id, "talk");
@@ -10737,7 +10737,28 @@ function conferencesToPlan() {
     else if (m.deadline) showUntil = plus(m.deadline, 300);
     if (showUntil && showUntil < today) return null;
     return { m, when, subs, talks };
-  }).filter(Boolean).sort((a, b) => String((a.when && a.when.start) || "9999").localeCompare(String((b.when && b.when.start) || "9999")));
+  }).filter(Boolean);
+  // One card per CONFERENCE, not per deadline. The catalogue lists "ORS 2027 Annual Meeting" and
+  // "ORS 2027 Late-Breaking Abstract Submission" separately because their deadlines differ, but
+  // they are the same week in San Francisco — and an "ORS 2027" acceptance matches both. Same
+  // society and same start date = same meeting; each study appears once, its best news winning.
+  const groups = {};
+  list.forEach(c => {
+    const key = String(c.m.society || "").toLowerCase() + "|" + (c.when ? c.when.start : c.m.id);
+    (groups[key] = groups[key] || []).push(c);
+  });
+  const rank = (r) => ({ Accepted: 3, Rejected: 2, Submitted: 1 }[r.info.status] || 0);
+  return Object.values(groups).map(g => {
+    // The main meeting is the one that isn't a late-breaking / supplementary call.
+    const main = g.slice().sort((x, y) => (/late|breaking|supplement/i.test(x.m.name) - /late|breaking|supplement/i.test(y.m.name)) || y.subs.length - x.subs.length)[0];
+    const byStudy = {};
+    g.forEach(c => c.subs.forEach(r => {
+      const cur = byStudy[r.s.id];
+      if (!cur || rank(r) > rank(cur.r)) byStudy[r.s.id] = { r: Object.assign({}, r, { meetingId: c.m.id }) };
+    }));
+    const talks = [].concat(...g.map(c => c.talks));
+    return { m: main.m, when: main.when, subs: Object.values(byStudy).map(x => x.r), talks, ids: g.map(c => c.m.id) };
+  }).sort((a, b) => String((a.when && a.when.start) || "9999").localeCompare(String((b.when && b.when.start) || "9999")));
 }
 function peopleForStudy(s) {
   const team = namesFromField(s.pi).concat(Array.isArray(s.team) ? s.team : namesFromField(s.team || ""));
@@ -10754,7 +10775,7 @@ function confSubRowHTML(m, row, kind) {
   const { s, info, format } = row;
   const people = peopleForStudy(s);
   const sel = (field, label, val) => `<label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2)">${label}
-      <select data-conf-role="${esc(s.id)}" data-conf-mtg="${esc(m.id)}" data-conf-field="${field}" style="border:none;background:var(--bg);border-radius:8px;padding:5px 8px;font-size:12.5px;font-family:inherit;color:var(--text);max-width:170px">
+      <select data-conf-role="${esc(s.id)}" data-conf-mtg="${esc(row.meetingId || m.id)}" data-conf-field="${field}" style="border:none;background:var(--bg);border-radius:8px;padding:5px 8px;font-size:12.5px;font-family:inherit;color:var(--text);max-width:170px">
         <option value="">— pick —</option>
         ${people.map(n => `<option value="${esc(n)}"${val === n ? " selected" : ""}>${esc(n)}</option>`).join("")}
         ${val && people.indexOf(val) < 0 ? `<option value="${esc(val)}" selected>${esc(val)}</option>` : ""}

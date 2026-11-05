@@ -18,6 +18,8 @@ const meetings = [
     dates: `Moscone West, ${md(iso(40)).replace(/, \d{4}$/, "")}–${new Date(iso(44) + "T12:00:00").toLocaleString("en-US", { month: "short" })} ${new Date(iso(44) + "T12:00:00").getDate()}, ${iso(44).slice(0, 4)}. Abstract deadline ${md(iso(-60))}.` },
   { id: PAST, society: "AAOS", name: "Old Meeting", type: "abstract", deadline: iso(-200), dates: `${md(iso(-20))}` },
   { id: RECENT, society: "AOSSM", name: "Just Ended", type: "abstract", deadline: iso(-200), dates: `${md(iso(-4))}` },
+  { id: "m-late", society: "ORS", name: "ORS Late-Breaking Abstract Submission", type: "abstract", deadline: iso(-20), location: "San Francisco, CA",
+    dates: `${md(iso(40)).replace(/, \d{4}$/, "")}–${new Date(iso(44) + "T12:00:00").toLocaleString("en-US", { month: "short" })} ${new Date(iso(44) + "T12:00:00").getDate()}, ${iso(44).slice(0, 4)}` },
   { id: EMPTY, society: "ISAKOS", name: "Nothing of ours", type: "abstract", deadline: iso(-30), dates: `${md(iso(60))}` },
 ];
 const st = (id, info, extra) => ({ id, kind: "study", updated_at: now, workspace: "sports-yanke",
@@ -28,6 +30,7 @@ const items = [
   st("pod", { [FUT]: { status: "Accepted", format: "Podium", acceptedFormat: "Podium" } }),
   st("pos", { [FUT]: { status: "Submitted", format: "Poster" } }, { abstracts: [{ id: "a", meeting: "ORS " + iso(40).slice(0, 4), date: iso(-1), status: "Accepted", format: "Poster" }] }),
   st("pend", { [FUT]: { status: "Submitted", format: "Poster" } }),
+  st("late", { "m-late": { status: "Accepted", format: "Poster", acceptedFormat: "Poster" } }),
   st("rej", { [FUT]: { status: "Rejected", format: "Poster" } }),
   st("oldone", { [PAST]: { status: "Accepted", format: "Poster", acceptedFormat: "Poster" } }),
   st("recent", { [RECENT]: { status: "Accepted", format: "Poster", acceptedFormat: "Poster" } }),
@@ -64,11 +67,15 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   check("a meeting we have nothing at isn't shown", !/Nothing of ours/.test(t));
 
   console.log("\n-- What's on a card --");
-  check("podium, posters, awaiting, not accepted are separated", /PODIUM · 1/.test(t) && /POSTERS · 1/.test(t) && /AWAITING DECISION · 1/.test(t) && /NOT ACCEPTED · 1/.test(t), t.slice(0, 600));
-  check("an acceptance that came by email counts as an accepted poster", /POSTERS · 1/.test(t) && d.querySelector('[data-conf-role="pos"][data-conf-field="posterBy"]'));
+  check("a late-breaking call for the same meeting joins the main card, not a second one",
+    !/ORS Late-Breaking Abstract Submission/.test(t) && w.eval("conferencesToPlan().filter(c => c.m.society === 'ORS').length") === 1);
+  check("...with its accepted poster on it, and each study only once", /POSTERS · 2/.test(t) && d.querySelectorAll('[data-conf-role="pos"][data-conf-field="posterBy"]').length === 1, t.match(/POSTERS · \d/));
+  check("...and a role for the late-breaking poster saves against its own deadline", d.querySelector('[data-conf-role="late"][data-conf-field="posterBy"]').dataset.confMtg === "m-late");
+  check("podium, posters, awaiting, not accepted are separated", /PODIUM · 1/.test(t) && /POSTERS · 2/.test(t) && /AWAITING DECISION · 1/.test(t) && /NOT ACCEPTED · 1/.test(t), t.slice(0, 600));
+  check("an acceptance that came by email counts as an accepted poster", /POSTERS · 2/.test(t) && d.querySelector('[data-conf-role="pos"][data-conf-field="posterBy"]'));
   check("accepted items ask who's presenting / making the poster; pending ones don't",
     !!d.querySelector('[data-conf-role="pod"][data-conf-field="presenter"]') && !d.querySelector('[data-conf-role="pod"][data-conf-field="posterBy"]') && !d.querySelector('[data-conf-role="pend"]'));
-  check("it flags accepted items with nobody assigned", /2 accepted items need a presenter or poster maker/.test(t), t.match(/\d+ accepted item[^.]*/));
+  check("it flags accepted items with nobody assigned", /3 accepted items need a presenter or poster maker/.test(t), t.match(/\d+ accepted item[^.]*/));
   const sel = d.querySelector('[data-conf-role="pos"][data-conf-field="posterBy"]');
   sel.value = "William Lee"; sel.onchange(); await wait(30);
   check("picking a poster maker saves it on the study", w.eval(`studyById("pos").abstractDeadlineInfo[${JSON.stringify(FUT)}].posterBy`) === "William Lee");
