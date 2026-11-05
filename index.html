@@ -10698,9 +10698,11 @@ function conferenceDates(m) {
     const end = x[4] ? iso(y, m2, +x[4]) : start;
     found.push({ start, end, range: !!x[4] });
   }
-  const later = found.filter(f => !after || f.start > after);
-  const pick = later.find(f => f.range) || later.sort((a, b) => b.start.localeCompare(a.start))[0] || null;
-  return pick;
+  // Only a date RANGE is trusted as the meeting itself. A lone date in this text is usually
+  // something else — "decisions January 2027; Specialty Day Mar 5, 2027" put AOSSM's July meeting
+  // in March. No range: the dates aren't known yet, and the card says so.
+  const later = found.filter(f => f.range && (!after || f.start > after));
+  return later.sort((a, b) => a.start.localeCompare(b.start))[0] || null;
 }
 function confItems(meetingId, type) {
   return (state.confItems || []).filter(c => c && !c.removedAt && c.meetingId === meetingId && (!type || c.type === type));
@@ -10742,15 +10744,20 @@ function conferencesToPlan() {
   // "ORS 2027 Late-Breaking Abstract Submission" separately because their deadlines differ, but
   // they are the same week in San Francisco — and an "ORS 2027" acceptance matches both. Same
   // society and same start date = same meeting; each study appears once, its best news winning.
+  // A call with no dates of its own (AAOS's video theater, OrthoDome, late-breaking abstracts) is
+  // presented at that society's next dated meeting after its deadline, so it joins that card.
   const groups = {};
+  const soc = (c) => String(c.m.society || "").toLowerCase();
   list.forEach(c => {
-    const key = String(c.m.society || "").toLowerCase() + "|" + (c.when ? c.when.start : c.m.id);
+    let host = c.when ? c : list.filter(o => o.when && soc(o) === soc(c) && o.when.start > String(c.m.deadline || ""))
+      .sort((x, y) => x.when.start.localeCompare(y.when.start))[0];
+    const key = host ? soc(c) + "|" + host.when.start : soc(c) + "|" + c.m.id;
     (groups[key] = groups[key] || []).push(c);
   });
   const rank = (r) => ({ Accepted: 3, Rejected: 2, Submitted: 1 }[r.info.status] || 0);
   return Object.values(groups).map(g => {
     // The main meeting is the one that isn't a late-breaking / supplementary call.
-    const main = g.slice().sort((x, y) => (/late|breaking|supplement/i.test(x.m.name) - /late|breaking|supplement/i.test(y.m.name)) || y.subs.length - x.subs.length)[0];
+    const main = g.slice().sort((x, y) => (!x.when - !y.when) || (/late|breaking|supplement|video/i.test(x.m.name) - /late|breaking|supplement|video/i.test(y.m.name)) || y.subs.length - x.subs.length)[0];
     const byStudy = {};
     g.forEach(c => c.subs.forEach(r => {
       const cur = byStudy[r.s.id];
@@ -10816,7 +10823,7 @@ function conferenceCardHTML(c, i) {
           ${countdown ? `<span style="background:rgba(0,0,0,.25);border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700">${esc(countdown)}</span>` : ""}
         </div>
         <div style="font-size:20px;font-weight:800;margin-top:6px;line-height:1.2">${esc(m.name)}</div>
-        <div style="font-size:13px;opacity:.92;margin-top:3px">${esc([confFmtRange(when), m.location].filter(Boolean).join(" · "))}</div>
+        <div style="font-size:13px;opacity:.92;margin-top:3px">${esc([when ? confFmtRange(when) : "Dates not announced yet", m.location].filter(Boolean).join(" · "))}</div>
       </div>
     </div>
     <div style="padding:12px 16px 14px 16px">
