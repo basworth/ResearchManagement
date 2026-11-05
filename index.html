@@ -4059,7 +4059,7 @@ function deadlineItemHTML(m, dueWord, metaWord, stage) {
         // "Not Submitted" (gray) doubles as the quick reminder of what still needs to go out.
         const statusBadge = isGrant ? "" : (() => {
           const info = abstractLinkInfo(s, m.id);
-          return `<span class="badge" style="background:${ABS_LINK_STATUS_COLORS[info.status] || "var(--text2)"};font-size:9px;padding:2px 6px;margin:3px 4px 0 0">${esc(info.status)}</span>`;
+          return `<span class="badge" style="background:${ABS_LINK_STATUS_COLORS[info.status] || "var(--text2)"};font-size:9px;padding:2px 6px;margin:3px 4px 0 0">${esc(info.status + (info.status === "Accepted" && info.acceptedFormat ? " · " + info.acceptedFormat : ""))}</span>`;
         })();
         return `${statusBadge}<span class="link-chip" data-open-study="${s.id}">${esc(s.title)}</span>`;
       }).join("")}</div>`
@@ -4264,7 +4264,7 @@ function dashboardHTML() {
           ${linked.map(s => {
             const statusBadge = isGrant ? "" : (() => {
               const info = abstractLinkInfo(s, m.id);
-              return `<span class="badge" style="background:${ABS_LINK_STATUS_COLORS[info.status] || "var(--text2)"};font-size:9px;padding:2px 6px">${esc(info.status)}</span>`;
+              return `<span class="badge" style="background:${ABS_LINK_STATUS_COLORS[info.status] || "var(--text2)"};font-size:9px;padding:2px 6px">${esc(info.status + (info.status === "Accepted" && info.acceptedFormat ? " · " + info.acceptedFormat : ""))}</span>`;
             })();
             return `<div style="display:flex;align-items:center;gap:6px;padding:3px 0">
               ${statusBadge}
@@ -5590,12 +5590,44 @@ function bindCollapsibleSections(root) {
 
 // Per-study submission tracking for a linked abstract deadline: what format was submitted
 // (poster/podium), the review status, and — once accepted — which format was granted.
+// A study's abstracts are recorded in two places: this per-deadline status (set on the study page
+// and shown on the deadline cards), and the study's Abstracts list, which is what a forwarded
+// acceptance email updates ("ORS 2027 · Accepted · Poster"). Adam, 5 Nov 2026, looking at the ORS
+// 2027 card: the studies the ORS emails had just marked accepted still said Submitted there,
+// because the card only read the first. The card now also reads the Abstracts entry for the same
+// meeting, and the further-along news wins — unless someone set the status by hand after it.
+const ABS_LINK_RANK = { "Not Submitted": 0, Submitted: 1, Accepted: 2, Rejected: 2 };
+function abstractEntryForDeadline(s, m) {
+  if (!s || !m || !Array.isArray(s.abstracts)) return null;
+  const toks = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
+  const hay = new Set(toks((m.society || "") + " " + (m.name || "") + " " + (m.key || "")));
+  const year = (String(m.dates || "") + " " + (m.name || "")).match(/20\d\d/g) || [];
+  const hits = s.abstracts.filter(a => {
+    const t = toks(a.meeting);
+    if (!t.length || !t.some(x => !/^\d+$/.test(x))) return false;
+    // Every word of the abstract's meeting must be in the deadline's name; a year must be one the
+    // deadline mentions, so "ORS 2026" never lands on the 2027 meeting.
+    return t.every(x => hay.has(x) || (/^20\d\d$/.test(x) && year.indexOf(x) >= 0));
+  });
+  return hits.sort((x, y) => String(y.date || "").localeCompare(String(x.date || "")))[0] || null;
+}
 function abstractLinkInfo(s, meetingId) {
-  return (s.abstractDeadlineInfo && s.abstractDeadlineInfo[meetingId]) || { format: "", status: "Not Submitted", acceptedFormat: "" };
+  const info = (s.abstractDeadlineInfo && s.abstractDeadlineInfo[meetingId]) || { format: "", status: "Not Submitted", acceptedFormat: "" };
+  const m = (state.meetings || []).find(x => x.id === meetingId);
+  const ab = abstractEntryForDeadline(s, m);
+  if (!ab || !(ab.status in ABS_LINK_RANK)) return info;
+  const handSetLater = info.statusSetAt && String(info.statusSetAt).slice(0, 10) >= String(ab.date || "");
+  if (handSetLater || ABS_LINK_RANK[ab.status] <= (ABS_LINK_RANK[info.status] || 0)) return info;
+  return Object.assign({}, info, {
+    status: ab.status,
+    acceptedFormat: ab.status === "Accepted" ? (ab.format || info.acceptedFormat || "") : info.acceptedFormat,
+    fromAbstracts: true,
+  });
 }
 function setAbstractLinkField(s, meetingId, field, value) {
   s.abstractDeadlineInfo = s.abstractDeadlineInfo || {};
-  s.abstractDeadlineInfo[meetingId] = Object.assign({ format: "", status: "Not Submitted", acceptedFormat: "" }, s.abstractDeadlineInfo[meetingId], { [field]: value });
+  const extra = field === "status" ? { statusSetAt: new Date().toISOString() } : {};
+  s.abstractDeadlineInfo[meetingId] = Object.assign({ format: "", status: "Not Submitted", acceptedFormat: "" }, s.abstractDeadlineInfo[meetingId], { [field]: value }, extra);
   upsertStudy(s);
 }
 // Row for a linked abstract deadline on a study's detail page — adds the poster/podium
