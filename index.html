@@ -5607,9 +5607,14 @@ function abstractEntryForDeadline(s, m) {
   const toks = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter(Boolean);
   const hay = new Set(toks((m.society || "") + " " + (m.name || "") + " " + (m.key || "")));
   const year = (String(m.dates || "") + " " + (m.name || "")).match(/20\d\d/g) || [];
+  // A late-breaking (or video) call is its own deadline: an "ORS 2027" acceptance belongs to the
+  // regular call, so it only counts here if the entry itself says late-breaking / video.
+  const SIDE = /\b(late|breaking|lba|video|ovt|orthodome)\b/i;
+  const sideCall = SIDE.test((m.name || "") + " " + (m.key || ""));
   const hits = s.abstracts.filter(a => {
     const t = toks(a.meeting);
     if (!t.length || !t.some(x => !/^\d+$/.test(x))) return false;
+    if (sideCall && !SIDE.test(a.meeting || "")) return false;
     // Every word of the abstract's meeting must be in the deadline's name; a year must be one the
     // deadline mentions, so "ORS 2026" never lands on the 2027 meeting.
     return t.every(x => hay.has(x) || (/^20\d\d$/.test(x) && year.indexOf(x) >= 0));
@@ -10791,6 +10796,8 @@ function confSubRowHTML(m, row, kind) {
   return `<div class="milestone-row" style="flex-direction:column;align-items:stretch;gap:6px">
     <div style="display:flex;gap:8px;align-items:flex-start">
       ${format ? `<span class="badge" style="flex:none;background:${/podium/i.test(format) ? "var(--blue)" : "var(--green)"};font-size:10px;padding:2px 7px">${esc(format)}</span>` : ""}
+      ${(() => { const via = row.meetingId && row.meetingId !== m.id ? (state.meetings || []).find(x => x.id === row.meetingId) : null;
+        return via ? `<span class="badge outline" style="flex:none;font-size:10px;padding:2px 7px" title="Submitted through ${esc(via.name)}">${/late|breaking/i.test(via.name) ? "Late-breaking" : /video|ovt|orthodome/i.test(via.name) ? "Video" : esc(via.name)}</span>` : ""; })()}
       <a href="#" data-open-study="${esc(s.id)}" style="flex:1;min-width:0;color:var(--text);text-decoration:none;font-size:14px;font-weight:600;line-height:1.35">${esc(s.nickname || s.title)}</a>
     </div>
     ${kind === "accepted" ? `<div style="display:flex;gap:10px;flex-wrap:wrap;padding-left:2px">

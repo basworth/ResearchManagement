@@ -74,6 +74,9 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     !/ORS Late-Breaking Abstract Submission/.test(t) && w.eval("conferencesToPlan().filter(c => c.m.society === 'ORS').length") === 1);
   check("...with its accepted poster on it, and each study only once", /POSTERS · 2/.test(t) && d.querySelectorAll('[data-conf-role="pos"][data-conf-field="posterBy"]').length === 1, t.match(/POSTERS · \d/));
   check("an undated call (video theater) joins that society's next meeting", !/Video Theater Submission/.test(t) && !!d.querySelector('[data-conf-role="vid"]'));
+  check("a late-breaking submission is labelled as such on the meeting card", /Late-breaking/.test(d.querySelector('[data-conf-role="late"]').closest(".milestone-row").textContent));
+  check("an 'ORS' acceptance email doesn't mark the late-breaking deadline", w.eval(`abstractEntryForDeadline(studyById("pos"), state.meetings.find(m => m.id === "m-late"))`) === null
+    && !!w.eval(`abstractEntryForDeadline(studyById("pos"), state.meetings.find(m => m.id === ${JSON.stringify(FUT)}))`));
   check("...and a role for the late-breaking poster saves against its own deadline", d.querySelector('[data-conf-role="late"][data-conf-field="posterBy"]').dataset.confMtg === "m-late");
   check("podium, posters, awaiting, not accepted are separated", /PODIUM · 2/.test(t) && /POSTERS · 2/.test(t) && /AWAITING DECISION · 1/.test(t) && /NOT ACCEPTED · 1/.test(t), t.slice(0, 600));
   check("an acceptance that came by email counts as an accepted poster", /POSTERS · 2/.test(t) && d.querySelector('[data-conf-role="pos"][data-conf-field="posterBy"]'));
