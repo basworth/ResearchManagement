@@ -21,6 +21,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
 import { sendViaDomain } from "./warmup-mail.ts";
 import { readAttachment, studyByGuess } from "./attachments.ts";
+import { attachedEmails, hasAttachedEmails } from "./mime.ts";
 import { setStudies, setMatchHints, setMeetings, stripPHI as stripPHIRules, readEmail, applyChangeTo, PARSER_VERSION } from "./rules.ts";
 import { looksLikeMeeting, studyContext, extractPrompt, callModel, applyMeeting, summaryEmail, threadRecipients, redactAll, tagVocabulary, MEETING_UNDO_HOURS } from "./meeting.ts";
 
@@ -338,10 +339,32 @@ Deno.serve(async (req) => {
     const payload = await req.json().catch(() => ({}));
     const from = bareAddress(payload?.from ?? "");
     const subject = String(payload?.subject ?? "").slice(0, 200);
-    const raw = String(payload?.body ?? "");
+    let raw = String(payload?.body ?? "");
     // Files on the email (29 Oct 2026). Sent by the Gmail script as base64; read in processMeeting.
-    const atts = (Array.isArray(payload?.attachments) ? payload.attachments : [])
+    let atts = (Array.isArray(payload?.attachments) ? payload.attachments : [])
       .filter((a: any) => a && typeof a.data === "string" && a.data.length).slice(0, 8);
+    // Emails forwarded AS ATTACHMENTS (5 Nov 2026) — see mime.ts. Each attached email's text is
+    // added to the body, as if it had been forwarded inline, and the files inside it join the
+    // other attachments (same 8-file cap, same patient-information check).
+    let nAttachedEmails = 0;
+    if (typeof payload?.rawMime === "string" && hasAttachedEmails(payload.rawMime)) {
+      try {
+        const { emails, files } = attachedEmails(payload.rawMime);
+        nAttachedEmails = emails.length;
+        if (emails.length) {
+          raw = (raw.trim() ? raw : "(no covering note)") +
+            `\n\nThis forward has ${emails.length} email${emails.length === 1 ? "" : "s"} attached. Treat each as a separate update:` +
+            emails.map((e, i) => `\n\n--- Attached email ${i + 1} of ${emails.length} ---\nFrom: ${e.from}\nDate: ${e.date}\nSubject: ${e.subject}\n\n${e.text}`).join("");
+        }
+        const room = Math.max(0, 8 - atts.length);
+        atts = atts.concat(files.filter((f) => f.size <= 10 * 1024 * 1024).slice(0, room));
+      } catch (e) {
+        console.warn("couldn't read attached emails", (e as Error)?.message);
+      }
+    }
+    payload.body = raw;
+    payload.attachments = atts;
+    delete payload.rawMime;   // not stored, and not needed past this point
     if (!raw.trim() && !atts.length) return json({ error: "Empty message" }, 400);
 
     const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -389,7 +412,7 @@ Deno.serve(async (req) => {
     // ordinary rules, which at worst file a note.
     // An email with files goes the same way: the files are read and then treated like notes, so a
     // "new study idea" infographic or a data sheet is understood rather than skipped.
-    if (sender && ANTHROPIC_KEY && (atts.length || looksLikeMeeting(subject, raw))) {
+    if (sender && ANTHROPIC_KEY && (atts.length || nAttachedEmails || looksLikeMeeting(subject, raw))) {
       const hash = await sha256(subject + "\n" + raw + atts.map((a: any) => "\n[file] " + a.name + " " + String(a.data).length).join(""));
       // The Apps Script retries anything it didn't get a 200 for, and a long transcript can outlast
       // its patience. The same meeting must never be applied twice.
