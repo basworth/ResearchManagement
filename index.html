@@ -8492,7 +8492,7 @@ function bindFilterSetsBar(tab, setActive) {
 // so improving the parser re-reads everything it looked at before and got nothing from — otherwise
 // a message read by an older, dumber version stays permanently misjudged, which is exactly what
 // happened to the first Arthroscopy confirmation.
-const PARSER_VERSION = 8;
+const PARSER_VERSION = 9;
 
 // ---------- Protected health information ----------
 // The tracker is deliberately study-level and holds no PHI. A forwarded email might, so it is
@@ -8536,25 +8536,55 @@ let MEETINGS = [];
 function setMeetings(list) { MEETINGS = Array.isArray(list) ? list : []; }
 // Phrases worth remembering out of a corrected email. Not every word — the ones that are rare
 // enough to identify something, which is the same test the distinctive-word matcher uses.
+//
+// 6 Nov 2026 — what went wrong. Three hints taught on 30 Oct learned (a) the forwarder's own
+// address ("adam.yanke@rushortho.com means the Osteonecrosis study"), (b) scrambled link tokens,
+// the longest "words" in any email, and (c) "confidentiality", "confidential", "distribution" —
+// words in every Rush email footer. From then on nearly every forward from the team was filed as a
+// note on "Does Normalization Actually Improve…", even one that named its own study word for word.
+// So: links are stripped before reading; footer, mailbox and link-junk words never count; our own
+// addresses are never a sender hint; and a study the email names exactly beats any hint.
+const HINT_IGNORE = new Set(("confidential confidentiality confidentially distribution distribute disclaimer intended recipient recipients " +
+  "privileged prohibited notify immediately unauthorized dissemination copying communication communicate addressee " +
+  "attachment attachments message messages email mail original forwarded sender received reply unsubscribe privacy policy " +
+  "copyright reserved rights studypipeline studyupdate studyupdates tracker pipeline rushortho rush midwest orthopaedics " +
+  "orthopedics appointment schedule thebest harrison chicago phone office fellow fellows research medicine sports professor " +
+  "chair vice regards thanks thank best dear hello https http www mailto click link").split(/\s+/));
+const HINT_OWN_DOMAINS = /@(rushortho\.com|rush\.edu|rushu\.rush\.edu|studypipeline\.com)$/i;
+function hintTextOf(text) {
+  return String(text || "").replace(/<?(https?:\/\/|www\.)[^\s>]+>?/gi, " ").replace(/\S+@\S+/g, " ");
+}
+function hintWordOk(w) {
+  w = String(w || "");
+  if (w.length < 5 || w.length > 18 || HINT_IGNORE.has(w)) return false;
+  if (/\d/.test(w) && /[a-z]/.test(w) && w.length > 8) return false;   // link and tracking junk
+  return /[aeiou]/.test(w);
+}
+function hintSenderOk(addr) {
+  const a = String(addr || "").trim().toLowerCase();
+  return !!a && a.indexOf("@") > 0 && !HINT_OWN_DOMAINS.test(a);
+}
 function hintPhrasesFrom(text, limit) {
   const freq = new Map();
-  matchTokens(text).forEach(w => freq.set(w, (freq.get(w) || 0) + 1));
+  matchTokens(hintTextOf(text)).filter(hintWordOk).forEach(w => freq.set(w, (freq.get(w) || 0) + 1));
   return [...freq.keys()]
     .sort((a, b) => b.length - a.length)
     .slice(0, limit || 8);
 }
-function matchByHint(text) {
+function matchByHint(text, only) {
   // Hyphens kept: an address like editor@ortho-journal.org would otherwise be split in two and
   // never match the sender we recorded.
   const hay = " " + String(text || "").toLowerCase().replace(/[^a-z0-9@.\-]+/g, " ") + " ";
+  const wordHay = " " + hintTextOf(text).toLowerCase().replace(/[^a-z0-9@.\-]+/g, " ") + " ";
   for (const h of MATCH_HINTS) {
-    if (!h || !h.studyId) continue;
+    if (!h || !h.studyId || h.disabled) continue;
     // A sender is the strongest hint there is: an editorial system writes from one address about
     // one manuscript, and a coordinator emails about the studies they run.
-    if (h.sender && hay.indexOf(" " + String(h.sender).toLowerCase() + " ") >= 0) {
+    if (only !== "words" && h.sender && hintSenderOk(h.sender) && hay.indexOf(" " + String(h.sender).toLowerCase() + " ") >= 0) {
       return { studyId: h.studyId, basis: `you taught it that ${h.sender} means this study` };
     }
-    const words = (h.words || []).filter(w => hay.indexOf(" " + w + " ") >= 0);
+    if (only === "sender") continue;
+    const words = (h.words || []).filter(w => hintWordOk(w) && wordHay.indexOf(" " + w + " ") >= 0);
     // Two matched words, not one: a single remembered word is how a hint starts matching things
     // it shouldn't.
     if (words.length >= 2) {
@@ -8567,13 +8597,12 @@ function matchByHint(text) {
 function matchStudyFromText(text) {
   const t = String(text || "");
   const studies = state.studies || [];
-  // Before anything else. A correction someone made deliberately outranks every guess the rules
-  // can make, including an identifier — if you've said "this sender means this study", you know
-  // something the text doesn't say.
-  const taught = matchByHint(t);
-  if (taught) {
-    const s = studies.find(x => x.id === taught.studyId);
-    if (s) return { study: s, basis: taught.basis };
+  // An outside sender someone taught it (an editorial office writing about one manuscript) still
+  // comes first: that's a deliberate correction and the text may well quote the wrong study.
+  const bySender = matchByHint(t, "sender");
+  if (bySender) {
+    const s = studies.find(x => x.id === bySender.studyId);
+    if (s) return { study: s, basis: bySender.basis };
   }
   const tryField = (field, label, minLen) => {
     for (const s of studies) {
@@ -8585,13 +8614,21 @@ function matchStudyFromText(text) {
     }
     return null;
   };
-  return tryField("journalTrackingId", "tracking ID", 4)
+  // Otherwise an identifier or the study's full title in the email beats a taught WORD hint: word
+  // hints used to come before everything, and one bad one overruled emails naming their own study.
+  const named = tryField("journalTrackingId", "tracking ID", 4)
       || tryField("irb", "IRB number", 4)
       || tryField("nct", "ClinicalTrials.gov number", 6)
       // Title before nickname: a full IRB title appearing in an email is unambiguous, whereas a
       // nickname like "Meniscus" could be any of several studies or just a word in a sentence.
-      || tryField("title", "study title", 12)
-      || tryField("nickname", "nickname", 6)
+      || tryField("title", "study title", 12);
+  if (named) return named;
+  const taught = matchByHint(t, "words");
+  if (taught) {
+    const s = studies.find(x => x.id === taught.studyId);
+    if (s) return { study: s, basis: taught.basis };
+  }
+  return tryField("nickname", "nickname", 6)
       // Last resort, and the one that earns its keep in practice: an exact title match is brittle
       // because titles get edited between submission and decision, and journals reformat them. So
       // fall back to the distinctive WORDS — "STABLE" or "saddle" appears in one study and nowhere
@@ -9496,7 +9533,9 @@ function teachSuggestionStudy(id, studyId) {
     studyId,
     // The sender is the hint that pays off most often — an editorial system writes from one
     // address about one manuscript, for months.
-    sender: (g.from || "").trim().toLowerCase(),
+    // Never our own addresses: g.from is usually whoever FORWARDED it, and "Adam's address means
+    // this study" then swallows every email Adam forwards. The original sender, if outside.
+    sender: [g.originalFrom, g.from].map(a => String(a || "").trim().toLowerCase()).find(hintSenderOk) || "",
     words: hintPhrasesFrom((g.subject || "") + " " + (g.text || "")),
     taughtBy: me(),
     taughtAt: new Date().toISOString(),

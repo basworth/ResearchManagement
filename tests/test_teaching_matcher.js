@@ -151,11 +151,12 @@ We have reviewed your submission. The reviewers recommend major revision.`;
 
   console.log("\n-- A correction outranks the rules' own guess --");
   {
-    // The text names S1's tracking ID, but someone has taught it that this sender means S2.
+    // The text names S1's tracking ID, but someone has taught it that this (outside) sender means S2.
+    // (6 Nov 2026: our OWN addresses are never sender hints — see test_hint_hygiene.js.)
     const dom = boot([{ id: "h3", kind: "matchHint", updated_at: now,
-      data: { id: "h3", studyId: S2, sender: "coordinator@rushortho.com", words: [], taughtBy: "Adam Yanke" } }]);
+      data: { id: "h3", studyId: S2, sender: "editorial@journal-office.org", words: [], taughtBy: "Adam Yanke" } }]);
     const win = await settings(dom);
-    const r = read(win, "From: coordinator@rushortho.com\n\nNotes on AJSM-26-0829 and the sheep work.");
+    const r = read(win, "From: editorial@journal-office.org\n\nNotes on AJSM-26-0829 and the sheep work.");
     check("What a person said wins", r.study && r.study.id === S2, r.basis);
     check("...and the card says why", /you taught it/.test(r.basis), r.basis);
     dom.window.close();
