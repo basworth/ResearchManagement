@@ -91,7 +91,7 @@ console.log("\n-- Every bulk read of people's data is scoped to one lab --");
 // going up. A scan that silently skips a new function is worse than no scan.
 const EXPECTED = ["admin-requests", "announce", "feedback-alert", "import-publications",
                   "ingest-email", "invite-user", "request-update", "research-watch", "stage-alerts",
-                  "task-emails"];
+                  "study-overview", "task-emails"];
 const fns = fs.readdirSync(DIR).filter((d) => fs.existsSync(path.join(DIR, d, "index.ts"))).sort();
 check("every known function is scanned, and no unknown one is skipped",
   JSON.stringify(fns) === JSON.stringify(EXPECTED), { found: fns, expected: EXPECTED });

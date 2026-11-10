@@ -7584,6 +7584,7 @@ function renderStudyDetail() {
     <button class="btn secondary" id="edit-study-btn" style="flex:1">Edit Study</button>
     <button class="btn secondary" id="ask-update-btn" style="flex:1">${esc(updateRequestLabel(s))}</button>
   </div>
+  ${studyOverviewHTML(s)}
   ${collapsibleSection("notes", "Notes", notesBodyHTML(s, inputStyle), sectionBadge.notes)}
   ${collapsibleSection("enrollment", "Enrollment", enrollmentBodyHTML(s), sectionBadge.enrollment)}
   ${collapsibleSection("grant", "Grant & Award Funding", grantBodyHTML(s), sectionBadge.grant)}
@@ -7718,6 +7719,7 @@ function renderStudyDetail() {
   $main.innerHTML = html;
   document.getElementById("back-btn").onclick = () => { detailStudyId = null; render(); };
   document.getElementById("edit-study-btn").onclick = () => openStudyForm(s);
+  bindStudyOverview(s);
   document.querySelectorAll("[data-edit-tags]").forEach(a => a.onclick = (e) => { e.preventDefault(); openTagSheet(a.dataset.editTags); });
   document.querySelectorAll("[data-accept-tags]").forEach(a => a.onclick = (e) => {
     e.preventDefault(); if (blockOfflineEdit("Accepting tags")) return;
@@ -11101,6 +11103,86 @@ function looksLikeSamePerson(a, b) {
 // One door to the invite function. Sends the caller's OWN access token: the function asks
 // Supabase whose token it is and checks that against its allowlist, so it never takes the
 // browser's word for who is calling.
+/* ============ Study overview (10 Nov 2026) ============
+ * Adam: descriptions of each study "including the clinical relevance and purpose … as close as
+ * possible to my voice … in the meetings, would be helpful for transition meetings". Written by the
+ * study-overview function from the lab's forwarded research meetings; shown on the study page;
+ * editable by anyone who can edit the study. A hand edit is never overwritten by the next refresh.
+ */
+let editingOverviewId = null;
+let overviewBusy = {};
+function studyOverviewHTML(s) {
+  const o = s.overview || null;
+  const canRefresh = isAdmin() || (typeof isAppAdmin === "function" && isAppAdmin());
+  const head = `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <div class="section-title" style="margin:0">Overview</div>
+      <div style="display:flex;gap:6px">
+        ${o && editingOverviewId !== s.id ? `<button class="mini-btn" id="ov-edit" style="margin:0">Edit</button>` : ""}
+        ${canRefresh && editingOverviewId !== s.id ? `<button class="mini-btn" id="ov-refresh" style="margin:0"${overviewBusy[s.id] ? " disabled" : ""}>${overviewBusy[s.id] ? "Writing…" : o ? "Rewrite from meetings" : "Write from meetings"}</button>` : ""}
+      </div>
+    </div>`;
+  if (!o) return canRefresh ? `<div class="card">${head}<div style="font-size:13.5px;color:var(--text2);margin-top:6px">No overview yet. It's written from the research meetings forwarded to the tracker, in your words.</div></div>` : "";
+  const parts = [["purpose", "What we're asking"], ["relevance", "Why it matters"], ["status", "Where it stands"], ["nextSteps", "What's next"]];
+  if (editingOverviewId === s.id) {
+    return `<div class="card">${head}
+      ${parts.map(([k, label]) => `<div class="fld" style="margin-top:8px"><label>${label}</label>
+        <textarea data-ov-field="${k}" rows="3" style="width:100%;box-sizing:border-box;resize:vertical;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14.5px;font-family:inherit;color:var(--text);outline:none">${esc(o[k] || "")}</textarea></div>`).join("")}
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+        <button class="mini-btn" id="ov-cancel" style="margin:0">Cancel</button>
+        <button class="mini-btn" id="ov-save" style="margin:0;color:var(--blue);font-weight:700">Save</button>
+      </div></div>`;
+  }
+  const by = o.editedBy ? `edited by ${esc(o.editedBy)} ${esc(fmtDate(String(o.editedAt || "").slice(0, 10)))}`
+    : `written ${esc(fmtDate(String(o.generatedAt || "").slice(0, 10)))} from ${o.meetings ? o.meetings + " research meeting" + (o.meetings === 1 ? "" : "s") : "the study record (not discussed in a forwarded meeting yet)"}`;
+  return `<div class="card">${head}
+    ${parts.filter(([k]) => o[k]).map(([k, label]) => `<div style="margin-top:10px">
+      <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px;text-transform:uppercase">${label}</div>
+      <div style="font-size:14.5px;line-height:1.55;margin-top:2px">${esc(o[k])}</div></div>`).join("")}
+    <div style="font-size:11.5px;color:var(--text2);margin-top:10px">${by}</div>
+  </div>`;
+}
+async function callOverviewFn(studyIds, force) {
+  if (!sb) throw new Error("Not connected — try again in a moment.");
+  const { data: sess } = await sb.auth.getSession();
+  const tokenValue = sess && sess.session && sess.session.access_token;
+  if (!tokenValue) throw new Error("Your session expired — sign out and back in.");
+  const res = await fetch(SUPABASE_URL + "/functions/v1/study-overview", {
+    method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tokenValue },
+    body: JSON.stringify({ studyIds, force: !!force }),
+  });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(out.error || ("failed (" + res.status + ")"));
+  return out;
+}
+function bindStudyOverview(s) {
+  const ed = document.getElementById("ov-edit");
+  if (ed) ed.onclick = () => { editingOverviewId = s.id; render(); };
+  const cancel = document.getElementById("ov-cancel");
+  if (cancel) cancel.onclick = () => { editingOverviewId = null; render(); };
+  const save = document.getElementById("ov-save");
+  if (save) save.onclick = () => {
+    if (blockOfflineEdit("Editing the overview")) return;
+    const o = Object.assign({}, s.overview || {});
+    document.querySelectorAll("[data-ov-field]").forEach(t => { o[t.dataset.ovField] = t.value.trim(); });
+    o.editedBy = me(); o.editedAt = new Date().toISOString();
+    s.overview = o; editingOverviewId = null; upsertStudy(s); render();
+    toast("Overview saved — the next rewrite won't replace your edit");
+  };
+  const rf = document.getElementById("ov-refresh");
+  if (rf) rf.onclick = async () => {
+    if (blockOfflineEdit("Rewriting the overview")) return;
+    if (s.overview && s.overview.editedBy && !confirm("This overview was edited by hand. Replace it with a fresh one from the meetings?")) return;
+    overviewBusy[s.id] = true; render();
+    try {
+      const out = await callOverviewFn([s.id], true);
+      const r = (out.results || [])[0] || {};
+      if (r.error) throw new Error(r.error);
+      if (r.overview) { s.overview = r.overview; saveLocal(); }
+      toast("Overview written from the meetings");
+    } catch (e) { toast("Couldn't write it — " + (e.message || e)); }
+    delete overviewBusy[s.id]; render();
+  };
+}
 async function callInviteFn(payload) {
   if (!sb) throw new Error("Not connected — try again in a moment.");
   const { data: sess } = await sb.auth.getSession();
@@ -14494,6 +14576,9 @@ function balloonNews() {
     { since: 8, tab: "conferences", sel: ['nav.tabbar [data-tab="conferences"]'], title: "Meetings: your conference plan",
       what: "One card per upcoming meeting where the lab has something: podium and poster acceptances, what's still awaiting a decision, what wasn't accepted, and any invited talks. Each card disappears a week after the meeting ends.",
       custom: "Pick who's <b>presenting</b> and who's <b>making the poster</b> on each accepted abstract, add talks with <b>＋ Add a talk</b>, and give a meeting a photo with <b>Add a picture</b>." },
+    { since: 9, tab: "studies", sel: ['nav.tabbar [data-tab="studies"]'], title: "Study overviews",
+      what: "Open a study to see its <b>Overview</b>: what we're asking, why it matters, where it stands and what's next, written from the research meetings forwarded to the tracker.",
+      custom: "Tap <b>Edit</b> to change the wording; your edit is kept when the overview is refreshed after later meetings." },
   ];
 }
 function balloonsVersion() {
