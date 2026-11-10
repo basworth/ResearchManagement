@@ -14708,7 +14708,7 @@ function placeBalloon() {
   const b = document.getElementById("balloon");
   b.innerHTML = `<div class="bl-arrow"></div>
     <h3>${step.isNew ? `<span style="color:var(--blue)">New · </span>` : ""}${esc(step.title)}</h3>
-    <p class="bl-what">${esc(step.what)}</p>
+    <p class="bl-what">${step.what}</p>
     <p class="bl-custom"><span style="font-weight:700;color:var(--text)">Make it yours:</span> ${step.custom}</p>
     <div class="bl-foot">
       <span class="bl-count">${pos + 1} of ${shown.length}</span>
