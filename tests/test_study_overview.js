@@ -43,6 +43,9 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     check("server: patient details are scrubbed again", /export function scrub/.test(src) && /scrub\(d\.text/.test(src));
     check("server: only the email reader, app admin or that lab's admin may call it", /x-ingest-secret/.test(src) && /app_admins/.test(src) && /allowedLabs\.indexOf\(r\.workspace\) < 0/.test(src));
   }
+  const ing = fs.existsSync(PROJECT + "/supabase/functions/ingest-email/index.ts") ? fs.readFileSync(PROJECT + "/supabase/functions/ingest-email/index.ts", "utf8") : "";
+  // main carries an old copy of the function source; only check the current one (fn-deploy).
+  if (ing && /attachedEmails/.test(ing)) check("every forwarded meeting refreshes the overviews of the studies it changed", /functions\/v1\/study-overview/.test(ing) && /record\.studyIds\.slice\(0, 25\)/.test(ing));
   console.log(`\n${fail ? "FAILED" : "ALL CLEAR"} — ${pass} passed, ${fail} failed`);
   process.exit(fail ? 1 : 0);
 })();
