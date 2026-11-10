@@ -243,6 +243,21 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
     record.replied = false; record.replyError = (e as Error)?.message || String(e);
   }
   await save();
+  // Each study this meeting changed gets its overview rewritten (study-overview, 10 Nov 2026).
+  // Adam: "I don't want to approve the drafts … it can be automatic after that." Hand-edited
+  // overviews are left alone by that function. Five at a time so one call stays well inside the
+  // function time limit; a failure here never touches the meeting record.
+  if (record.status !== "failed" && Array.isArray(record.studyIds) && record.studyIds.length && INGEST_SECRET) {
+    const ids = record.studyIds.slice(0, 25);
+    const batches: string[][] = [];
+    for (let i = 0; i < ids.length; i += 5) batches.push(ids.slice(i, i + 5));
+    // In parallel: each batch is its own function run, so the whole refresh takes as long as one.
+    await Promise.allSettled(batches.map((b) => fetch(`${SUPABASE_URL}/functions/v1/study-overview`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-ingest-secret": INGEST_SECRET, "Authorization": `Bearer ${SERVICE_ROLE_KEY}` },
+      body: JSON.stringify({ studyIds: b }),
+    }).catch((e) => console.warn("overview refresh failed", (e as Error)?.message))));
+  }
 }
 
 // Telling the forwarder what happened to their email. Without it, forwarding feels like shouting
