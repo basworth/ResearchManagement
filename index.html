@@ -702,12 +702,18 @@ const SUBMITTED_PHASES = ["Submitted", "Revisions Required", "Accepted / In Pres
 //
 // "Awaiting decision" is the starting state rather than an empty string, so a submitted paper
 // reads as genuinely pending rather than as a field somebody forgot to fill in.
-const DECISIONS = ["Awaiting decision", "Minor revision", "Major revision", "Accepted", "Rejected"];
+// "Transfer offered" (11 Nov 2026): the journal turned it down but offered its open-access sister
+// journal — Arthroscopy → ASMAR, AJSM → OJSM. Adam: "should be interpreted as recommended cascade
+// to open access … track the decision from the journal as such and then our plan". It is final for
+// THIS journal, like Rejected; what we do about the offer is recorded separately (transferPlan).
+const DECISIONS = ["Awaiting decision", "Minor revision", "Major revision", "Accepted", "Transfer offered", "Rejected"];
+const TRANSFER_PLANS = ["Undecided", "Decline transfer", "Accept transfer"];
 const DECISION_COLORS = {
   "Awaiting decision": "var(--orange)",
   "Minor revision": "var(--indigo)",
   "Major revision": "var(--indigo)",
   "Accepted": "var(--teal)",
+  "Transfer offered": "var(--purple)",
   "Rejected": "var(--red)"
 };
 // The two outcomes that mean there is revision work to do. Used to gate the revision fields and
@@ -716,7 +722,7 @@ const REVISION_DECISIONS = ["Minor revision", "Major revision"];
 function decisionWantsRevision(d) { return REVISION_DECISIONS.indexOf(d) >= 0; }
 // Terminal for THIS journal. Rejected is an endpoint for the submission, not for the paper —
 // which is exactly why recording it offers to file the round away and start a new one.
-function decisionIsFinal(d) { return d === "Accepted" || d === "Rejected"; }
+function decisionIsFinal(d) { return d === "Accepted" || d === "Rejected" || d === "Transfer offered"; }
 // What phase a decision implies. Only ever offered, never applied on its own (Adam's call):
 // the real situation is often more complicated than a dropdown, and a tracker that overrides a
 // deliberate choice stops being trusted.
@@ -6071,8 +6077,16 @@ function bindDecisionRow(root, s) {
       toast("Recorded: Rejected. Use “File this away & submit elsewhere” to keep the record and start a new journal.");
       return;
     }
+    if (picked === "Transfer offered") {
+      if (!s.transferPlan) { s.transferPlan = "Undecided"; upsertStudy(s); render(); }
+      toast("Recorded: Transfer offered. Note where it was offered and our plan below.");
+      return;
+    }
     toast(picked ? "Recorded: " + picked : "Cleared the decision");
   };
+
+  const planSel = root.querySelector("#ms-transfer-plan");
+  if (planSel) planSel.onchange = () => { s.transferPlan = planSel.value; upsertStudy(s); render(); toast("Plan: " + planSel.value); };
 
   const resub = root.querySelector("#ms-resubmit");
   if (resub) resub.onclick = () => {
@@ -6087,10 +6101,16 @@ function bindDecisionRow(root, s) {
       trackingId: s.journalTrackingId || "",
       decision: s.decision || "",
       decisionDate: s.decisionDate || "",
+      transferTo: s.transferTo || "",
+      transferPlan: s.transferPlan || "",
       filedOn: todayStr()
     });
     const wasJournal = s.journal || "that journal";
-    s.journal = "";
+    // Taking the transfer: the next round IS the sister journal.
+    const acceptXfer = s.decision === "Transfer offered" && s.transferPlan === "Accept transfer" && s.transferTo;
+    s.journal = acceptXfer ? s.transferTo : "";
+    s.transferTo = ""; s.transferPlan = ""; s.transferRespondBy = "";
+    if (acceptXfer && s.nextJournal && s.nextJournal.toLowerCase() === s.journal.toLowerCase()) s.nextJournal = "";
     s.submittedDate = "";
     s.journalTrackingId = "";
     s.decision = "";
@@ -6177,6 +6197,25 @@ function manuscriptBodyHTML(s) {
       </div>
       ${REVISION_SLOTS.filter(sl => slotEntries(s, sl.key).length).map(sl => docSlotHTML(s, sl.key)).join("")}` : ""}
 
+    ${d === "Transfer offered" ? `
+    <div class="card" style="margin-top:10px;border-left:3px solid var(--purple)">
+      ${plainFieldRow("Transfer offered to", "ms-transfer-to", s.transferTo, { list: "dl-journals-ms", placeholder: "e.g. ASMAR, OJSM" })}
+      <div class="milestone-row" style="gap:8px;align-items:flex-end">
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;color:var(--text2);font-weight:600;margin-bottom:4px">Our plan</div>
+          ${selectHTML("ms-transfer-plan", TRANSFER_PLANS, s.transferPlan || "Undecided")}
+        </div>
+      </div>
+      ${plainFieldRow("Answer the offer by", "ms-transfer-by", s.transferRespondBy, { type: "date" })}
+      <div style="font-size:12.5px;color:var(--text2);line-height:1.5;margin-top:8px">
+        ${s.transferPlan === "Accept transfer"
+          ? `Taking the transfer: filing this round away starts the ${esc(s.transferTo || "new journal")} round.`
+          : `Declined by this journal, with an offer to move it to ${esc(s.transferTo || "its open-access sister journal")}. Once the plan is settled, file this round away — nothing is deleted.`}
+      </div>
+      <button type="button" class="btn secondary" id="ms-resubmit" style="margin-top:10px">${s.transferPlan === "Accept transfer" ? `File this away &amp; start the ${esc(s.transferTo || "transfer")} round` : "File this away &amp; submit elsewhere"}</button>
+    </div>` : ""}
+    ${(d === "Rejected" || d === "Transfer offered" || s.nextJournal) ? plainFieldRow("Next journal (plan)", "ms-next-journal", s.nextJournal, { list: "dl-journals-ms", placeholder: "Where it goes next, e.g. Cartilage" }) : ""}
+
     ${d === "Rejected" ? `
     <div class="card" style="font-size:12.5px;color:var(--text2);line-height:1.5;margin-top:10px">
       Rejected closes out this journal, not the paper. Filing it away keeps the record of where it's been and clears the fields for the next submission — nothing is deleted.
@@ -6193,7 +6232,7 @@ function manuscriptBodyHTML(s) {
             ${p.submittedDate ? "Submitted " + fmtDate(p.submittedDate) : "No submission date"}${p.trackingId ? " · " + esc(p.trackingId) : ""}
           </div>
         </div>
-        <span class="badge" style="background:${DECISION_COLORS[p.decision] || "var(--text2)"};flex:none">${esc(p.decision || "—")}${p.decisionDate ? " · " + fmtDate(p.decisionDate) : ""}</span>
+        <span class="badge" style="background:${DECISION_COLORS[p.decision] || "var(--text2)"};flex:none">${esc(p.decision || "—")}${p.transferTo ? " → " + esc(p.transferTo) + (p.transferPlan && p.transferPlan !== "Undecided" ? " (" + esc(p.transferPlan === "Decline transfer" ? "declined" : "accepted") + ")" : "") : ""}${p.decisionDate ? " · " + fmtDate(p.decisionDate) : ""}</span>
       </div>`).join("")}` : ""}
 
     <div style="font-size:12px;color:var(--orange);line-height:1.4;padding:6px 2px 0 2px">⚠︎ Reminder: once a manuscript is submitted, update this study's Title above (in Edit Study) to match the exact title used in the journal's submission system -- the project tracker should mirror the submitted title, not just the IRB title.</div>
@@ -8124,6 +8163,9 @@ function renderStudyDetail() {
   bindPlainFieldRow($main, "ms-revisions-received", s, "revisionsReceivedDate");
   bindPlainFieldRow($main, "ms-revisions-deadline", s, "revisionsDeadline");
   bindPlainFieldRow($main, "ms-decision-date", s, "decisionDate");
+  bindPlainFieldRow($main, "ms-transfer-to", s, "transferTo");
+  bindPlainFieldRow($main, "ms-transfer-by", s, "transferRespondBy");
+  bindPlainFieldRow($main, "ms-next-journal", s, "nextJournal");
   bindDecisionRow($main, s);
 
   // Enrollment (own section, see enrollmentBodyHTML)
@@ -8528,7 +8570,7 @@ function bindFilterSetsBar(tab, setActive) {
 // so improving the parser re-reads everything it looked at before and got nothing from — otherwise
 // a message read by an older, dumber version stays permanently misjudged, which is exactly what
 // happened to the first Arthroscopy confirmation.
-const PARSER_VERSION = 10;
+const PARSER_VERSION = 11;
 
 // ---------- Protected health information ----------
 // The tracker is deliberately study-level and holds no PHI. A forwarded email might, so it is
@@ -8771,6 +8813,68 @@ function matchByDistinctiveWords(text) {
   // The words themselves go in the basis, so a wrong match is obvious rather than mysterious.
   const shown = best.hits.slice().sort((a, b) => (docFreq.get(a) - docFreq.get(b)) || b.length - a.length).slice(0, 4);
   return { study: best.study, basis: `wording — "${shown.join('", "')}"` };
+}
+
+// ---------- Transfer (cascade) offers — 11 Nov 2026 ----------
+// "we are unable to accept your submission to Arthroscopy. However … we invite you to revise this
+// paper for publication in Arthroscopy, Sports Medicine, and Rehabilitation (ASMAR)". That is not a
+// major revision and not a plain rejection: it's a declined paper with an offer to move it to the
+// journal's open-access sibling. Read as its own decision so the offer, our plan for it, and where
+// the paper goes next are all on the study.
+const CASCADE_JOURNALS = [
+  { name: "ASMAR", re: /arthroscopy,? sports medicine,? (?:and|&) rehabilitation|\bASMAR\b/i },
+  { name: "OJSM", re: /orthopa?edic journal of sports medicine|\bOJSM\b/i },
+  { name: "JBJS Open Access", re: /JBJS Open Access|\bJBJS OA\b/i },
+  { name: "JEO", re: /journal of experimental orthopa?edics|\bJEO\b/i },
+  { name: "JAAOS Global", re: /JAAOS:? Global/i },
+  { name: "JSES International", re: /JSES International/i },
+  { name: "VJSM", re: /video journal of sports medicine|\bVJSM\b/i },
+  { name: "Arthroscopy Techniques", re: /arthroscopy techniques/i }
+];
+// Journal names a forwarding note might use for "where it goes next". Whole-name match, any case;
+// anything else is kept as written (title-cased).
+const PLAN_JOURNALS = ["AJSM", "OJSM", "Arthroscopy", "ASMAR", "Cartilage", "JCJP", "JKS", "VJSM", "KSSTA",
+  "Sports Health", "JBJS", "JSES", "JISAKOS", "JEO", "CORR", "JOR", "Knee", "JAAOS", "Orthopedics", "IJSPT"];
+function readTransferOffer(body) {
+  const t = String(body || "").replace(/\s+/g, " ");
+  const declined = /\b(?:unable to accept|cannot accept|can not accept|not (?:able|in a position) to accept|decided not to accept|will not be able to accept|not be accepted|regret)/i;
+  const m = declined.exec(t);
+  if (!m) return null;
+  const rest = t.slice(m.index, m.index + 1500);
+  const offer = /\b(?:invite you to (?:revise|transfer|submit|resubmit)|(?:offer|option|opportunity) (?:for you )?to (?:transfer|submit|revise|resubmit)|transfer (?:your|the|this) (?:manuscript|paper|submission)|recommend(?:ed)? (?:it |your (?:manuscript|paper) )?for (?:transfer|publication in)|be (?:suitable|considered) for publication in|eligible for transfer)/i;
+  const o = offer.exec(rest);
+  if (!o) return null;
+  const after = rest.slice(o.index, o.index + 300);
+  const j = CASCADE_JOURNALS.find(c => c.re.test(after));
+  if (!j) return null;
+  const by = /\b(?:respond|reply|decide|let us know|accept (?:this|the) (?:offer|transfer|invitation))[^.]{0,60}?\b(?:by|before)\s+([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{4})/i.exec(t);
+  return { to: j.name, by: by ? parseLooseDate(by[1]) : "" };
+}
+// What the person forwarding wrote above the forwarded email — "FYI, I would probably go to
+// Cartilage journal but please verify with Crawford". Empty when there's no note.
+function coveringNote(text) {
+  const t = String(text || "");
+  const m = /^\s*(?:[-_ ]*(?:Forwarded message|Original Message|Begin forwarded message)\b.*|From:\s.+)$/im.exec(t);
+  if (!m || m.index === 0) return "";
+  const note = t.slice(0, m.index).replace(/\s+/g, " ").trim();
+  return note.length >= 6 && note.length <= 1200 ? note : "";
+}
+// Our plan, from that note: where it goes next, and whether we take the transfer.
+function readPlanFromNote(note, offeredTo) {
+  if (!note) return null;
+  let next = "";
+  const g = /\b(?:go ?to|send (?:it )?to|submit (?:it )?to|resubmit (?:it )?to|move (?:it )?to|take (?:it )?to|try|target)\s+(?:the\s+)?([A-Za-z][A-Za-z&'-]*(?: [A-Za-z][A-Za-z&'-]*){0,4}?)(?=\s+journal\b|\s*[.,;!?]|\s+but\b|\s+and\b|\s+instead\b|\s*$)/i.exec(note);
+  if (g) {
+    const raw = g[1].trim();
+    const known = PLAN_JOURNALS.find(k => k.toLowerCase() === raw.toLowerCase());
+    const casc = CASCADE_JOURNALS.find(c => c.re.test(raw));
+    next = known || (casc && casc.name) || raw.replace(/\b\w/g, c => c.toUpperCase());
+  }
+  let decision = "";
+  if (/\b(?:decline|deny|turn (?:it )?down|pass on|not (?:take|accept|do) the (?:transfer|offer)|won'?t transfer|no to (?:the )?transfer)/i.test(note)) decision = "Decline transfer";
+  else if (/\b(?:accept|take) the (?:transfer|offer)\b/i.test(note) || (next && offeredTo && next === offeredTo)) decision = "Accept transfer";
+  else if (next && offeredTo && next !== offeredTo) decision = "Decline transfer";
+  return (next || decision) ? { next, decision } : null;
 }
 
 // ---------- What is this email telling us? ----------
@@ -9100,7 +9204,31 @@ function readEmail(text, subject) {
     const grants = readGrantEmail(body, s);
     if (grants) grants.forEach(c => changes.push(c));
 
-    const dec = DECISION_PATTERNS.find(p => p.re.test(body));
+    // A transfer offer reads like a rejection AND a revision ("invite you to revise … in ASMAR"),
+    // so it is checked first and, when found, the plain decision patterns stand down.
+    const xfer = readTransferOffer(body);
+    const note = coveringNote(text);
+    const plan = readPlanFromNote(note, xfer ? xfer.to : "");
+    const plainDec = DECISION_PATTERNS.find(p => p.re.test(body));
+    if (xfer) {
+      if (s.decision !== "Transfer offered") changes.push(proposal("decision", "Journal decision", "Transfer offered", false,
+        `${(s.journal || "the journal").trim()} declined it and offered a transfer to ${xfer.to}`));
+      if ((s.transferTo || "") !== xfer.to) changes.push(proposal("transferTo", "Transfer offered to", xfer.to, !s.transferTo, "named in the email"));
+      if (xfer.by && !s.transferRespondBy) changes.push(proposal("transferRespondBy", "Answer the offer by", xfer.by, true, "stated in the email"));
+      // Our plan. From the note on the forward when it says; otherwise "decline" is offered (Adam:
+      // "our plan which is to deny"), unticked, for a person to confirm.
+      const p = (plan && plan.decision) || "Decline transfer";
+      if ((s.transferPlan || "") !== p) changes.push(proposal("transferPlan", "Our plan", p,
+        !!(plan && plan.decision) && !s.transferPlan,
+        plan && plan.decision ? "from the note on the forward" : "the usual answer to an open-access transfer"));
+    }
+    if (plan && plan.next && (xfer || (plainDec && plainDec.decision === "Rejected")) && (s.nextJournal || "") !== plan.next) {
+      changes.push(proposal("nextJournal", "Next journal", plan.next, !s.nextJournal, "from the note on the forward"));
+    }
+    // The note itself is kept: "please verify with Crawford and his team" is part of the plan.
+    if (note && (xfer || plan)) changes.push(proposal("addNote", "Note on the study", "Note on the forwarded decision: " + note, true, "what was written on the forward"));
+
+    const dec = xfer ? null : plainDec;
     if (dec && s.decision !== dec.decision) {
       // Never safe. A decision drives which fields the manuscript section even shows, and a parser
       // that reads "we regret we cannot offer minor revisions" backwards would be expensive.
@@ -9286,7 +9414,8 @@ function applyChangeTo(s, c, env) {
       if (!Array.isArray(s.priorSubmissions)) s.priorSubmissions = [];
       s.priorSubmissions.push({
         id: newId(), journal: was, submittedDate: s.submittedDate || "",
-        trackingId: s.journalTrackingId || "", decision: s.decision || "", decisionDate: s.decisionDate || ""
+        trackingId: s.journalTrackingId || "", decision: s.decision || "", decisionDate: s.decisionDate || "",
+        transferTo: s.transferTo || "", transferPlan: s.transferPlan || ""
       });
     }
     s.journal = journal;
@@ -9296,6 +9425,8 @@ function applyChangeTo(s, c, env) {
     s.decisionDate = "";
     s.revisionsReceivedDate = "";
     s.revisionsDeadline = "";
+    s.transferTo = ""; s.transferPlan = ""; s.transferRespondBy = "";
+    if (s.nextJournal && s.nextJournal.toLowerCase() === journal.toLowerCase()) s.nextJournal = "";
     return { field: c.field, label: c.label, from: was ? was + " round filed away" : "", to: journal };
   }
   const before = s[c.field];
@@ -14628,6 +14759,9 @@ function balloonNews() {
     { since: 9, tab: "studies", sel: ['nav.tabbar [data-tab="studies"]'], title: "Study overviews",
       what: "Open a study to see its <b>Overview</b>: what we're asking, why it matters, where it stands and what's next, written from the research meetings forwarded to the tracker.",
       custom: "Tap <b>Edit</b> to change the wording; your edit is kept when the overview is refreshed after later meetings." },
+    { since: 11, tab: "studies", sel: ['nav.tabbar [data-tab="studies"]'], title: "Transfer offers",
+      what: "When a journal declines a paper but offers its open-access sister journal (Arthroscopy → ASMAR, AJSM → OJSM), the study now records <b>Transfer offered</b>, where to, and our plan.",
+      custom: "Forward the decision with a line on top like \"decline, send to Cartilage\" and the plan and next journal fill in from it. Change either in the study's Manuscript section." },
     { since: 10, sel: ['nav.tabbar [data-tab="settings"]'], title: "Email links go to the item",
       what: "The button in a tracker email now opens the thing that needs you: the forwarded email waiting to be confirmed or filed, the task, or the study.",
       custom: "If an email couldn't tell which study it's about, <b>Which study is it?</b> is now a search box. Type part of the title or nickname and pick it, and the tracker remembers the match." },
