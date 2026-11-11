@@ -19,6 +19,9 @@
 // they drift apart. This function stores the message; the app reads it.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
+import { sendViaDomain } from "./warmup-mail.ts";
+import { readAttachment, studyByGuess } from "./attachments.ts";
+import { attachedEmails, hasAttachedEmails } from "./mime.ts";
 import { setStudies, setMatchHints, setMeetings, stripPHI as stripPHIRules, readEmail, applyChangeTo, PARSER_VERSION } from "./rules.ts";
 import { looksLikeMeeting, studyContext, extractPrompt, callModel, applyMeeting, summaryEmail, threadRecipients, redactAll, tagVocabulary, MEETING_UNDO_HOURS } from "./meeting.ts";
 
@@ -72,14 +75,21 @@ async function sha256(text: string): Promise<string> {
 
 async function sendMail(opts: { to: string[]; cc?: string[]; subject: string; html: string; text: string;
                                 inReplyTo?: string; references?: string }) {
-  if (!SMTP_USER || !SMTP_PASSWORD || !opts.to.length) return false;
+  if (!opts.to.length) return false;
+  // From studypipeline.com when that's switched on (warmup-mail.ts), still threaded under the
+  // meeting email; replies go to the tracker's Gmail inbox. Gmail otherwise or on failure.
+  if (await sendViaDomain({ kind: "meeting", fromName: FROM_NAME, to: opts.to, cc: opts.cc, subject: opts.subject,
+        html: opts.html, text: opts.text, replyTo: SMTP_USER || undefined,
+        inReplyTo: opts.inReplyTo, references: opts.references })) return true;
+  if (!SMTP_USER || !SMTP_PASSWORD) return false;
   const smtp = new SMTPClient({
     connection: { hostname: SMTP_HOST, port: SMTP_PORT, tls: true, auth: { username: SMTP_USER, password: SMTP_PASSWORD } },
   });
   try {
     await smtp.send({
       from: `${FROM_NAME} <${SMTP_USER}>`, to: opts.to, cc: opts.cc && opts.cc.length ? opts.cc : undefined,
-      subject: opts.subject, html: opts.html, content: opts.text,
+      // One line, single spaces — otherwise Gmail's SMTP path shows "=20" in some clients.
+      subject: opts.subject, html: opts.html.replace(/\s*\n\s*/g, " ").replace(/ {2,}/g, " "), content: opts.text,
       // Threading. With the original Message-ID in both headers, Gmail and Outlook file the summary
       // under the meeting email for everyone on it, instead of starting a new conversation.
       inReplyTo: opts.inReplyTo || undefined, references: opts.references || opts.inReplyTo || undefined,
@@ -109,7 +119,20 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
   const replyTo = threadRecipients([payload?.from, payload?.to, payload?.cc].filter(Boolean),
     TRACKER_MAILBOXES.concat([SMTP_USER.toLowerCase()]));
   const reSubject = "Re: " + String(payload?.originalSubject || subject).replace(/^\s*(re|fw|fwd):\s*/i, "");
+  const atts: any[] = Array.isArray(payload?.attachments) ? payload.attachments.slice(0, 8) : [];
+  const files: any[] = [];
   try {
+    // Files first, so what's in them reaches the reader. A file that may identify a patient adds
+    // nothing to the text and is never stored.
+    for (const a of atts) {
+      try { files.push(await readAttachment(ANTHROPIC_KEY, MEETING_MODEL, a)); }
+      catch (e) { files.push({ name: String(a?.name || "file"), ok: false, phi: true, why: "couldn't be read", text: "" }); }
+    }
+    if (files.length) {
+      raw = (raw.trim() ? raw : "(no message text — the content is in the attached files)") +
+        "\n\nThis is a forwarded email, not a meeting transcript; treat its content and its attached files the same way." +
+        files.filter((f) => f.ok && !f.phi && f.text).map((f) => `\n\n--- Attached file: ${f.name} ---\n${f.text}`).join("");
+    }
     const scrubbed = stripPHIRules(raw);
     const { data: studyRows } = await db.from("items").select("id, data").eq("kind", "study").eq("workspace", ws);
     const studies = (studyRows ?? []).map((r: any) => r.data).filter(Boolean);
@@ -150,6 +173,29 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
       .filter((a: any) => record.applied.indexOf(a) < 0)
       .map((a: any) => ({ text: a.label + ": " + a.to, why: "couldn't be saved — try again or enter it by hand", evidence: a.evidence })));
     record.studyIds = [...new Set(record.applied.map((a: any) => a.studyId))];
+
+    // File each clean attachment under its study: the one study this email changed, or the study
+    // the file itself names. Otherwise it's stored and listed on this record to be filed by hand.
+    record.files = [];
+    const allStudies = studies.concat(result.newStudies);
+    for (const f of files) {
+      if (!f.ok || f.phi) { record.files.push({ name: f.name, stored: false, why: f.ok ? "may contain patient information — not saved" : f.why }); continue; }
+      if (!f.worthFiling) { record.files.push({ name: f.name, stored: false, why: "looked like a logo or decoration — not filed" }); continue; }
+      const target = record.studyIds.length === 1 ? allStudies.find((x: any) => x.id === record.studyIds[0]) : studyByGuess(f.studyGuess, allStudies);
+      const fid = crypto.randomUUID();
+      const { error: fErr } = await db.from("items").insert({ id: fid, kind: "file", workspace: ws,
+        updated_at: new Date().toISOString(), data: { name: f.name, content: f.dataUrl } });
+      if (fErr) { record.files.push({ name: f.name, stored: false, why: "couldn't be saved" }); continue; }
+      let filedTo = "";
+      if (target) {
+        if (!Array.isArray(target.docs)) target.docs = [];
+        target.docs.push({ id: fid, kind: "file", name: f.name, label: "From email", by: sender.name, date: today, size: f.size });
+        const { error } = await db.from("items").update({ data: target, updated_at: new Date().toISOString() }).eq("id", target.id).eq("workspace", ws);
+        if (!error) filedTo = target.id;
+      }
+      record.files.push({ id: fid, name: f.name, size: f.size, stored: true, studyId: filedTo,
+        study: filedTo ? (target.nickname || target.title) : "", why: f.why });
+    }
     // What is stored of the meeting itself: scrubbed of numbers by the rules AND of every patient
     // identifier the model found.
     record.text = redactAll(scrubbed.text, extracted.patientIdentifiers || []).slice(0, 20000);
@@ -181,6 +227,15 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
     ? { html: `<p>The tracker couldn't read this meeting, so nothing was changed.</p><p style="color:#8e8e93">${record.error ? String(record.error).replace(/[<>&]/g, "") : ""}</p>`,
         text: "The tracker couldn't read this meeting, so nothing was changed. " + (record.error || "") }
     : summaryEmail({ applied: record.applied, notApplied: record.notApplied, undoUntil: record.undoUntil, link, subject, by: sender.name });
+  if ((record.files || []).length) {
+    const escH = (v: unknown) => String(v ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
+    const lines = record.files.map((f: any) => f.stored
+      ? (f.studyId ? `${f.name} — filed under ${f.study}` : `${f.name} — saved; choose its study in the tracker`)
+      : `${f.name} — ${f.why}`);
+    mail.html += `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:11px;font-weight:700;color:#8e8e93;letter-spacing:.4px;margin:16px 0 4px">ATTACHED FILES</div>` +
+      lines.map((l: string) => `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;padding:2px 0">${escH(l)}</div>`).join("");
+    mail.text += "\n\nAttached files:\n" + lines.join("\n");
+  }
   try {
     record.replied = await sendMail({ to, cc, subject: reSubject, html: mail.html, text: mail.text,
       inReplyTo: payload?.messageId || "", references: payload?.references || payload?.messageId || "" });
@@ -188,6 +243,21 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
     record.replied = false; record.replyError = (e as Error)?.message || String(e);
   }
   await save();
+  // Each study this meeting changed gets its overview rewritten (study-overview, 10 Nov 2026).
+  // Adam: "I don't want to approve the drafts … it can be automatic after that." Hand-edited
+  // overviews are left alone by that function. Five at a time so one call stays well inside the
+  // function time limit; a failure here never touches the meeting record.
+  if (record.status !== "failed" && Array.isArray(record.studyIds) && record.studyIds.length && INGEST_SECRET) {
+    const ids = record.studyIds.slice(0, 25);
+    const batches: string[][] = [];
+    for (let i = 0; i < ids.length; i += 5) batches.push(ids.slice(i, i + 5));
+    // In parallel: each batch is its own function run, so the whole refresh takes as long as one.
+    await Promise.allSettled(batches.map((b) => fetch(`${SUPABASE_URL}/functions/v1/study-overview`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-ingest-secret": INGEST_SECRET, "Authorization": `Bearer ${SERVICE_ROLE_KEY}` },
+      body: JSON.stringify({ studyIds: b }),
+    }).catch((e) => console.warn("overview refresh failed", (e as Error)?.message))));
+  }
 }
 
 // Telling the forwarder what happened to their email. Without it, forwarding feels like shouting
@@ -197,11 +267,18 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
 // signed into a personal account while reading their work mail. Deliberately not sent for an
 // unverified sender — we'd be emailing a stranger who may not have sent it at all.
 async function notifyForwarder(to: string, name: string, subject: string, matched: string,
-                               basis: string, applied: any[], waiting: any[], studyId: string) {
+                               basis: string, applied: any[], waiting: any[], studyId: string,
+                               suggestionId = "") {
   if (!to || !SMTP_USER || !SMTP_PASSWORD) return;
   const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
-  const link = studyId ? `${SITE_URL}/?study=${encodeURIComponent(studyId)}` : SITE_URL;
+  // The button goes to wherever the email needs something done (Adam, 11 Nov: "when i click the
+  // link in the email to go to the site it should pull up the area where the item needs to be
+  // addressed"). Anything waiting, or no study matched → that card in Suggested Updates. All
+  // applied → the study it changed.
+  const link = suggestionId && (waiting.length || !matched)
+    ? `${APP_URL}/?update=${encodeURIComponent(suggestionId)}`
+    : studyId ? `${APP_URL}/?study=${encodeURIComponent(studyId)}` : APP_URL;
   const line = !matched
     ? `The tracker couldn't work out which study it's about, so nothing was changed. It's in Suggested Updates if you want to look.`
     : applied.length && waiting.length
@@ -225,13 +302,15 @@ async function notifyForwarder(to: string, name: string, subject: string, matche
     <p style="font-size:14.5px;line-height:1.5;color:#3a3a3c;margin:14px 0 0 0">${esc(line)}</p>
     ${rows(applied, "APPLIED")}
     ${rows(waiting, "WAITING FOR YOU")}
-    <p style="margin:20px 0 0 0"><a href="${esc(link)}" style="background:#0a84ff;color:#fff;text-decoration:none;font-weight:600;font-size:14.5px;padding:10px 18px;border-radius:9px;display:inline-block">${waiting.length ? "Review it" : "Open the tracker"}</a></p>
+    <p style="margin:20px 0 0 0"><a href="${esc(link)}" style="background:#0a84ff;color:#fff;text-decoration:none;font-weight:600;font-size:14.5px;padding:10px 18px;border-radius:9px;display:inline-block">${waiting.length || !matched ? "Review it" : "Open the study"}</a></p>
     <p style="font-size:11.5px;color:#8e8e93;line-height:1.45;margin-top:20px">You're getting this because you forwarded an email to the tracker.</p>
   </div>`;
   // Collapsed to a single line with no runs of spaces. Indented HTML leaves lines ending in a
   // space, which quoted-printable encodes as "=20" — and a mail client that doesn't decode it
   // renders a literal "=20" in the middle of the message. That showed up in the first real one.
   const wire = html.replace(/\s*\n\s*/g, "").replace(/ {2,}/g, " ");
+  if (await sendViaDomain({ kind: "meeting", fromName: FROM_NAME, to, subject: matched ? `Read: ${matched}` : "Read your forwarded email",
+        html: wire, replyTo: SMTP_USER || undefined })) return;
   const smtp = new SMTPClient({
     connection: { hostname: SMTP_HOST, port: SMTP_PORT, tls: true, auth: { username: SMTP_USER, password: SMTP_PASSWORD } },
   });
@@ -282,8 +361,33 @@ Deno.serve(async (req) => {
     const payload = await req.json().catch(() => ({}));
     const from = bareAddress(payload?.from ?? "");
     const subject = String(payload?.subject ?? "").slice(0, 200);
-    const raw = String(payload?.body ?? "");
-    if (!raw.trim()) return json({ error: "Empty message" }, 400);
+    let raw = String(payload?.body ?? "");
+    // Files on the email (29 Oct 2026). Sent by the Gmail script as base64; read in processMeeting.
+    let atts = (Array.isArray(payload?.attachments) ? payload.attachments : [])
+      .filter((a: any) => a && typeof a.data === "string" && a.data.length).slice(0, 8);
+    // Emails forwarded AS ATTACHMENTS (5 Nov 2026) — see mime.ts. Each attached email's text is
+    // added to the body, as if it had been forwarded inline, and the files inside it join the
+    // other attachments (same 8-file cap, same patient-information check).
+    let nAttachedEmails = 0;
+    if (typeof payload?.rawMime === "string" && hasAttachedEmails(payload.rawMime)) {
+      try {
+        const { emails, files } = attachedEmails(payload.rawMime);
+        nAttachedEmails = emails.length;
+        if (emails.length) {
+          raw = (raw.trim() ? raw : "(no covering note)") +
+            `\n\nThis forward has ${emails.length} email${emails.length === 1 ? "" : "s"} attached. Treat each as a separate update:` +
+            emails.map((e, i) => `\n\n--- Attached email ${i + 1} of ${emails.length} ---\nFrom: ${e.from}\nDate: ${e.date}\nSubject: ${e.subject}\n\n${e.text}`).join("");
+        }
+        const room = Math.max(0, 8 - atts.length);
+        atts = atts.concat(files.filter((f) => f.size <= 10 * 1024 * 1024).slice(0, room));
+      } catch (e) {
+        console.warn("couldn't read attached emails", (e as Error)?.message);
+      }
+    }
+    payload.body = raw;
+    payload.attachments = atts;
+    delete payload.rawMime;   // not stored, and not needed past this point
+    if (!raw.trim() && !atts.length) return json({ error: "Empty message" }, 400);
 
     const db = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 
@@ -328,8 +432,10 @@ Deno.serve(async (req) => {
     // action item and replies on the thread. Only for a sender we know: a stranger's "meeting"
     // would be an open channel for editing studies. Without a model key it falls through to the
     // ordinary rules, which at worst file a note.
-    if (sender && ANTHROPIC_KEY && looksLikeMeeting(subject, raw)) {
-      const hash = await sha256(subject + "\n" + raw);
+    // An email with files goes the same way: the files are read and then treated like notes, so a
+    // "new study idea" infographic or a data sheet is understood rather than skipped.
+    if (sender && ANTHROPIC_KEY && (atts.length || nAttachedEmails || looksLikeMeeting(subject, raw))) {
+      const hash = await sha256(subject + "\n" + raw + atts.map((a: any) => "\n[file] " + a.name + " " + String(a.data).length).join(""));
       // The Apps Script retries anything it didn't get a 200 for, and a long transcript can outlast
       // its patience. The same meeting must never be applied twice.
       const { data: dup } = await db.from("items").select("id").eq("kind", "suggestion")
@@ -459,7 +565,7 @@ Deno.serve(async (req) => {
         await notifyForwarder(sender.notify, sender.name, subject,
           read.study ? (read.study.nickname || read.study.title) : "",
           read.study ? read.basis : "", applied, read.changes,
-          read.study ? read.study.id : "");
+          read.study ? read.study.id : "", id);
         notified = true;
       } catch (e) {
         console.error("ingest-email notify failed", e);

@@ -31,7 +31,10 @@ const json = (b: unknown, s = 200) =>
 const esc = (s: string) => String(s ?? "").replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c] as string));
 
+// One line, single spaces: indented HTML leaves lines ending in a space, which Gmail's SMTP path
+// quoted-printable-encodes as "=20" and some mail clients print literally (28 Oct 2026).
 async function sendMail(to: string, subject: string, html: string) {
+  html = html.replace(/\s*\n\s*/g, " ").replace(/ {2,}/g, " ");
   const smtp = new SMTPClient({
     connection: { hostname: SMTP_HOST, port: SMTP_PORT, tls: true, auth: { username: SMTP_USER, password: SMTP_PASSWORD } },
   });
@@ -77,8 +80,45 @@ Deno.serve(async (req) => {
         throw insErr;
       }
 
-      const { data: prof } = await db.from("items").select("data").eq("kind", "profile").eq("id", callerId).maybeSingle();
+      const { data: prof } = await db.from("items").select("data, workspace").eq("kind", "profile").eq("id", callerId).maybeSingle();
       const name = (prof?.data as any)?.name || callerEmail;
+
+      // The lab rule decides, not a second approval (Adam, 29 Oct: "why would I do a separate
+      // approval when there was already specific wording … saying who can be an admin on a given
+      // lab?"). Lab admin = the PI and their research team — the same in every lab. So a research
+      // assistant, a coordinator / research manager, or the lab's own PI (as named in lab_pis) is
+      // made lab admin of THEIR OWN lab at once; Adam gets an FYI, not a task. Anyone else (students,
+      // residents, fellows, other clinicians) still waits for Adam. The lab is the one their profile
+      // is in, which the invite fixed (017) — choosing a position can't move anyone between labs.
+      const pos = String((prof?.data as any)?.position ?? "");
+      const ws = String((prof as any)?.workspace ?? "");
+      const { data: piRow } = ws ? await db.from("lab_pis").select("pi_name").eq("workspace", ws).maybeSingle() : { data: null };
+      const isLabPi = !!piRow && String(piRow.pi_name).trim().toLowerCase() === String(name).trim().toLowerCase();
+      const isResearchStaff = /^research assistant$/i.test(pos) || /\bCRCM?\b|coordinator|research manager/i.test(pos);
+      // Off unless LAB_RULE_AUTO_ADMIN=on (29 Oct): a role chosen at sign-up isn't who the PI says
+      // the research team is — Adam's lab lists nine research assistants and two are its team.
+      if (Deno.env.get("LAB_RULE_AUTO_ADMIN") === "on" && prof && ws && (isLabPi || isResearchStaff)) {
+        const nowIso = new Date().toISOString();
+        await db.from("admin_requests").update({ status: "approved", decided_at: nowIso })
+          .eq("user_id", callerId).eq("status", "pending");
+        const { error: setErr } = await db.from("items")
+          .update({ data: { ...(prof.data as any), admin: true }, updated_at: nowIso })
+          .eq("kind", "profile").eq("id", callerId);
+        if (setErr) throw setErr;
+        const why = isLabPi ? "the lab's PI" : `${pos.toLowerCase()} in the lab`;
+        await sendMail(APPROVER, `${name} is now a lab admin (${ws})`, `
+          <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px">
+            <h2 style="font-size:17px;margin:0 0 10px">Lab admin added — nothing for you to do</h2>
+            <p style="font-size:14px;color:#3a3a3c;line-height:1.5">
+              <b>${esc(name)}</b> (${esc(callerEmail)}) is ${esc(why)} <b>${esc(ws)}</b>, so under your lab rule
+              they're now its lab admin: they see and edit that lab's studies, and no other lab's.
+            </p>
+            <p style="font-size:12.5px;color:#8e8e93;line-height:1.45">If that's wrong, remove it from the Org Chart in Settings.</p>
+          </div>`).catch((e) => console.error("fyi failed", e));
+        console.log(`admin request from ${callerEmail} approved by the lab rule (${why}, ${ws})`);
+        return json({ ok: true, auto: true, message: "Done — research staff are lab admins of their own lab. Reload to see every study in your lab." });
+      }
+
       await sendMail(APPROVER, `Admin access requested by ${name}`, `
         <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px">
           <h2 style="font-size:17px;margin:0 0 10px">Admin access requested</h2>
@@ -87,7 +127,7 @@ Deno.serve(async (req) => {
           </p>
           ${reason ? `<p style="font-size:13.5px;color:#3a3a3c;background:#f2f2f7;border-radius:9px;padding:11px 13px">${esc(reason)}</p>` : ""}
           <p style="font-size:14px;color:#3a3a3c;line-height:1.5">
-            Approve or decline it in <a href="${SITE_URL}">Settings &rsaquo; Admin Requests</a>. Nothing changes until you do.
+            Approve or decline it in <a href="${SITE_URL}">Settings &rsaquo; Account &amp; user settings &rsaquo; Admin Access</a>. Nothing changes until you do.
           </p>
           <p style="font-size:11.5px;color:#8e8e93;line-height:1.45;margin-top:18px">
             Only you can approve admin requests. Admin rights can't be granted any other way.
@@ -133,7 +173,7 @@ Deno.serve(async (req) => {
           approve ? "You now have admin access" : "Admin access request declined",
           `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px">
              <p style="font-size:14px;color:#3a3a3c;line-height:1.5">${approve
-               ? `Your request for admin access on the Research Tracker was approved. Reload the app and you'll see every project.`
+               ? `Your request for admin access on the Research Tracker was approved. Reload the app and you'll see every project in your lab.`
                : `Your request for admin access on the Research Tracker was declined. Nothing about your account has changed.`}</p>
            </div>`).catch((e) => console.error("notify failed", e));
       }
@@ -187,7 +227,7 @@ Deno.serve(async (req) => {
           makeAdmin ? "You now have admin access" : "Your admin access was removed",
           `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:520px">
              <p style="font-size:14px;color:#3a3a3c;line-height:1.5">${makeAdmin
-               ? "You've been given admin access on the Research Tracker. Reload the app and you'll see every project."
+               ? "You've been given admin access on the Research Tracker. Reload the app and you'll see every project in your lab."
                : "Your admin access on the Research Tracker was removed. Your account and your own projects are unchanged."}</p>
            </div>`).catch((e) => console.error("notify failed", e));
       }

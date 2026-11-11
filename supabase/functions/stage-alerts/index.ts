@@ -14,10 +14,15 @@
 // name-alias map, so historic spellings ("Chahla") still reach the right person.
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
+import { sendViaDomain } from "./warmup-mail.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const SITE_URL = Deno.env.get("SITE_URL") ?? "https://studypipeline.com";
+const SITE_URL_RAW = Deno.env.get("SITE_URL") ?? "https://studypipeline.com";
+// SITE_URL predates the move to studypipeline.com; links go to the address people actually use.
+const SITE_URL = SITE_URL_RAW.includes("netlify.app") ? "https://studypipeline.com" : SITE_URL_RAW;
+// Each study in the email opens that study (Adam, 11 Nov 2026).
+const studyLink = (id: string) => `${SITE_URL}/?study=${encodeURIComponent(id)}`;
 const SMTP_USER = Deno.env.get("SMTP_USER")!;
 const SMTP_PASSWORD = Deno.env.get("SMTP_PASSWORD")!;
 const SMTP_HOST = Deno.env.get("SMTP_HOST") ?? "smtp.gmail.com";
@@ -64,8 +69,11 @@ function client() {
   return smtp;
 }
 async function send(to: string, subject: string, html: string) {
+  // From studypipeline.com when that's switched on (warmup-mail.ts); Gmail otherwise or on failure.
+  if (await sendViaDomain({ kind: "stage", fromName: FROM_NAME, to, subject, html, replyTo: REPLY_TO || SMTP_USER })) return;
   const msg: Record<string, unknown> = {
-    from: `${FROM_NAME} <${SMTP_USER}>`, to, subject, html,
+    // One line, single spaces — otherwise Gmail's SMTP path shows "=20" in some clients.
+    from: `${FROM_NAME} <${SMTP_USER}>`, to, subject, html: html.replace(/\s*\n\s*/g, " ").replace(/ {2,}/g, " "),
     content: html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
   };
   if (REPLY_TO) msg.replyTo = REPLY_TO;
@@ -119,7 +127,7 @@ Deno.serve(async (req) => {
     // Gather stalls per person, so someone on three studies gets one email, not three. Keyed by
     // lab AND address, never address alone: if the same person somehow held an account in two
     // labs, one bucket would quietly merge the two labs' studies into a single email.
-    const perPerson = new Map<string, { email: string; name: string; items: { study: string; irb: string; stage: string; days: number; since: string; kind: string }[]; irb: { study: string; irb: string; expiry: string; days: number; kind: string }[] }>();
+    const perPerson = new Map<string, { email: string; name: string; items: { study: string; studyId: string; irb: string; stage: string; days: number; since: string; kind: string }[]; irb: { study: string; studyId: string; irb: string; expiry: string; days: number; kind: string }[] }>();
     const bucketFor = (ws: string, email: string, name: string) => {
       const key = ws + "|" + email;
       let b = perPerson.get(key);
@@ -201,7 +209,7 @@ Deno.serve(async (req) => {
           const kind = `stalled:${st.stage}:${st.since}:${st.threshold}`;
           if (!(await claim(String(s.id), who.email, kind))) continue;
           bucketFor(ws, who.email, who.name).items.push({
-            study: String(s.nickname || s.title || "Untitled study"),
+            study: String(s.nickname || s.title || "Untitled study"), studyId: String(s.id),
             irb: String(s.irb ?? ""),
             stage: st.stage, days: st.days, since: st.since, kind,
           });
@@ -232,7 +240,7 @@ Deno.serve(async (req) => {
         const kind = `irbexpiry:${expiry}:${step}`;
         if (!(await claim(String(s.id), who.email, kind))) continue;
         bucketFor(ws, who.email, who.name).irb.push({
-          study: String(s.nickname || s.title || "Untitled study"),
+          study: String(s.nickname || s.title || "Untitled study"), studyId: String(s.id),
           irb: String(s.irb ?? ""), expiry, days: until, kind,
         });
       }
@@ -260,7 +268,7 @@ Deno.serve(async (req) => {
         .sort((a, b) => b.days - a.days)
         .map((i) => `
           <tr>
-            <td style="padding:7px 10px 7px 0;font-size:14px;color:#1c1c1e">${esc(i.study)}${i.irb ? ` <span style="color:#8e8e93">· ${esc(i.irb)}</span>` : ""}</td>
+            <td style="padding:7px 10px 7px 0;font-size:14px;color:#1c1c1e"><a href="${esc(studyLink(i.studyId))}" style="color:#0a84ff;text-decoration:none">${esc(i.study)}</a>${i.irb ? ` <span style="color:#8e8e93">· ${esc(i.irb)}</span>` : ""}</td>
             <td style="padding:7px 10px;font-size:14px;color:#1c1c1e">${esc(i.stage)}</td>
             <td style="padding:7px 0;font-size:14px;font-weight:600;color:${i.days >= 90 ? "#d70015" : i.days >= 60 ? "#c93400" : "#8a6d00"};white-space:nowrap">${i.days} days</td>
           </tr>`).join("");
@@ -272,7 +280,7 @@ Deno.serve(async (req) => {
             <tr style="text-align:left"><th style="padding:0 10px 6px 0;font-size:11.5px;color:#8e8e93;font-weight:600">STUDY</th><th style="padding:0 10px 6px;font-size:11.5px;color:#8e8e93;font-weight:600">EXPIRES</th><th style="padding:0 0 6px;font-size:11.5px;color:#8e8e93;font-weight:600">STATUS</th></tr>
             ${bucket.irb.sort((a, b) => a.days - b.days).map((i) => `
             <tr>
-              <td style="padding:7px 10px 7px 0;font-size:14px;color:#1c1c1e">${esc(i.study)}${i.irb ? ` <span style="color:#8e8e93">· ${esc(i.irb)}</span>` : ""}</td>
+              <td style="padding:7px 10px 7px 0;font-size:14px;color:#1c1c1e"><a href="${esc(studyLink(i.studyId))}" style="color:#0a84ff;text-decoration:none">${esc(i.study)}</a>${i.irb ? ` <span style="color:#8e8e93">· ${esc(i.irb)}</span>` : ""}</td>
               <td style="padding:7px 10px;font-size:14px;color:#1c1c1e">${esc(i.expiry)}</td>
               <td style="padding:7px 0;font-size:14px;font-weight:600;white-space:nowrap;color:${i.days < 0 ? "#d70015" : i.days <= 30 ? "#d70015" : "#c93400"}">${i.days < 0 ? `LAPSED ${Math.abs(i.days)}d ago` : `${i.days} days left`}</td>
             </tr>`).join("")}

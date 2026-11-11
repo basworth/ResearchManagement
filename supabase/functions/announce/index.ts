@@ -199,7 +199,8 @@ Deno.serve(async (req) => {
             to: r.email,
             replyTo: REPLY_TO || undefined,
             subject,
-            html,
+            // One line, single spaces — otherwise Gmail's SMTP path shows "=20" in some clients.
+            html: html.replace(/\s*\n\s*/g, " ").replace(/ {2,}/g, " "),
             content: plain,
           } as any);
           delivered.push(r.email);

@@ -16,6 +16,7 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
+import { sendViaDomain } from "./warmup-mail.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -173,36 +174,42 @@ async function closeSmtp(): Promise<void> {
   smtp = null;
 }
 async function sendEmail(to: string, subject: string, html: string): Promise<void> {
+  // From studypipeline.com when that's switched on (warmup-mail.ts); Gmail otherwise or on failure.
+  if (await sendViaDomain({ kind: "task", fromName: FROM_NAME, to, subject, html, replyTo: SMTP_USER })) return;
   const client = await smtpClient();
   await client.send({
     from: `${FROM_NAME} <${SMTP_USER}>`,
     to,
     subject,
-    html,
+    // One line, single spaces — otherwise Gmail's SMTP path shows "=20" in some clients.
+    html: html.replace(/\s*\n\s*/g, " ").replace(/ {2,}/g, " "),
     // Plain-text fallback so the message isn't flagged as HTML-only (a spam signal).
     content: html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim(),
   });
 }
 
-function shell(heading: string, intro: string, rows: string, footer = ""): string {
+function shell(heading: string, intro: string, rows: string, footer = "", link = APP_URL): string {
   return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1c1c1e">
     <div style="font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#8e8e93;font-weight:700">Midwest Orthopaedics at Rush</div>
     <h1 style="font-size:19px;margin:6px 0 14px 0">${heading}</h1>
     <p style="font-size:14.5px;line-height:1.5;color:#3a3a3c;margin:0 0 16px 0">${intro}</p>
     ${rows}
-    <p style="margin:22px 0 0 0"><a href="${APP_URL}" style="background:#0a84ff;color:#fff;text-decoration:none;font-weight:600;font-size:14.5px;padding:10px 18px;border-radius:9px;display:inline-block">Open Research Tracker</a></p>
+    <p style="margin:22px 0 0 0"><a href="${esc(link)}" style="background:#0a84ff;color:#fff;text-decoration:none;font-weight:600;font-size:14.5px;padding:10px 18px;border-radius:9px;display:inline-block">Open Research Tracker</a></p>
     ${footer}
     <p style="font-size:11.5px;color:#8e8e93;line-height:1.45;margin-top:20px">You're getting this because you're assigned to this work in the Research Tracker.</p>
   </div>`;
 }
 
-function taskRow(title: string, study: string, due: string, note: string): string {
-  return `<div style="border:1px solid #e5e5ea;border-radius:11px;padding:13px 15px;margin-bottom:9px">
-    <div style="font-size:15px;font-weight:600">${esc(title)}</div>
+// Each task opens itself in the tracker (Adam, 11 Nov 2026: the link should "pull up the area
+// where the item needs to be addressed"). ?task=<id> opens its study with the task sheet up.
+const taskLink = (id: string) => id ? `${APP_URL}/?task=${encodeURIComponent(id)}` : APP_URL;
+function taskRow(title: string, study: string, due: string, note: string, id = ""): string {
+  return `<a href="${esc(taskLink(id))}" style="display:block;text-decoration:none;color:#1c1c1e;border:1px solid #e5e5ea;border-radius:11px;padding:13px 15px;margin-bottom:9px">
+    <div style="font-size:15px;font-weight:600;color:#1c1c1e">${esc(title)}</div>
     <div style="font-size:12.5px;color:#8e8e93;margin-top:3px">
       ${study ? esc(study) + " · " : ""}${due ? "Due " + esc(fmtDate(due)) : "No due date"}${note ? ` · <span style="color:#ff3b30;font-weight:600">${esc(note)}</span>` : ""}
     </div>
-  </div>`;
+  </a>`;
 }
 
 // ---------- 1. Instant "you've been assigned" ----------
@@ -241,8 +248,9 @@ async function handleAssignment(record: any, oldRecord: any): Promise<number> {
         `New task: ${task.title}`,
         shell("You've been assigned a task",
           `Hi ${esc(profile.name.split(" ")[0])}, this was just assigned to you.`,
-          taskRow(task.title, study, task.due, ""),
-          task.notes ? `<p style="font-size:13.5px;color:#3a3a3c;line-height:1.5;background:#f2f2f7;border-radius:9px;padding:11px 13px">${esc(task.notes)}</p>` : ""),
+          taskRow(task.title, study, task.due, "", task.id),
+          task.notes ? `<p style="font-size:13.5px;color:#3a3a3c;line-height:1.5;background:#f2f2f7;border-radius:9px;padding:11px 13px">${esc(task.notes)}</p>` : "",
+          taskLink(task.id)),
       );
       sent++;
     } catch (e) {
@@ -312,11 +320,11 @@ async function handleSweep(dryRun = false): Promise<number | Record<string, unkn
     const parts: string[] = [];
     if (overdue.length) {
       parts.push(`<div style="font-size:12px;font-weight:700;color:#ff3b30;letter-spacing:.4px;text-transform:uppercase;margin:0 0 8px 0">Overdue</div>`);
-      for (const t of overdue) parts.push(taskRow(t.title, labels.get(t.id) ?? "", t.due, `${Math.abs(daysUntil(t.due))} days late`));
+      for (const t of overdue) parts.push(taskRow(t.title, labels.get(t.id) ?? "", t.due, `${Math.abs(daysUntil(t.due))} days late`, t.id));
     }
     if (dueSoon.length) {
       parts.push(`<div style="font-size:12px;font-weight:700;color:#8e8e93;letter-spacing:.4px;text-transform:uppercase;margin:${overdue.length ? "18px" : "0"} 0 8px 0">Coming up</div>`);
-      for (const t of dueSoon) parts.push(taskRow(t.title, labels.get(t.id) ?? "", t.due, ""));
+      for (const t of dueSoon) parts.push(taskRow(t.title, labels.get(t.id) ?? "", t.due, "", t.id));
     }
     const total = overdue.length + dueSoon.length;
     try {
@@ -327,7 +335,7 @@ async function handleSweep(dryRun = false): Promise<number | Record<string, unkn
           : `${total} task${total > 1 ? "s" : ""} due soon`,
         shell("Your research tasks",
           `Hi ${esc(profile.name.split(" ")[0])}, here's what needs your attention.`,
-          parts.join("")),
+          parts.join(""), "", total === 1 ? taskLink((overdue[0] || dueSoon[0]).id) : APP_URL),
       );
       sent++;
     } catch (e) {
