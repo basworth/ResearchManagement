@@ -17,7 +17,7 @@ export function setStudies(list: any[]) { STUDIES = list || []; }
 // so improving the parser re-reads everything it looked at before and got nothing from — otherwise
 // a message read by an older, dumber version stays permanently misjudged, which is exactly what
 // happened to the first Arthroscopy confirmation.
-export const PARSER_VERSION = 9;
+export const PARSER_VERSION = 10;
 
 // ---------- Protected health information ----------
 // The tracker is deliberately study-level and holds no PHI. A forwarded email might, so it is
@@ -129,13 +129,17 @@ export function matchStudyFromText(text) {
     const s = studies.find(x => x.id === bySender.studyId);
     if (s) return { study: s, basis: bySender.basis };
   }
+  const normText = t.replace(/[\u2018\u2019\u2032]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/[\u2010-\u2014]/g, "-").replace(/\s+/g, " ");
   const tryField = (field, label, minLen) => {
     for (const s of studies) {
       const v = String(s[field] || "").trim();
       if (!v || v.length < (minLen || 4)) continue;
-      // Escaped: IRB numbers and tracking IDs contain characters that are regex syntax.
-      const re = new RegExp("(^|[^A-Za-z0-9])" + v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^A-Za-z0-9]|$)", "i");
-      if (re.test(t)) return { study: s, basis: `${label} ${v}` };
+      // Escaped: IRB numbers and tracking IDs contain characters that are regex syntax. Spacing and
+      // quote marks are evened out on both sides first: a journal wraps a long title over two lines
+      // and writes Schöttle’s with a curly apostrophe (11 Nov 2026, ARTH-26-418R2 matched nothing).
+      const norm = (x) => String(x).replace(/[\u2018\u2019\u2032]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/[\u2010-\u2014]/g, "-").replace(/\s+/g, " ");
+      const re = new RegExp("(^|[^A-Za-z0-9])" + norm(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^A-Za-z0-9]|$)", "i");
+      if (re.test(normText)) return { study: s, basis: `${label} ${v}` };
     }
     return null;
   };
