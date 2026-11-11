@@ -28,7 +28,7 @@ function check(name, cond, detail) {
     const att = fs.readFileSync(dir + "/attachments.ts", "utf8");
     const idx = fs.readFileSync(dir + "/index.ts", "utf8");
     console.log("\n-- Server --");
-    check("an email with files goes to the reader", /if \(sender && ANTHROPIC_KEY && \(atts\.length \|\| looksLikeMeeting\(subject, raw\)\)\)/.test(idx));
+    check("an email with files goes to the reader", /if \(sender && ANTHROPIC_KEY && \(atts\.length \|\| (nAttachedEmails \|\| )?looksLikeMeeting\(subject, raw\)\)\)/.test(idx));
     check("an email that is only files is accepted", /if \(!raw\.trim\(\) && !atts\.length\) return json/.test(idx));
     check("unsure counts as patient information", /phi: r\.containsPatientInfo !== false/.test(att) && /If you are unsure, answer true/.test(att));
     check("a file that may identify a patient contributes no text", /text: r\.containsPatientInfo === false \? String\(r\.text/.test(att)
