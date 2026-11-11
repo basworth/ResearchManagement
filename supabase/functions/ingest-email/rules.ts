@@ -17,7 +17,7 @@ export function setStudies(list: any[]) { STUDIES = list || []; }
 // so improving the parser re-reads everything it looked at before and got nothing from — otherwise
 // a message read by an older, dumber version stays permanently misjudged, which is exactly what
 // happened to the first Arthroscopy confirmation.
-export const PARSER_VERSION = 10;
+export const PARSER_VERSION = 11;
 
 // ---------- Protected health information ----------
 // The tracker is deliberately study-level and holds no PHI. A forwarded email might, so it is
@@ -260,6 +260,68 @@ function matchByDistinctiveWords(text) {
   // The words themselves go in the basis, so a wrong match is obvious rather than mysterious.
   const shown = best.hits.slice().sort((a, b) => (docFreq.get(a) - docFreq.get(b)) || b.length - a.length).slice(0, 4);
   return { study: best.study, basis: `wording — "${shown.join('", "')}"` };
+}
+
+// ---------- Transfer (cascade) offers — 11 Nov 2026 ----------
+// "we are unable to accept your submission to Arthroscopy. However … we invite you to revise this
+// paper for publication in Arthroscopy, Sports Medicine, and Rehabilitation (ASMAR)". That is not a
+// major revision and not a plain rejection: it's a declined paper with an offer to move it to the
+// journal's open-access sibling. Read as its own decision so the offer, our plan for it, and where
+// the paper goes next are all on the study.
+const CASCADE_JOURNALS = [
+  { name: "ASMAR", re: /arthroscopy,? sports medicine,? (?:and|&) rehabilitation|\bASMAR\b/i },
+  { name: "OJSM", re: /orthopa?edic journal of sports medicine|\bOJSM\b/i },
+  { name: "JBJS Open Access", re: /JBJS Open Access|\bJBJS OA\b/i },
+  { name: "JEO", re: /journal of experimental orthopa?edics|\bJEO\b/i },
+  { name: "JAAOS Global", re: /JAAOS:? Global/i },
+  { name: "JSES International", re: /JSES International/i },
+  { name: "VJSM", re: /video journal of sports medicine|\bVJSM\b/i },
+  { name: "Arthroscopy Techniques", re: /arthroscopy techniques/i }
+];
+// Journal names a forwarding note might use for "where it goes next". Whole-name match, any case;
+// anything else is kept as written (title-cased).
+const PLAN_JOURNALS = ["AJSM", "OJSM", "Arthroscopy", "ASMAR", "Cartilage", "JCJP", "JKS", "VJSM", "KSSTA",
+  "Sports Health", "JBJS", "JSES", "JISAKOS", "JEO", "CORR", "JOR", "Knee", "JAAOS", "Orthopedics", "IJSPT"];
+function readTransferOffer(body) {
+  const t = String(body || "").replace(/\s+/g, " ");
+  const declined = /\b(?:unable to accept|cannot accept|can not accept|not (?:able|in a position) to accept|decided not to accept|will not be able to accept|not be accepted|regret)/i;
+  const m = declined.exec(t);
+  if (!m) return null;
+  const rest = t.slice(m.index, m.index + 1500);
+  const offer = /\b(?:invite you to (?:revise|transfer|submit|resubmit)|(?:offer|option|opportunity) (?:for you )?to (?:transfer|submit|revise|resubmit)|transfer (?:your|the|this) (?:manuscript|paper|submission)|recommend(?:ed)? (?:it |your (?:manuscript|paper) )?for (?:transfer|publication in)|be (?:suitable|considered) for publication in|eligible for transfer)/i;
+  const o = offer.exec(rest);
+  if (!o) return null;
+  const after = rest.slice(o.index, o.index + 300);
+  const j = CASCADE_JOURNALS.find(c => c.re.test(after));
+  if (!j) return null;
+  const by = /\b(?:respond|reply|decide|let us know|accept (?:this|the) (?:offer|transfer|invitation))[^.]{0,60}?\b(?:by|before)\s+([A-Za-z]{3,9}\.?\s+\d{1,2},?\s+\d{4}|\d{1,2}\s+[A-Za-z]{3,9}\.?\s+\d{4}|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{4})/i.exec(t);
+  return { to: j.name, by: by ? parseLooseDate(by[1]) : "" };
+}
+// What the person forwarding wrote above the forwarded email — "FYI, I would probably go to
+// Cartilage journal but please verify with Crawford". Empty when there's no note.
+function coveringNote(text) {
+  const t = String(text || "");
+  const m = /^\s*(?:[-_ ]*(?:Forwarded message|Original Message|Begin forwarded message)\b.*|From:\s.+)$/im.exec(t);
+  if (!m || m.index === 0) return "";
+  const note = t.slice(0, m.index).replace(/\s+/g, " ").trim();
+  return note.length >= 6 && note.length <= 1200 ? note : "";
+}
+// Our plan, from that note: where it goes next, and whether we take the transfer.
+function readPlanFromNote(note, offeredTo) {
+  if (!note) return null;
+  let next = "";
+  const g = /\b(?:go ?to|send (?:it )?to|submit (?:it )?to|resubmit (?:it )?to|move (?:it )?to|take (?:it )?to|try|target)\s+(?:the\s+)?([A-Za-z][A-Za-z&'-]*(?: [A-Za-z][A-Za-z&'-]*){0,4}?)(?=\s+journal\b|\s*[.,;!?]|\s+but\b|\s+and\b|\s+instead\b|\s*$)/i.exec(note);
+  if (g) {
+    const raw = g[1].trim();
+    const known = PLAN_JOURNALS.find(k => k.toLowerCase() === raw.toLowerCase());
+    const casc = CASCADE_JOURNALS.find(c => c.re.test(raw));
+    next = known || (casc && casc.name) || raw.replace(/\b\w/g, c => c.toUpperCase());
+  }
+  let decision = "";
+  if (/\b(?:decline|deny|turn (?:it )?down|pass on|not (?:take|accept|do) the (?:transfer|offer)|won'?t transfer|no to (?:the )?transfer)/i.test(note)) decision = "Decline transfer";
+  else if (/\b(?:accept|take) the (?:transfer|offer)\b/i.test(note) || (next && offeredTo && next === offeredTo)) decision = "Accept transfer";
+  else if (next && offeredTo && next !== offeredTo) decision = "Decline transfer";
+  return (next || decision) ? { next, decision } : null;
 }
 
 // ---------- What is this email telling us? ----------
@@ -589,7 +651,31 @@ export function readEmail(text, subject) {
     const grants = readGrantEmail(body, s);
     if (grants) grants.forEach(c => changes.push(c));
 
-    const dec = DECISION_PATTERNS.find(p => p.re.test(body));
+    // A transfer offer reads like a rejection AND a revision ("invite you to revise … in ASMAR"),
+    // so it is checked first and, when found, the plain decision patterns stand down.
+    const xfer = readTransferOffer(body);
+    const note = coveringNote(text);
+    const plan = readPlanFromNote(note, xfer ? xfer.to : "");
+    const plainDec = DECISION_PATTERNS.find(p => p.re.test(body));
+    if (xfer) {
+      if (s.decision !== "Transfer offered") changes.push(proposal("decision", "Journal decision", "Transfer offered", false,
+        `${(s.journal || "the journal").trim()} declined it and offered a transfer to ${xfer.to}`));
+      if ((s.transferTo || "") !== xfer.to) changes.push(proposal("transferTo", "Transfer offered to", xfer.to, !s.transferTo, "named in the email"));
+      if (xfer.by && !s.transferRespondBy) changes.push(proposal("transferRespondBy", "Answer the offer by", xfer.by, true, "stated in the email"));
+      // Our plan. From the note on the forward when it says; otherwise "decline" is offered (Adam:
+      // "our plan which is to deny"), unticked, for a person to confirm.
+      const p = (plan && plan.decision) || "Decline transfer";
+      if ((s.transferPlan || "") !== p) changes.push(proposal("transferPlan", "Our plan", p,
+        !!(plan && plan.decision) && !s.transferPlan,
+        plan && plan.decision ? "from the note on the forward" : "the usual answer to an open-access transfer"));
+    }
+    if (plan && plan.next && (xfer || (plainDec && plainDec.decision === "Rejected")) && (s.nextJournal || "") !== plan.next) {
+      changes.push(proposal("nextJournal", "Next journal", plan.next, !s.nextJournal, "from the note on the forward"));
+    }
+    // The note itself is kept: "please verify with Crawford and his team" is part of the plan.
+    if (note && (xfer || plan)) changes.push(proposal("addNote", "Note on the study", "Note on the forwarded decision: " + note, true, "what was written on the forward"));
+
+    const dec = xfer ? null : plainDec;
     if (dec && s.decision !== dec.decision) {
       // Never safe. A decision drives which fields the manuscript section even shows, and a parser
       // that reads "we regret we cannot offer minor revisions" backwards would be expensive.
@@ -775,7 +861,8 @@ export function applyChangeTo(s, c, env) {
       if (!Array.isArray(s.priorSubmissions)) s.priorSubmissions = [];
       s.priorSubmissions.push({
         id: newId(), journal: was, submittedDate: s.submittedDate || "",
-        trackingId: s.journalTrackingId || "", decision: s.decision || "", decisionDate: s.decisionDate || ""
+        trackingId: s.journalTrackingId || "", decision: s.decision || "", decisionDate: s.decisionDate || "",
+        transferTo: s.transferTo || "", transferPlan: s.transferPlan || ""
       });
     }
     s.journal = journal;
@@ -785,6 +872,8 @@ export function applyChangeTo(s, c, env) {
     s.decisionDate = "";
     s.revisionsReceivedDate = "";
     s.revisionsDeadline = "";
+    s.transferTo = ""; s.transferPlan = ""; s.transferRespondBy = "";
+    if (s.nextJournal && s.nextJournal.toLowerCase() === journal.toLowerCase()) s.nextJournal = "";
     return { field: c.field, label: c.label, from: was ? was + " round filed away" : "", to: journal };
   }
   const before = s[c.field];
