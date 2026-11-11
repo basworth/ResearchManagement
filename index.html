@@ -8512,7 +8512,7 @@ function bindFilterSetsBar(tab, setActive) {
 // so improving the parser re-reads everything it looked at before and got nothing from — otherwise
 // a message read by an older, dumber version stays permanently misjudged, which is exactly what
 // happened to the first Arthroscopy confirmation.
-const PARSER_VERSION = 9;
+const PARSER_VERSION = 10;
 
 // ---------- Protected health information ----------
 // The tracker is deliberately study-level and holds no PHI. A forwarded email might, so it is
@@ -8624,13 +8624,17 @@ function matchStudyFromText(text) {
     const s = studies.find(x => x.id === bySender.studyId);
     if (s) return { study: s, basis: bySender.basis };
   }
+  const normText = t.replace(/[\u2018\u2019\u2032]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/[\u2010-\u2014]/g, "-").replace(/\s+/g, " ");
   const tryField = (field, label, minLen) => {
     for (const s of studies) {
       const v = String(s[field] || "").trim();
       if (!v || v.length < (minLen || 4)) continue;
-      // Escaped: IRB numbers and tracking IDs contain characters that are regex syntax.
-      const re = new RegExp("(^|[^A-Za-z0-9])" + v.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^A-Za-z0-9]|$)", "i");
-      if (re.test(t)) return { study: s, basis: `${label} ${v}` };
+      // Escaped: IRB numbers and tracking IDs contain characters that are regex syntax. Spacing and
+      // quote marks are evened out on both sides first: a journal wraps a long title over two lines
+      // and writes Schöttle’s with a curly apostrophe (11 Nov 2026, ARTH-26-418R2 matched nothing).
+      const norm = (x) => String(x).replace(/[\u2018\u2019\u2032]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/[\u2010-\u2014]/g, "-").replace(/\s+/g, " ");
+      const re = new RegExp("(^|[^A-Za-z0-9])" + norm(v).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([^A-Za-z0-9]|$)", "i");
+      if (re.test(normText)) return { study: s, basis: `${label} ${v}` };
     }
     return null;
   };
@@ -9661,11 +9665,14 @@ function suggestionCardHTML(g) {
     ${canDecideSuggestion(g) ? `
       <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
         <span style="font-size:12.5px;color:var(--text2);flex:0 0 auto">${s ? "Wrong study?" : "Which study is it?"}</span>
-        <select data-sugg-teach="${esc(g.id)}" style="flex:1;min-width:150px;-webkit-appearance:none;appearance:none;background:var(--bg);border:none;border-radius:8px;padding:8px 12px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
-          <option value="">— tell it, and it'll remember —</option>
+        <!-- Type to search (Adam, 11 Nov 2026: "please add a search option for the study name here").
+             Matches title or nickname; picking one teaches it, as the old dropdown did. -->
+        <input data-sugg-teach="${esc(g.id)}" list="dl-teach-${esc(g.id)}" placeholder="Search for the study — it'll remember"
+          style="flex:1;min-width:150px;background:var(--bg);border:none;border-radius:8px;padding:8px 12px;font-size:14px;font-family:inherit;color:var(--text);outline:none">
+        <datalist id="dl-teach-${esc(g.id)}">
           ${visibleStudies().slice().sort((a, b) => (a.nickname || a.title).localeCompare(b.nickname || b.title))
-            .map(x => `<option value="${esc(x.id)}">${esc(x.nickname || x.title)}</option>`).join("")}
-        </select>
+            .map(x => `<option value="${esc(x.title)}">${x.nickname ? esc(x.nickname) : ""}</option>`).join("")}
+        </datalist>
       </div>` : ""}
 
     ${(g.applied || []).length ? `
@@ -10240,8 +10247,12 @@ function bindSuggestions(root) {
   const mh = root.querySelector("#mtg-history");
   if (mh) mh.onclick = () => { showAllMeetings = !showAllMeetings; render(); };
   root.querySelectorAll("[data-hint-forget]").forEach(b => b.onclick = () => forgetMatchHint(b.dataset.hintForget));
-  root.querySelectorAll("[data-sugg-teach]").forEach(sel => sel.onchange = () => {
-    if (sel.value) teachSuggestionStudy(sel.dataset.suggTeach, sel.value);
+  root.querySelectorAll("[data-sugg-teach]").forEach(inp => inp.onchange = () => {
+    const v = inp.value.trim();
+    if (!v) return;
+    const st = studyById(v) || studyByTypedTitle(v);
+    if (st) teachSuggestionStudy(inp.dataset.suggTeach, st.id);
+    else toast("Pick a study from the list");
   });
   root.querySelectorAll("[data-sugg-text]").forEach(b => b.onclick = () => {
     const box = root.querySelector("#sugg-text-" + b.dataset.suggText);
