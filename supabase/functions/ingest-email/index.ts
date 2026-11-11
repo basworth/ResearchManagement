@@ -267,11 +267,18 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
 // signed into a personal account while reading their work mail. Deliberately not sent for an
 // unverified sender — we'd be emailing a stranger who may not have sent it at all.
 async function notifyForwarder(to: string, name: string, subject: string, matched: string,
-                               basis: string, applied: any[], waiting: any[], studyId: string) {
+                               basis: string, applied: any[], waiting: any[], studyId: string,
+                               suggestionId = "") {
   if (!to || !SMTP_USER || !SMTP_PASSWORD) return;
   const esc = (v: unknown) => String(v ?? "").replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c] as string));
-  const link = studyId ? `${SITE_URL}/?study=${encodeURIComponent(studyId)}` : SITE_URL;
+  // The button goes to wherever the email needs something done (Adam, 11 Nov: "when i click the
+  // link in the email to go to the site it should pull up the area where the item needs to be
+  // addressed"). Anything waiting, or no study matched → that card in Suggested Updates. All
+  // applied → the study it changed.
+  const link = suggestionId && (waiting.length || !matched)
+    ? `${APP_URL}/?update=${encodeURIComponent(suggestionId)}`
+    : studyId ? `${APP_URL}/?study=${encodeURIComponent(studyId)}` : APP_URL;
   const line = !matched
     ? `The tracker couldn't work out which study it's about, so nothing was changed. It's in Suggested Updates if you want to look.`
     : applied.length && waiting.length
@@ -295,7 +302,7 @@ async function notifyForwarder(to: string, name: string, subject: string, matche
     <p style="font-size:14.5px;line-height:1.5;color:#3a3a3c;margin:14px 0 0 0">${esc(line)}</p>
     ${rows(applied, "APPLIED")}
     ${rows(waiting, "WAITING FOR YOU")}
-    <p style="margin:20px 0 0 0"><a href="${esc(link)}" style="background:#0a84ff;color:#fff;text-decoration:none;font-weight:600;font-size:14.5px;padding:10px 18px;border-radius:9px;display:inline-block">${waiting.length ? "Review it" : "Open the tracker"}</a></p>
+    <p style="margin:20px 0 0 0"><a href="${esc(link)}" style="background:#0a84ff;color:#fff;text-decoration:none;font-weight:600;font-size:14.5px;padding:10px 18px;border-radius:9px;display:inline-block">${waiting.length || !matched ? "Review it" : "Open the study"}</a></p>
     <p style="font-size:11.5px;color:#8e8e93;line-height:1.45;margin-top:20px">You're getting this because you forwarded an email to the tracker.</p>
   </div>`;
   // Collapsed to a single line with no runs of spaces. Indented HTML leaves lines ending in a
@@ -558,7 +565,7 @@ Deno.serve(async (req) => {
         await notifyForwarder(sender.notify, sender.name, subject,
           read.study ? (read.study.nickname || read.study.title) : "",
           read.study ? read.basis : "", applied, read.changes,
-          read.study ? read.study.id : "");
+          read.study ? read.study.id : "", id);
         notified = true;
       } catch (e) {
         console.error("ingest-email notify failed", e);

@@ -17,7 +17,9 @@ import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const SITE_URL = Deno.env.get("SITE_URL") ?? "https://studypipeline.com";
+const SITE_URL_RAW = Deno.env.get("SITE_URL") ?? "https://studypipeline.com";
+// SITE_URL predates the move to studypipeline.com; links go to the address people actually use.
+const SITE_URL = SITE_URL_RAW.includes("netlify.app") ? "https://studypipeline.com" : SITE_URL_RAW;
 const SMTP_USER = Deno.env.get("SMTP_USER")!;
 const SMTP_PASSWORD = Deno.env.get("SMTP_PASSWORD")!;
 const SMTP_HOST = Deno.env.get("SMTP_HOST") ?? "smtp.gmail.com";
