@@ -1506,7 +1506,7 @@ function rememberTab() {
 }
 function openingTab() {
   // A deep link is an explicit instruction and outranks both rules.
-  if (/[?&#](study|tab|update)=/.test(location.search + location.hash)) return "research";
+  if (/[?&#](study|tab|update|task)=/.test(location.search + location.hash)) return "research";
   try {
     const raw = JSON.parse(localStorage.getItem(LAST_TAB_KEY) || "null");
     if (!raw || raw.day !== localDayStr()) return "research";
@@ -1722,6 +1722,19 @@ function openPendingUpdate() {
   pendingUpdateId = "";
   try { history.replaceState(null, "", window.location.pathname); } catch (e) { /* non-fatal */ }
   tab = "settings";
+  return true;
+}
+function openPendingTask() {
+  if (!pendingTaskId) return false;
+  const id = pendingTaskId;
+  pendingTaskId = "";
+  try { history.replaceState(null, "", window.location.pathname); } catch (e) { /* non-fatal */ }
+  const t = (state.tasks || []).find(x => x.id === id);
+  if (!t) { toast("That task didn't open — it may have been removed"); return false; }
+  const s = t.studyId ? studyById(t.studyId) : null;
+  if (s && canSeeStudy(s)) { openStudy(s.id); tab = "studies"; }
+  // After the render, so the sheet sits over the study rather than being wiped by it.
+  setTimeout(() => openTaskForm(t), 80);
   return true;
 }
 function openPendingStudy() {
@@ -2339,6 +2352,8 @@ let authLinkError = detectAuthLinkError();
 let pendingStudyId = authLinkParam("study");
 // "Review or undo" links in a meeting summary arrive as ?update=<id> — held the same way.
 let pendingUpdateId = authLinkParam("update");
+// Task reminder emails link each task as ?task=<id> (11 Nov 2026) — opens its study with the task up.
+let pendingTaskId = authLinkParam("task");
 let focusUpdateId = "";
 // A dead link carries no session, so there is nothing to set a password against. Offering the
 // password box anyway would fail on save and read as a second, unrelated fault.
@@ -2406,6 +2421,7 @@ async function handleAuthChange(event, session) {
       // lands on the study rather than behind a setup sheet with no idea why they're here.
       if (openPendingStudy()) render();
       if (openPendingUpdate()) { render(); scrollToFocusedUpdate(); }
+      if (openPendingTask()) render();
       // Forwarded emails that arrived while nobody was looking.
       if (parseIncomingSuggestions()) render();
       maybePromptDisplayName();
@@ -9638,7 +9654,7 @@ function dismissSuggestion(id) {
 function suggestionCardHTML(g) {
   const s = g.studyId ? studyById(g.studyId) : null;
   const when = g.createdAt ? fmtDate(String(g.createdAt).slice(0, 10)) : "";
-  return `<div class="card">
+  return `<div class="card" id="sugg-card-${esc(g.id)}" ${focusUpdateId === g.id ? 'style="outline:2px solid var(--blue)"' : ""}>
     <div style="display:flex;gap:8px;align-items:flex-start">
       <div style="flex:1;min-width:0">
         <div style="font-size:14.5px;font-weight:700;overflow:hidden;text-overflow:ellipsis">${esc(g.subject || "(no subject)")}</div>
@@ -10084,8 +10100,12 @@ function scrollToFocusedUpdate(id) {
   const target = id || focusUpdateId;
   if (!target) return;
   setTimeout(() => {
-    const el = document.getElementById("mtg-" + target);
-    if (el && el.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "start" });
+    // A meeting summary links its meeting card; a forwarded-email reply links its suggestion card.
+    const el = document.getElementById("mtg-" + target) || document.getElementById("sugg-card-" + target);
+    if (el && el.scrollIntoView) { el.scrollIntoView({ behavior: "smooth", block: "start" }); return; }
+    // Already dealt with (by someone else, or before the link was tapped): say so, don't just sit there.
+    const g = (state.suggestions || []).find(x => x.id === target);
+    if (g && g.status !== "pending") toast("That one's already been handled" + (g.decidedBy ? " by " + g.decidedBy : ""));
   }, 60);
 }
 function suggestionsSectionHTML() {
@@ -14608,6 +14628,9 @@ function balloonNews() {
     { since: 9, tab: "studies", sel: ['nav.tabbar [data-tab="studies"]'], title: "Study overviews",
       what: "Open a study to see its <b>Overview</b>: what we're asking, why it matters, where it stands and what's next, written from the research meetings forwarded to the tracker.",
       custom: "Tap <b>Edit</b> to change the wording; your edit is kept when the overview is refreshed after later meetings." },
+    { since: 10, sel: ['nav.tabbar [data-tab="settings"]'], title: "Email links go to the item",
+      what: "The button in a tracker email now opens the thing that needs you: the forwarded email waiting to be confirmed or filed, the task, or the study.",
+      custom: "If an email couldn't tell which study it's about, <b>Which study is it?</b> is now a search box. Type part of the title or nickname and pick it, and the tracker remembers the match." },
   ];
 }
 function balloonsVersion() {
