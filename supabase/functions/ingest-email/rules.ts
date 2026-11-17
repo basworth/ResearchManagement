@@ -315,7 +315,9 @@ function readPlanFromNote(note, offeredTo) {
     const raw = g[1].trim();
     const known = PLAN_JOURNALS.find(k => k.toLowerCase() === raw.toLowerCase());
     const casc = CASCADE_JOURNALS.find(c => c.re.test(raw));
-    next = known || (casc && casc.name) || raw.replace(/\b\w/g, c => c.toUpperCase());
+    // Title case, but "of", "and", "the" stay small: "Journal of Knee Surgery", not "Journal Of".
+    next = known || (casc && casc.name) || raw.split(/\s+/).map((w, i) =>
+      i > 0 && /^(?:of|and|the|in|for|on|&)$/i.test(w) ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
   }
   let decision = "";
   if (/\b(?:decline|deny|turn (?:it )?down|pass on|not (?:take|accept|do) the (?:transfer|offer)|won'?t transfer|no to (?:the )?transfer)/i.test(note)) decision = "Decline transfer";
