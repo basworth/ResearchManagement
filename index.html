@@ -3671,13 +3671,23 @@ function onStudyBySurname(s, name) {
     .some(x => String(x || "").toLowerCase().includes(last));
 }
 // The set of studies the signed-in person is allowed to see anywhere in the app.
+// A study someone added themselves is theirs to see even if they didn't put their own name on it
+// (Max Lee, 15 Nov 2026: added a study, refreshed, couldn't find it).
+function iCreatedStudy(s) { return !!(s && currentUser && s.createdBy && s.createdBy === currentUser.id); }
+// "My studies" — the same rule everywhere. The Studies list and Worklist used a stricter one than
+// the dashboard (exact name only, no surname match, nothing for the people you manage), so Max saw
+// his studies counted on the dashboard and one study in the list.
+function isMyStudy(s, name) {
+  return studyInvolvesPerson(s, name) || onStudyBySurname(s, name) || iCreatedStudy(s)
+    || namesIManage().some(n => studyInvolvesPerson(s, n));
+}
 function visibleStudies() {
   if (isAdmin()) return state.studies.slice();
   if (namedOnly()) return state.studies.slice();
   const myName = me();
   if (!myName) return state.studies.slice(); // no identity yet — don't hide everything and confuse them
   const managed = namesIManage();
-  return state.studies.filter(s => studyInvolvesPerson(s, myName) || onStudyBySurname(s, myName) || managed.some(n => studyInvolvesPerson(s, n)));
+  return state.studies.filter(s => studyInvolvesPerson(s, myName) || onStudyBySurname(s, myName) || iCreatedStudy(s) || managed.some(n => studyInvolvesPerson(s, n)));
 }
 function canSeeStudy(s) {
   if (!s) return false;
@@ -3685,7 +3695,7 @@ function canSeeStudy(s) {
   if (namedOnly()) return true;
   const myName = me();
   if (!myName) return true;
-  if (studyInvolvesPerson(s, myName) || onStudyBySurname(s, myName)) return true;
+  if (studyInvolvesPerson(s, myName) || onStudyBySurname(s, myName) || iCreatedStudy(s)) return true;
   return namesIManage().some(n => studyInvolvesPerson(s, n));
 }
 function studyById(id) { return state.studies.find(s => s.id === id); }
@@ -4039,7 +4049,18 @@ function clearDraft(el) {
   try { el.value = el.defaultValue || ""; } catch (e) { /* non-fatal */ }
 }
 
+// A redraw while someone is typing into a date box throws their cursor out mid-date (every date
+// field, not just the plain ones above). Hold it until they leave the box, then draw once.
+let renderHeldForDate = false;
 function render() {
+  const ae = document.activeElement;
+  if (ae && ae.tagName === "INPUT" && ae.type === "date" && $main && $main.contains(ae)) {
+    if (!renderHeldForDate) {
+      renderHeldForDate = true;
+      ae.addEventListener("blur", () => { renderHeldForDate = false; setTimeout(render, 0); }, { once: true });
+    }
+    return;
+  }
   captureDrafts(document);
   rememberTab();
   document.querySelectorAll("nav.tabbar button").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
@@ -4821,7 +4842,9 @@ function renderStudies() {
   // the status/phase/design filters below, so their counts reflect the selected person.
   // Start from what this person is allowed to see at all, then apply the Who filter on top.
   let base = visibleStudies();
-  if (personFilter === "mine") { if (myName && hasStudyFootprint(base, myName)) base = base.filter(s => studyInvolvesPerson(s, myName)); }
+  // Non-admins have no Who picker and visibleStudies() has already scoped them, so filtering again
+  // could only hide studies the dashboard counts.
+  if (personFilter === "mine") { if (isAdmin() && myName && hasStudyFootprint(base, myName)) base = base.filter(s => isMyStudy(s, myName)); }
   else if (personFilter !== "all") base = base.filter(s => studyInvolvesPerson(s, personFilter));
   if (studyFilter === "Active") base = base.filter(isActive);
   else if (studyFilter !== "All") base = base.filter(s => s.phase === studyFilter);
@@ -5057,6 +5080,9 @@ function lastWorkAt(s) {
   let latest = studyLastWork[s.id] || "";
   const m = meetingWorkAt(s);
   if (m > latest) latest = m;
+  // Being added is the first piece of work on a study (William Lee, 17 Nov: new studies showed
+  // up as smelly straight away, because the clock started from the history cut-off instead).
+  if (s.createdAt && s.createdAt > latest) latest = s.createdAt;
   if (latest) return latest;
   const today = todayStr();
   const dated = (s.noteEntries || []).map(n => n && n.date).concat((s.docs || []).map(d => d && d.date))
@@ -6394,8 +6420,20 @@ function bindLinkFieldRow(root, id, s, key) {
 function bindPlainFieldRow(root, id, s, key) {
   const el = root.querySelector("#" + id);
   if (!el) return;
-  el.onchange = (e) => {
-    const val = e.target.value.trim();
+  // Date boxes save when you leave them, not as you type (Max Lee, 17 Nov: "typing the date jumps
+  // to the next field after the first number"). A date input reports a "complete" date after the
+  // first digit of the year, so saving on change saved 0002-… and the redraw stole the focus.
+  if (el.type === "date") {
+    let saved = el.value;
+    const commit = () => { if (el.value === saved) return; saved = el.value; save(el.value); };
+    el.onblur = commit;
+    el.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); el.blur(); } };
+    el.onchange = () => { if (document.activeElement !== el) commit(); };
+    function save(raw) { write(String(raw || "").trim()); }
+    return;
+  }
+  el.onchange = (e) => write(e.target.value.trim());
+  function write(val) {
     // Supports one level of nesting ("grant.amount") for fields that live on a sub-object,
     // same idea as the flat case but writing through to s[obj][prop] instead of s[key].
     if (key.includes(".")) {
@@ -6407,7 +6445,7 @@ function bindPlainFieldRow(root, id, s, key) {
     }
     upsertStudy(s);
     toast(val ? "Saved" : "Cleared");
-  };
+  }
 }
 
 /* ============ Publications dashboard ============ */
@@ -10487,7 +10525,7 @@ function renderWorkingList() {
   $title.textContent = "Working Study List";
   let studies = visibleStudies();
   const wlMyName = me();
-  if (worklistPerson === "mine") { if (wlMyName && hasStudyFootprint(studies, wlMyName)) studies = studies.filter(s => studyInvolvesPerson(s, wlMyName)); }
+  if (worklistPerson === "mine") { if (isAdmin() && wlMyName && hasStudyFootprint(studies, wlMyName)) studies = studies.filter(s => isMyStudy(s, wlMyName)); }
   else if (worklistPerson !== "all") studies = studies.filter(s => studyInvolvesPerson(s, worklistPerson));
   // "Going off" implies active — a Published study can't be neglected, it's finished.
   if (worklistStatus !== "all") studies = studies.filter(isActive);
@@ -12826,6 +12864,9 @@ function openStudyForm(existing, onCreated, opts) {
       if (existing && isStale("study", s.id, editingRef && editingRef.baseline)) {
         if (!confirmOverwriteOrReload("study", s.id)) return false;
       }
+      if (!existing && currentUser && !s.createdBy) s.createdBy = currentUser.id;
+      // When it was added counts as work: a study added today is fresh, not "smelly" (William Lee).
+      if (!existing && !s.createdAt) s.createdAt = new Date().toISOString();
       Object.assign(s, {
         title,
         nickname: document.getElementById("f-nickname").value.trim(),
@@ -14759,6 +14800,12 @@ function balloonNews() {
     { since: 9, tab: "studies", sel: ['nav.tabbar [data-tab="studies"]'], title: "Study overviews",
       what: "Open a study to see its <b>Overview</b>: what we're asking, why it matters, where it stands and what's next, written from the research meetings forwarded to the tracker.",
       custom: "Tap <b>Edit</b> to change the wording; your edit is kept when the overview is refreshed after later meetings." },
+    { since: 13, tab: "worklist", sel: ['nav.tabbar [data-tab="worklist"]'], title: "Dates type properly · new studies start fresh",
+      what: "Typing a date no longer jumps out of the box after the first number — it saves when you leave the box. And a study you've just added starts fresh instead of showing as smelly.",
+      custom: "Press <b>Enter</b> or tap elsewhere to save a date." },
+    { since: 12, tab: "studies", sel: ['nav.tabbar [data-tab="studies"]'], title: "All your studies, every time",
+      what: "The Studies list and Worklist now show the same studies the dashboard counts, including ones where your name is written differently, and any study you added yourself.",
+      custom: "If a study you're on is still missing, use the <b>Something's wrong</b> button and say which one." },
     { since: 11, tab: "studies", sel: ['nav.tabbar [data-tab="studies"]'], title: "Transfer offers",
       what: "When a journal declines a paper but offers its open-access sister journal (Arthroscopy → ASMAR, AJSM → OJSM), the study now records <b>Transfer offered</b>, where to, and our plan.",
       custom: "Forward the decision with a line on top like \"decline, send to Cartilage\" and the plan and next journal fill in from it. Change either in the study's Manuscript section." },
