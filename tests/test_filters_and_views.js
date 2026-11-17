@@ -72,7 +72,9 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   check("Views bar present", !!doc.getElementById("fs-select-worklist"));
 
   console.log("\n-- Worklist filters actually filter --");
-  w.eval('worklistPerson = "all"; render();');
+  // Studies' Who is pinned to "mine" first, so setting the Worklist to "all" below shows whether
+  // the two are independent. (Since 17 Nov a lab admin who isn't the PI starts on "all".)
+  w.eval('personFilter = "mine"; worklistPerson = "all"; render();');
   await wait(100);
   check("All projects shows three", (doc.getElementById("main").innerHTML.match(/data-open-study=/g) || []).length === 3,
     (doc.getElementById("main").innerHTML.match(/data-open-study=/g) || []).length);
