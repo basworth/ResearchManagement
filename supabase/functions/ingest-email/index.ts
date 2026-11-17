@@ -260,6 +260,34 @@ async function processMeeting(db: any, rowId: string, sender: { id: string; name
   }
 }
 
+// Where on the study page a change lands, named the way the page names it.
+const CHANGE_SECTION: Record<string, string> = {
+  decision: "Manuscript", journal: "Manuscript", submittedDate: "Manuscript", journalTrackingId: "Manuscript",
+  decisionDate: "Manuscript", revisionsDeadline: "Manuscript", revisionsReceivedDate: "Manuscript",
+  transferTo: "Manuscript", transferPlan: "Manuscript", transferRespondBy: "Manuscript", nextJournal: "Manuscript",
+  newSubmission: "Manuscript", addNote: "Notes", abstractSubmission: "Abstract Submissions",
+  irb: "IRB", irbStatus: "IRB", irbExpiry: "IRB", phase: "Study phase", meetingDeadline: "Deadlines board",
+};
+export function changeSection(field: string): string {
+  if (/^grant/.test(field || "")) return "Grant & Award Funding";
+  return CHANGE_SECTION[field] || "Study details";
+}
+export function changeCard(c: any, colour: string, esc: (v: unknown) => string): string {
+  const where = `<div style="font-size:11px;font-weight:700;color:#8e8e93;letter-spacing:.4px;text-transform:uppercase">${esc(changeSection(c.field))}</div>`;
+  if (c.field === "addNote") {
+    const text = String(c.text || c.to || "").replace(/^added to Notes$/, "");
+    return `<div style="border-left:3px solid ${colour};padding:4px 0 4px 12px;margin:8px 0">${where}
+      <div style="font-size:14.5px;font-weight:600;margin-top:2px">New note</div>
+      ${text ? `<div style="font-size:13.5px;line-height:1.45;margin-top:3px;font-style:italic">“${esc(text.length > 400 ? text.slice(0, 399) + "…" : text)}”</div>` : ""}</div>`;
+  }
+  const was = String(c.from ?? "").trim();
+  return `<div style="border-left:3px solid ${colour};padding:4px 0 4px 12px;margin:8px 0">${where}
+    <div style="font-size:14.5px;font-weight:600;margin-top:2px">${esc(c.label)}</div>
+    <div style="font-size:14px;margin-top:2px">${was && was.length <= 60
+      ? `<span style="color:#8e8e93;text-decoration:line-through">${esc(was)}</span> &rarr; `
+      : `<span style="color:#8e8e93">was empty &rarr; </span>`}<b>${esc(c.to)}</b></div></div>`;
+}
+
 // Telling the forwarder what happened to their email. Without it, forwarding feels like shouting
 // into a void and people stop doing it — which is the failure mode that kills this whole feature.
 //
@@ -288,9 +316,13 @@ async function notifyForwarder(to: string, name: string, subject: string, matche
         : waiting.length
           ? `${waiting.length} change${waiting.length === 1 ? "" : "s"} waiting for you to confirm — nothing has been changed yet.`
           : `Nothing in it changes what the tracker already has.`;
-  const rows = (list: any[], heading: string) => list.length ? `
-    <div style="font-size:11px;font-weight:700;color:#8e8e93;letter-spacing:.4px;margin:14px 0 4px">${heading}</div>
-    ${list.map(c => `<div style="font-size:14px;padding:3px 0">${esc(c.label)} &rarr; <b>${esc(c.to)}</b></div>`).join("")}` : "";
+  // Each change says WHERE on the study it lives, what it WAS and what it IS now — and a note shows
+  // its own words (Adam, 17 Nov: "is there a way to make it more clear when you change a state or
+  // field/box?" — "Our plan → Decline transfer … Note → added to Notes" didn't say which box or what
+  // the note said).
+  const rows = (list: any[], heading: string, colour: string) => list.length ? `
+    <div style="font-size:11px;font-weight:700;color:#8e8e93;letter-spacing:.4px;margin:16px 0 6px">${heading}</div>
+    ${list.map((c) => changeCard(c, colour, esc)).join("")}` : "";
   const html = `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;max-width:520px;margin:0 auto;color:#1c1c1e">
     <div style="font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#8e8e93;font-weight:700">Midwest Orthopaedics at Rush</div>
     <h1 style="font-size:19px;margin:6px 0 14px 0">Read your forwarded email</h1>
@@ -300,8 +332,8 @@ async function notifyForwarder(to: string, name: string, subject: string, matche
       <div style="font-size:12.5px;color:#8e8e93;margin-top:3px">matched by ${esc(basis)}</div>
     </div>` : ""}
     <p style="font-size:14.5px;line-height:1.5;color:#3a3a3c;margin:14px 0 0 0">${esc(line)}</p>
-    ${rows(applied, "APPLIED")}
-    ${rows(waiting, "WAITING FOR YOU")}
+    ${rows(applied, "CHANGED ON THE STUDY", "#34c759")}
+    ${rows(waiting, "WAITING FOR YOU TO CONFIRM", "#ff9500")}
     <p style="margin:20px 0 0 0"><a href="${esc(link)}" style="background:#0a84ff;color:#fff;text-decoration:none;font-weight:600;font-size:14.5px;padding:10px 18px;border-radius:9px;display:inline-block">${waiting.length || !matched ? "Review it" : "Open the study"}</a></p>
     <p style="font-size:11.5px;color:#8e8e93;line-height:1.45;margin-top:20px">You're getting this because you forwarded an email to the tracker.</p>
   </div>`;
@@ -484,7 +516,9 @@ Deno.serve(async (req) => {
         // grant award lands in the same place whether it arrived by forward or by paste.
         const env = { uid: () => crypto.randomUUID(), today: () => new Date().toISOString().slice(0, 10) };
         read.changes.filter((c: any) => c.safe).forEach((c: any) => {
-          applied.push(applyChangeTo(target, c, env));
+          const r: any = applyChangeTo(target, c, env);
+          if (c.field === "addNote") r.text = c.to;
+          applied.push(r);
         });
         read.changes = read.changes.filter((c: any) => !c.safe);
         const { error: upErr } = await db.from("items")
@@ -564,7 +598,9 @@ Deno.serve(async (req) => {
       try {
         await notifyForwarder(sender.notify, sender.name, subject,
           read.study ? (read.study.nickname || read.study.title) : "",
-          read.study ? read.basis : "", applied, read.changes,
+          read.study ? read.basis : "", applied,
+          // What each waiting field holds now, so the email can show "was X → Y".
+          read.changes.map((c: any) => ({ ...c, from: read.study && typeof read.study[c.field] === "string" ? read.study[c.field] : "" })),
           read.study ? read.study.id : "", id);
         notified = true;
       } catch (e) {
