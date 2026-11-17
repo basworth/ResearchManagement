@@ -2422,6 +2422,7 @@ async function handleAuthChange(event, session) {
     try {
       await withTimeout(pullAll(), 12000, "Connecting to Team Sync");
       setSyncPill(true, "Synced");
+      applyWhoDefaults();
       subscribeRealtime();
       // Before the name/position prompts, so someone arriving from an "update please" email
       // lands on the study rather than behind a setup sheet with no idea why they're here.
@@ -2769,6 +2770,27 @@ async function loadLabMembership() {
 }
 // Fails closed: if the function isn't there yet (014 not run) the list is empty, so the client
 // keeps fewer rows, never more.
+// The "Who" picker on Studies and Worklist (Adam, 17 Nov 2026). Remembered across refreshes — Max
+// Lee picked All Projects, refreshed, and was dropped back to My Projects with one study showing.
+// And a lab admin who isn't the lab's PI (Max, William) starts on All Projects: they run the lab's
+// studies, so "only the ones naming me" is the wrong first view. PIs still start on My Projects.
+function whoKey() { return "rt-who:" + (currentUser ? currentUser.id : ""); }
+function savedWho(kind) {
+  try { return (JSON.parse(localStorage.getItem(whoKey()) || "{}") || {})[kind] || ""; } catch (e) { return ""; }
+}
+function rememberWho(kind, v) {
+  try { const o = JSON.parse(localStorage.getItem(whoKey()) || "{}") || {}; o[kind] = v; localStorage.setItem(whoKey(), JSON.stringify(o)); }
+  catch (e) { /* private mode — the default still applies */ }
+}
+function iAmLabPI() {
+  const n = canonName(me() || "").trim().toLowerCase();
+  return !!n && myLabPiNames.indexOf(n) >= 0;
+}
+function defaultWho() { return isAdmin() && !iAmLabPI() ? "all" : "mine"; }
+function applyWhoDefaults() {
+  personFilter = savedWho("studies") || defaultWho();
+  worklistPerson = savedWho("worklist") || defaultWho();
+}
 async function loadLabPiNames() {
   myLabPiNames = [];
   if (!sb || !currentUser) return;
@@ -4925,7 +4947,7 @@ function renderStudies() {
   bindSearchBox("study-search", (v) => { studySearchQuery = v; });
   bindFilterSetsBar("studies", (id) => { studyViewId = id; });
   const personSel = document.getElementById("person-filter"); // admins only
-  if (personSel) personSel.onchange = (e) => { personFilter = e.target.value; studyPhaseFilter = "All phases"; studyDesignFilter = "All designs"; render(); };
+  if (personSel) personSel.onchange = (e) => { personFilter = e.target.value; rememberWho("studies", e.target.value); studyPhaseFilter = "All phases"; studyDesignFilter = "All designs"; render(); };
   document.getElementById("phase-filter").onchange = (e) => { studyPhaseFilter = e.target.value; render(); };
   document.getElementById("design-filter").onchange = (e) => { studyDesignFilter = e.target.value; render(); };
   $main.querySelectorAll("[data-tag-filter]").forEach(b => b.onclick = () => {
@@ -8906,7 +8928,9 @@ function readPlanFromNote(note, offeredTo) {
     const raw = g[1].trim();
     const known = PLAN_JOURNALS.find(k => k.toLowerCase() === raw.toLowerCase());
     const casc = CASCADE_JOURNALS.find(c => c.re.test(raw));
-    next = known || (casc && casc.name) || raw.replace(/\b\w/g, c => c.toUpperCase());
+    // Title case, but "of", "and", "the" stay small: "Journal of Knee Surgery", not "Journal Of".
+    next = known || (casc && casc.name) || raw.split(/\s+/).map((w, i) =>
+      i > 0 && /^(?:of|and|the|in|for|on|&)$/i.test(w) ? w.toLowerCase() : w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
   }
   let decision = "";
   if (/\b(?:decline|deny|turn (?:it )?down|pass on|not (?:take|accept|do) the (?:transfer|offer)|won'?t transfer|no to (?:the )?transfer)/i.test(note)) decision = "Decline transfer";
@@ -10628,7 +10652,7 @@ function renderWorkingList() {
     const colBtn = document.getElementById("wl-columns");
     if (colBtn) colBtn.onclick = openColumnPicker;
     const wp = document.getElementById("wl-person");
-    if (wp) wp.onchange = () => { worklistPerson = wp.value; render(); };
+    if (wp) wp.onchange = () => { worklistPerson = wp.value; rememberWho("worklist", wp.value); render(); };
     const ph = document.getElementById("wl-phase");
     if (ph) ph.onchange = () => { worklistPhaseFilter = ph.value; render(); };
     const dg = document.getElementById("wl-design");
@@ -14800,6 +14824,9 @@ function balloonNews() {
     { since: 9, tab: "studies", sel: ['nav.tabbar [data-tab="studies"]'], title: "Study overviews",
       what: "Open a study to see its <b>Overview</b>: what we're asking, why it matters, where it stands and what's next, written from the research meetings forwarded to the tracker.",
       custom: "Tap <b>Edit</b> to change the wording; your edit is kept when the overview is refreshed after later meetings." },
+    { since: 14, tab: "studies", sel: ['nav.tabbar [data-tab="studies"]'], title: "Who stays put",
+      what: "The <b>Who</b> picker on Studies and the Worklist now remembers your choice when you refresh. Lab admins who aren't the lab's PI start on <b>All Projects</b>.",
+      custom: "Pick <b>My Projects</b> once if you'd rather start there; it'll stick." },
     { since: 13, tab: "worklist", sel: ['nav.tabbar [data-tab="worklist"]'], title: "Dates type properly · new studies start fresh",
       what: "Typing a date no longer jumps out of the box after the first number — it saves when you leave the box. And a study you've just added starts fresh instead of showing as smelly.",
       custom: "Press <b>Enter</b> or tap elsewhere to save a date." },
