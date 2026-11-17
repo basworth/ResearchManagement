@@ -46,7 +46,13 @@ function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
   await wait(50);
 
   const absSelect = doc.getElementById("link-existing-dl-abs");
-  const meetingOption = [...absSelect.options].find(o => o.value);
+  // The soonest upcoming deadline, so the meeting is on the board's short list whatever today is.
+  // (Taking the first option broke as the calendar moved on: by mid-November AANA was no longer
+  // among the few the board shows.)
+  const dl = (id) => window.eval(`((state.meetings || []).find(m => m.id === ${JSON.stringify(id)}) || {}).deadline || "9999"`);
+  const today = window.eval("todayStr()");
+  const meetingOption = [...absSelect.options].filter(o => o.value && dl(o.value) >= today)
+    .sort((a, b) => dl(a.value).localeCompare(dl(b.value)))[0] || [...absSelect.options].find(o => o.value);
   const meetingId = meetingOption.value;
   const meetingLabel = meetingOption.textContent;
   console.log("Picked meeting to link from study side:", meetingLabel);
