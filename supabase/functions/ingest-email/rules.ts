@@ -303,7 +303,18 @@ function coveringNote(text) {
   const t = String(text || "");
   const m = /^\s*(?:[-_ ]*(?:Forwarded message|Original Message|Begin forwarded message)\b.*|From:\s.+)$/im.exec(t);
   if (!m || m.index === 0) return "";
-  const note = t.slice(0, m.index).replace(/\s+/g, " ").trim();
+  // Stop at a sign-off: everything after "Best," / "Thanks," / "--" is a signature, not a note.
+  // (23 Nov 2026: a forward whose only text was "Best, Thomas (TJ) Turinske and William Lee, Sports
+  // Medicine Research Fellows … RushOrtho.com …" was saved to a study as the forwarder's note.)
+  const lines = t.slice(0, m.index).split(/\r?\n/);
+  const SIGNOFF = /^\s*(?:best regards|kind regards|warm regards|many thanks|thank you|best|regards|thanks|sincerely|cheers)\s*[,.!]?\s*/i;
+  const cut = lines.findIndex(l => /^\s*(?:--+|_{3,})\s*$/.test(l) || /^\s*sent from my /i.test(l)
+    // "Best," alone, or "Best, Thomas Turinske" — a sign-off and a name, not "Thanks, decline it".
+    || (SIGNOFF.test(l) && /^(?:[A-Z][\w.'()-]*\s*){0,4}$/.test(l.replace(SIGNOFF, "").trim())));
+  const kept = (cut >= 0 ? lines.slice(0, cut) : lines).join(" ");
+  const note = kept.replace(/<https?:[^>]*>|https?:\/\/\S+/g, " ").replace(/\s+/g, " ").trim();
+  // Too short to be anything, or only a greeting, is not a note.
+  if (!/[a-z]{3,}.*\s.*[a-z]{2,}/i.test(note) || /^(?:fyi|see below|fw|fwd)[.!:]?$/i.test(note)) return "";
   return note.length >= 6 && note.length <= 1200 ? note : "";
 }
 // Our plan, from that note: where it goes next, and whether we take the transfer.
