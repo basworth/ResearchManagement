@@ -55,7 +55,11 @@ Deno.serve(async (req) => {
 
     const isProblem = String(row.kind ?? "") === "problem";
     const name = String(row.author_name ?? "") || String(row.author_email ?? "") || "Someone";
-    const subject = (isProblem ? "Problem reported: " : "Idea from ") + name;
+    // "Still broken" on a fix (migration 022, 23 Nov 2026). Only sent when the stored row really
+    // says so — the request flag alone can't make the tracker claim a fix failed.
+    const reopened = !!body?.reopened && String(row.confirmation ?? "") === "still_broken";
+    const subject = reopened ? "Still broken: " + name
+      : (isProblem ? "Problem reported: " : "Idea from ") + name;
 
     smtp = new SMTPClient({
       connection: { hostname: SMTP_HOST, port: SMTP_PORT, tls: true, auth: { username: SMTP_USER, password: SMTP_PASSWORD } },
@@ -63,9 +67,14 @@ Deno.serve(async (req) => {
     const html = `
       <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px">
         <div style="font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#8e8e93;font-weight:700">
-          ${isProblem ? "Problem reported" : "Idea"}
+          ${reopened ? "Fix didn't work — reopened" : isProblem ? "Problem reported" : "Idea"}
         </div>
         <h1 style="font-size:19px;margin:6px 0 14px 0">${esc(name)}</h1>
+        ${reopened ? `<div style="font-size:12px;color:#8e8e93;font-weight:700;margin:0 0 4px">WHAT'S STILL WRONG</div>
+        <div style="border:1px solid #ff9500;border-radius:11px;padding:14px 16px;font-size:14.5px;line-height:1.6;white-space:pre-wrap;margin-bottom:12px">${esc(row.confirmation_note || "(no details given)")}</div>
+        <div style="font-size:12px;color:#8e8e93;font-weight:700;margin:0 0 4px">WHAT WAS DONE</div>
+        <div style="border:1px solid #e5e5ea;border-radius:11px;padding:14px 16px;font-size:14px;line-height:1.6;white-space:pre-wrap;margin-bottom:12px">${esc(row.resolution || "—")}</div>
+        <div style="font-size:12px;color:#8e8e93;font-weight:700;margin:0 0 4px">ORIGINAL REPORT</div>` : ""}
         <div style="border:1px solid #e5e5ea;border-radius:11px;padding:14px 16px;font-size:14.5px;line-height:1.6;white-space:pre-wrap">${esc(row.body)}</div>
         <table style="border-collapse:collapse;margin:16px 0;font-size:13px;color:#3a3a3c">
           <tr><td style="padding:3px 14px 3px 0;color:#8e8e93">Who</td><td>${esc(name)}</td></tr>
@@ -75,7 +84,7 @@ Deno.serve(async (req) => {
         </table>
         <p style="margin:18px 0 0 0"><a href="${SITE_URL}" style="background:#0a84ff;color:#fff;text-decoration:none;font-weight:600;font-size:14.5px;padding:10px 18px;border-radius:9px;display:inline-block">Open the tracker</a></p>
         <p style="font-size:11.5px;color:#8e8e93;line-height:1.45;margin-top:20px">
-          Sent because someone used ${isProblem ? '"Something\'s wrong"' : '"Suggest a change"'} in the tracker.
+          Sent because someone ${reopened ? 'said a fix didn\'t work' : 'used ' + (isProblem ? '"Something\'s wrong"' : '"Suggest a change"')} in the tracker.
           Reply to this message and it goes straight back to them.
         </p>
       </div>`;
