@@ -607,6 +607,9 @@
       <!-- In the header rather than the tab bar: the tab bar is already six items on a phone, and
            a seventh would shrink every label. Help has to be reachable from every screen without
            anyone having to remember where it lives. -->
+      <!-- Your reports that have been fixed, waiting for you to say whether the fix works (23 Nov).
+           Hidden until there is one. -->
+      <button class="topbar-btn" id="fixes-btn" aria-label="Your reports that were fixed" title="Fixes for you to check" style="display:none;position:relative;font-size:17px">&#128276;<span id="fixes-count" style="position:absolute;top:-3px;right:-3px;min-width:17px;height:17px;padding:0 4px;box-sizing:border-box;border-radius:9px;background:var(--red);color:#fff;font-size:11px;font-weight:800;line-height:17px;text-align:center"></span></button>
       <button class="topbar-btn" id="help-btn" aria-label="Help" title="How this works">?</button>
       <button class="topbar-btn" id="add-btn" aria-label="Add">+</button>
     </div>
@@ -2644,6 +2647,7 @@ async function pullAll() {
     // settled and before any row is sorted into state, or a multi-lab person sees only their
     // primary lab on the first pull and the rest appears a refresh later.
     await loadLabMembership();
+    loadMyFixes();   // not awaited: the bell is a courtesy, never a reason to hold up the app
     const ws = activeWorkspace();
     // The deadline calendar is the only thing genuinely shared between labs. `meta` used to be in
     // here too — see metaRowId for why it no longer is.
@@ -5691,7 +5695,10 @@ function abstractEntryForDeadline(s, m) {
   const year = (String(m.dates || "") + " " + (m.name || "")).match(/20\d\d/g) || [];
   // A late-breaking (or video) call is its own deadline: an "ORS 2027" acceptance belongs to the
   // regular call, so it only counts here if the entry itself says late-breaking / video.
-  const SIDE = /\b(late|breaking|lba|video|ovt|orthodome)\b/i;
+  // Specialty Day too (23 Nov 2026): "AOSSM/AANA 2027 Specialty Day Meeting" contains every word of
+  // "AANA 2027", so the 23 AANA Annual Meeting e-poster acceptances also showed as accepted at
+  // Specialty Day. Only an entry that says "Specialty" belongs to it.
+  const SIDE = /\b(late|breaking|lba|video|ovt|orthodome|specialty)\b/i;
   const sideCall = SIDE.test((m.name || "") + " " + (m.key || ""));
   const hits = s.abstracts.filter(a => {
     const t = toks(a.meeting);
@@ -8916,7 +8923,18 @@ function coveringNote(text) {
   const t = String(text || "");
   const m = /^\s*(?:[-_ ]*(?:Forwarded message|Original Message|Begin forwarded message)\b.*|From:\s.+)$/im.exec(t);
   if (!m || m.index === 0) return "";
-  const note = t.slice(0, m.index).replace(/\s+/g, " ").trim();
+  // Stop at a sign-off: everything after "Best," / "Thanks," / "--" is a signature, not a note.
+  // (23 Nov 2026: a forward whose only text was "Best, Thomas (TJ) Turinske and William Lee, Sports
+  // Medicine Research Fellows … RushOrtho.com …" was saved to a study as the forwarder's note.)
+  const lines = t.slice(0, m.index).split(/\r?\n/);
+  const SIGNOFF = /^\s*(?:best regards|kind regards|warm regards|many thanks|thank you|best|regards|thanks|sincerely|cheers)\s*[,.!]?\s*/i;
+  const cut = lines.findIndex(l => /^\s*(?:--+|_{3,})\s*$/.test(l) || /^\s*sent from my /i.test(l)
+    // "Best," alone, or "Best, Thomas Turinske" — a sign-off and a name, not "Thanks, decline it".
+    || (SIGNOFF.test(l) && /^(?:[A-Z][\w.'()-]*\s*){0,4}$/.test(l.replace(SIGNOFF, "").trim())));
+  const kept = (cut >= 0 ? lines.slice(0, cut) : lines).join(" ");
+  const note = kept.replace(/<https?:[^>]*>|https?:\/\/\S+/g, " ").replace(/\s+/g, " ").trim();
+  // Too short to be anything, or only a greeting, is not a note.
+  if (!/[a-z]{3,}.*\s.*[a-z]{2,}/i.test(note) || /^(?:fyi|see below|fw|fwd)[.!:]?$/i.test(note)) return "";
   return note.length >= 6 && note.length <= 1200 ? note : "";
 }
 // Our plan, from that note: where it goes next, and whether we take the transfer.
@@ -14824,6 +14842,9 @@ function balloonNews() {
     { since: 9, tab: "studies", sel: ['nav.tabbar [data-tab="studies"]'], title: "Study overviews",
       what: "Open a study to see its <b>Overview</b>: what we're asking, why it matters, where it stands and what's next, written from the research meetings forwarded to the tracker.",
       custom: "Tap <b>Edit</b> to change the wording; your edit is kept when the overview is refreshed after later meetings." },
+    { since: 15, sel: ['#help-btn'], title: "Check your fixes",
+      what: "When something you reported has been fixed, a bell with a number appears next to the ? at the top. Tap it to see what was done.",
+      custom: "Try it, then tap <b>Works</b> — or <b>Still broken</b> to reopen it and tell Adam what's still wrong." },
     { since: 14, tab: "studies", sel: ['nav.tabbar [data-tab="studies"]'], title: "Who stays put",
       what: "The <b>Who</b> picker on Studies and the Worklist now remembers your choice when you refresh. Lab admins who aren't the lab's PI start on <b>All Projects</b>.",
       custom: "Pick <b>My Projects</b> once if you'd rather start there; it'll stick." },
@@ -15164,6 +15185,92 @@ function openFeedbackSheet(preKind) {
     (sh) => { const t = sh.querySelector("#fb-body"); if (t) t.focus(); },
     { saveLabel: "Send" });
 }
+/* ============ Fixes for you to check ============
+ * Adam, 23 Nov 2026: "a list … where they will get a notification (like a 1 or 2) meaning 1 or 2
+ * items have been addressed and they can confirm or deny in the system after we make change."
+ * Your own "Something's wrong" / "Suggest a change" reports that Adam has marked done, and that
+ * you haven't answered yet. "Works" closes the loop; "Still broken" reopens the report (migration
+ * 022, answer_feedback) and emails Adam, with whatever you add about what's still wrong.
+ */
+let myFixes = [];
+async function loadMyFixes() {
+  if (!sb || !currentUser) { myFixes = []; paintFixesBell(); return; }
+  try {
+    const { data, error } = await sb.from("feedback")
+      .select("id, created_at, kind, page, body, status, resolution, resolved_at, confirmation")
+      .eq("author_id", currentUser.id).eq("status", "done").is("confirmation", null)
+      .order("resolved_at", { ascending: false });
+    if (error) throw error;
+    myFixes = data || [];
+  } catch (e) {
+    // An older database without migration 022 has no confirmation column: no bell, nothing broken.
+    myFixes = [];
+  }
+  paintFixesBell();
+}
+function paintFixesBell() {
+  const btn = document.getElementById("fixes-btn");
+  if (!btn) return;
+  const n = myFixes.length;
+  btn.style.display = n ? "" : "none";
+  const c = document.getElementById("fixes-count");
+  if (c) c.textContent = n > 9 ? "9+" : String(n);
+}
+function openMyFixesSheet() {
+  const short = (t, n) => { const v = String(t || "").replace(/\s+/g, " ").trim(); return v.length > n ? v.slice(0, n - 1) + "…" : v; };
+  const rows = myFixes.map(f => `
+    <div class="card" id="fix-${esc(f.id)}" style="margin:0 0 10px 0">
+      <div style="font-size:11px;font-weight:700;color:var(--text2);letter-spacing:.4px">YOU REPORTED${f.created_at ? " · " + esc(fmtDate(String(f.created_at).slice(0, 10))) : ""}</div>
+      <div style="font-size:14px;line-height:1.45;margin-top:3px">${esc(short(f.body, 240))}</div>
+      ${f.resolution ? `<div style="font-size:11px;font-weight:700;color:var(--green);letter-spacing:.4px;margin-top:10px">WHAT WAS DONE${f.resolved_at ? " · " + esc(fmtDate(String(f.resolved_at).slice(0, 10))) : ""}</div>
+        <div style="font-size:14px;line-height:1.45;margin-top:3px">${esc(f.resolution)}</div>` : ""}
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+        <button class="mini-btn" data-fix-works="${esc(f.id)}" style="margin:0;background:var(--green);color:#fff">✓ Works</button>
+        <button class="mini-btn" data-fix-broken="${esc(f.id)}" style="margin:0">Still broken</button>
+      </div>
+      <div data-fix-why="${esc(f.id)}" style="display:none;margin-top:10px">
+        <textarea rows="3" placeholder="What's still wrong? (optional)" style="width:100%;box-sizing:border-box;border:none;background:var(--bg);border-radius:8px;padding:9px 12px;font-size:14.5px;font-family:inherit;color:var(--text);outline:none;resize:vertical"></textarea>
+        <button class="mini-btn" data-fix-send="${esc(f.id)}" style="margin:6px 0 0 0">Send to Adam</button>
+      </div>
+    </div>`).join("");
+  openSheet("Fixes for you to check", `
+    <div style="font-size:13.5px;color:var(--text2);line-height:1.5;margin-bottom:12px">
+      These are things you reported that have been fixed. Try each one and say whether it works —
+      "Still broken" reopens it and goes straight to Adam.
+    </div>
+    ${rows || `<div class="card" style="color:var(--text2)">Nothing waiting — thanks for checking.</div>`}`,
+    () => true, (sh) => {
+      sh.querySelectorAll("[data-fix-works]").forEach(b => b.onclick = () => answerFix(b.dataset.fixWorks, true, ""));
+      sh.querySelectorAll("[data-fix-broken]").forEach(b => b.onclick = () => {
+        const box = sh.querySelector(`[data-fix-why="${CSS.escape(b.dataset.fixBroken)}"]`);
+        if (box) { box.style.display = "block"; const t = box.querySelector("textarea"); if (t) t.focus(); }
+      });
+      sh.querySelectorAll("[data-fix-send]").forEach(b => b.onclick = () => {
+        const box = sh.querySelector(`[data-fix-why="${CSS.escape(b.dataset.fixSend)}"]`);
+        answerFix(b.dataset.fixSend, false, box ? box.querySelector("textarea").value.trim() : "");
+      });
+    }, { saveLabel: "Done", cancelLabel: "Close" });
+}
+async function answerFix(id, works, note) {
+  if (!sb) { toast("Connect Team Sync first"); return; }
+  const { error } = await sb.rpc("answer_feedback", { p_id: id, p_works: !!works, p_note: note || "" });
+  if (error) { toast("That didn't save — " + (error.message || "try again")); return; }
+  myFixes = myFixes.filter(f => f.id !== id);
+  paintFixesBell();
+  const card = document.getElementById("fix-" + id);
+  if (card) card.innerHTML = `<div style="font-size:14px;color:var(--text2)">${works ? "Thanks — marked as working." : "Reopened and sent to Adam. Thanks for checking."}</div>`;
+  toast(works ? "Thanks — marked as working" : "Reopened — Adam's been told");
+  if (!works) {
+    try {
+      const { data: sess } = await sb.auth.getSession();
+      const tok = sess && sess.session && sess.session.access_token;
+      if (tok) await fetch(SUPABASE_URL + "/functions/v1/feedback-alert", {
+        method: "POST", headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tok },
+        body: JSON.stringify({ id, reopened: true })
+      });
+    } catch (e) { console.warn("feedback-alert (reopened) failed", e); }
+  }
+}
 async function submitFeedback(kind, body, page) {
   if (!sb) { toast("Connect Team Sync first — otherwise this can't reach anyone"); return; }
   const p = currentUser ? profileFor(currentUser.id) : null;
@@ -15217,6 +15324,7 @@ async function submitFeedback(kind, body, page) {
 
 document.getElementById("feedback-btn").onclick = () => openFeedbackSheet();
 document.getElementById("help-btn").onclick = () => openHelpSheet();
+document.getElementById("fixes-btn").onclick = () => openMyFixesSheet();
 
 document.querySelectorAll("nav.tabbar button").forEach(b => {
   b.onclick = () => {
